@@ -15,5 +15,12 @@ To add new packages, you must use the uv add <package-name> command from the pro
 ## Code Execution: 
 All scripts and commands must be executed using uv run path/to/python_file.py.
 
-## Testing Guidance:
-When a file has already had its relevant tests executed during this session, you don't need to rerun the same tests again after making additional edits to that file unless the change affects test coverage or functionality.
+## Logging
+Modules call `config.get_logger(__name__)` to get INFO-level, module-scoped stream handlers while the root stays at WARNING; `PolygonApiFetcher` still uses stdlib `logging.basicConfig` with the shared level constant.
+
+## Paths & Imports
+Use `config.BASE_DIR` and `pathlib.Path` chaining for filesystem work, prefer absolute `src.*` imports, and keep packages importable via `__init__.py` stubs.
+
+
+## Context7 Documentation Lookup
+- Resolve with `context7.resolve-library-id` then fetch via `context7.get-library-docs`; use `/websites/osmnx_readthedocs_io_en_stable` for OSMnx, `/websites/networkx_stable` for NetworkX.
