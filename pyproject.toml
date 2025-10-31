@@ -10,6 +10,7 @@ dependencies = [
     "networkx>=3.5",
     "notebook>=7.4.7",
     "osmnx>=2.0.6",
+    "polars>=1.35.1",
     "pylint>=4.0.2",
     "pyright>=1.1.407",
     "scikit-learn>=1.7.2",
