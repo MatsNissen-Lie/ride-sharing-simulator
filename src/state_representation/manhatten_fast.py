@@ -34,7 +34,8 @@ GEOCODE_DIR.mkdir(parents=True, exist_ok=True)
 
 ADDRESS_BOOK = {
     "origin": "Times Square, Manhattan, NY, USA",
-    "destination": "Wall Street, Manhattan, NY, USA",
+    # "destination": "Wall Street, Manhattan, NY, USA",
+    "destination": "Trump Tower, Manhattan, NY, USA",
 }
 
 FALLBACK_SPEED_KPH = 20.0
