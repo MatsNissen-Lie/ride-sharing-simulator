@@ -1,9 +1,13 @@
 {
-  "origin": {
+  "Times Square, Manhattan, NY, USA": {
     "lat": 40.7572614,
     "lon": -73.9858998
   },
-  "destination": {
+  "Trump Tower, Manhattan, NY, USA": {
+    "lat": 40.7623148,
+    "lon": -73.9739028
+  },
+  "Wall Street, Manhattan, NY, USA": {
     "lat": 40.7623148,
     "lon": -73.9739028
   }

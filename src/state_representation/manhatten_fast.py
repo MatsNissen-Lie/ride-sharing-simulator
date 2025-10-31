@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from typing import Dict, Iterable, Tuple
 
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -84,29 +85,61 @@ def ensure_travel_times(G: nx.MultiDiGraph) -> nx.MultiDiGraph:
     return G
 
 
-def load_landmark_coordinates() -> dict[str, tuple[float, float]]:
-    if GEOCODE_PATH.exists():
-        stored = json.loads(GEOCODE_PATH.read_text())
-        return {
-            name: (entry["lat"], entry["lon"])
-            for name, entry in stored.items()
-            if "lat" in entry and "lon" in entry
-        }
+def _load_geocode_store() -> Dict[str, Dict[str, float]]:
+    if not GEOCODE_PATH.exists():
+        return {}
 
-    logger.info("Resolving landmark coordinates via geocoding (first run only)...")
-    resolved: dict[str, dict[str, float]] = {}
-    for name, address in ADDRESS_BOOK.items():
-        lat, lon = ox.geocode(address)
-        resolved[name] = {"lat": lat, "lon": lon}
+    raw: Dict[str, Dict[str, float]] = json.loads(GEOCODE_PATH.read_text())
 
-    GEOCODE_PATH.write_text(json.dumps(resolved, indent=2))
-    return {name: (entry["lat"], entry["lon"]) for name, entry in resolved.items()}
+    # Migrate any legacy label-based entries ("origin" -> actual address).
+    migrated = False
+    for label, address in ADDRESS_BOOK.items():
+        if label in raw and address not in raw:
+            raw[address] = raw[label]
+            migrated = True
+        if label in raw:
+            raw.pop(label)
+
+    if migrated:
+        GEOCODE_PATH.write_text(json.dumps(raw, indent=2, sort_keys=True))
+
+    return {
+        key: value
+        for key, value in raw.items()
+        if isinstance(value, dict) and "lat" in value and "lon" in value
+    }
+
+
+def load_landmark_coordinates(
+    addresses: Iterable[str],
+) -> Dict[str, Tuple[float, float]]:
+    store = _load_geocode_store()
+    updated = False
+    coordinates: Dict[str, Tuple[float, float]] = {}
+
+    for address in addresses:
+        entry = store.get(address)
+        if not entry or "lat" not in entry or "lon" not in entry:
+            logger.info("Geocoding address: %s", address)
+            lat, lon = ox.geocode(address)
+            entry = {"lat": lat, "lon": lon}
+            store[address] = entry
+            updated = True
+
+        coordinates[address] = (entry["lat"], entry["lon"])
+
+    if updated:
+        GEOCODE_PATH.write_text(json.dumps(store, indent=2, sort_keys=True))
+
+    return coordinates
 
 
 def describe_route(G: nx.MultiDiGraph) -> None:
-    coordinates = load_landmark_coordinates()
-    origin_lat, origin_lon = coordinates["origin"]
-    dest_lat, dest_lon = coordinates["destination"]
+    coordinates = load_landmark_coordinates(ADDRESS_BOOK.values())
+    origin_address = ADDRESS_BOOK["origin"]
+    dest_address = ADDRESS_BOOK["destination"]
+    origin_lat, origin_lon = coordinates[origin_address]
+    dest_lat, dest_lon = coordinates[dest_address]
 
     origin_node = ox.nearest_nodes(G, origin_lon, origin_lat)
     dest_node = ox.nearest_nodes(G, dest_lon, dest_lat)
@@ -127,8 +160,8 @@ def describe_route(G: nx.MultiDiGraph) -> None:
     summary = "\n".join(
         [
             "Route overview:",
-            f"Nearest graph node to origin: {origin_node}",
-            f"Nearest graph node to destination: {dest_node}",
+            f"Origin ({origin_address}) → graph node {origin_node}",
+            f"Destination ({dest_address}) → graph node {dest_node}",
             f"Shortest route has {len(route_nodes) - 1} road segments and covers {route_distance_meters:.1f} meters",
             f"Estimated travel time: {route_time_seconds:.1f} seconds ({route_time_seconds/60:.1f} minutes)",
             f"Average speed along route: {avg_speed_kph:.1f} km/h",
