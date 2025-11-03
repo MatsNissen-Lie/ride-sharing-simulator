@@ -4,7 +4,7 @@
 This project exclusively uses uv for all Python package management and script execution.
 
 ## Runtime Assumptions:
-Target runtime is Python 3.12, so take advantage of native typing features without requiring `from __future__ import annotations` or backports.
+Target runtime is Python 3.12, so take advantage of NATIVE TYPING features. DO NOT USE `from __future__ import annotations` or backports.
 
 ## Terminal Context:
 Assume the active terminal is already positioned at the project root; avoid running extra `cd` commands before executing uv operations.

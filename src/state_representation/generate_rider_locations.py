@@ -1,5 +1,6 @@
 """Generate graph-constrained pickup and dropoff nodes for NYC FHV trips."""
 
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Dict, Mapping, Optional, Tuple, cast
 
@@ -275,17 +276,37 @@ def main() -> pd.DataFrame:
         geometry = cast(BaseGeometry, row["geometry"])
         zone_geoms[int(row["LocationID"])] = geometry
 
-    graph_hull = nodes_gdf.geometry.unary_union.convex_hull
+    graph_hull = nodes_gdf.geometry.union_all().convex_hull
     valid_zone_ids = {
         zone_id
         for zone_id, geom in zone_geoms.items()
         if geom is not None and geom.intersects(graph_hull)
     }
+
+    edges_sindex = edges_gdf.sindex
+    zones_with_edges: set[int] = set()
+    for zone_id in list(valid_zone_ids):
+        polygon = zone_geoms.get(zone_id)
+        if polygon is None or polygon.is_empty:
+            continue
+        if edges_sindex is None:
+            has_edges = bool(edges_gdf.geometry.intersects(polygon).any())
+        else:
+            hits = edges_sindex.query(polygon, predicate="intersects")
+            has_edges = len(hits) > 0
+        if has_edges:
+            zones_with_edges.add(zone_id)
+
+    zones_without_edges = len(valid_zone_ids - zones_with_edges)
+    valid_zone_ids &= zones_with_edges
+
     logger.info(
         "Zones intersecting the Manhattan graph: %d of %d",
         len(valid_zone_ids),
         len(zone_geoms),
     )
+    if zones_without_edges:
+        logger.info("Discarded %d zones without drivable edges", zones_without_edges)
 
     trips = load_trips(RIDER_DATA_PATH)
     before_filter = len(trips)
