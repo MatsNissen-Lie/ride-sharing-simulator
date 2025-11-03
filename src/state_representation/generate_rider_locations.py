@@ -7,7 +7,7 @@ from typing import Dict, Mapping, Optional, Tuple, cast
 import geopandas as gpd
 import numpy as np
 import osmnx as ox
-import pandas as pd
+import polars as pl
 import networkx as nx
 from pyproj import Transformer
 from shapely.geometry import GeometryCollection, MultiPolygon, Point, Polygon
@@ -91,9 +91,9 @@ class ZoneSampler:
         return gpd.GeoSeries(geoms, crs=edges.crs)
 
 
-def load_trips(path: Path) -> pd.DataFrame:
+def load_trips(path: Path) -> pl.DataFrame:
     logger.info("Loading rider trips from %s", path)
-    trips = pd.read_parquet(
+    trips = pl.read_parquet(
         path,
         columns=[
             "pickup_datetime",
@@ -103,17 +103,20 @@ def load_trips(path: Path) -> pd.DataFrame:
         ],
     )
 
-    trips = trips.dropna(subset=["PUlocationID", "DOlocationID"])
-    trips = trips.rename(
-        columns={
+    trips = trips.drop_nulls(subset=["PUlocationID", "DOlocationID"]).rename(
+        {
             "PUlocationID": "pickup_zone",
             "DOlocationID": "dropoff_zone",
             "dropOff_datetime": "dropoff_datetime",
         }
     )
-    trips["pickup_zone"] = trips["pickup_zone"].astype(int)
-    trips["dropoff_zone"] = trips["dropoff_zone"].astype(int)
-    logger.info("Trips loaded: %d records", len(trips))
+    trips = trips.with_columns(
+        pl.col("pickup_zone").cast(pl.Int32),
+        pl.col("dropoff_zone").cast(pl.Int32),
+        pl.col("pickup_datetime").cast(pl.Datetime(time_unit="us")),
+        pl.col("dropoff_datetime").cast(pl.Datetime(time_unit="us")),
+    )
+    logger.info("Trips loaded: %d records", trips.height)
     return trips
 
 
@@ -181,26 +184,27 @@ def uniform_points_in_geometry(
     return points
 
 
-def gen_coords_for_trips(
-    trips: pd.DataFrame,
-    zone_column: str,
+def gen_coords_for_zones(
+    zone_ids: np.ndarray,
     sampler: ZoneSampler,
     zone_geoms: Mapping[int, BaseGeometry],
     seed: int,
 ) -> Tuple[np.ndarray, np.ndarray]:
     rng = np.random.default_rng(seed)
-    xs = np.full(len(trips), np.nan, dtype=float)
-    ys = np.full(len(trips), np.nan, dtype=float)
+    xs = np.full(len(zone_ids), np.nan, dtype=float)
+    ys = np.full(len(zone_ids), np.nan, dtype=float)
 
-    for start in range(0, len(trips), SAMPLE_BATCH_SIZE):
-        stop = min(start + SAMPLE_BATCH_SIZE, len(trips))
-        chunk = trips.iloc[start:stop]
-        for zone_key, group in chunk.groupby(zone_column):
-            zone_id = int(zone_key)  # type: ignore[arg-type]
-            indices = group.index.to_numpy()
-            n_points = len(indices)
-            polygon = zone_geoms.get(zone_id)
-            sampled = sampler.sample_points(zone_id, polygon, n_points, rng)
+    for start in range(0, len(zone_ids), SAMPLE_BATCH_SIZE):
+        stop = min(start + SAMPLE_BATCH_SIZE, len(zone_ids))
+        batch_indices = np.arange(start, stop)
+        batch_zones = zone_ids[start:stop]
+        unique_zones = np.unique(batch_zones)
+        for zone_id in unique_zones:
+            mask = batch_zones == zone_id
+            indices = batch_indices[mask]
+            n_points = indices.size
+            polygon = zone_geoms.get(int(zone_id))
+            sampled = sampler.sample_points(int(zone_id), polygon, n_points, rng)
             if sampled is not None and len(sampled) == n_points:
                 xs[indices] = sampled.x.to_numpy(dtype=float, copy=False)
                 ys[indices] = sampled.y.to_numpy(dtype=float, copy=False)
@@ -259,7 +263,7 @@ def to_lonlat(
     return lon, lat
 
 
-def main() -> pd.DataFrame:
+def main() -> pl.DataFrame:
     logger.info("Preparing Manhattan graph context")
     G = ensure_travel_times(load_graph())
     G_proj = ox.project_graph(G)
@@ -309,34 +313,29 @@ def main() -> pd.DataFrame:
         logger.info("Discarded %d zones without drivable edges", zones_without_edges)
 
     trips = load_trips(RIDER_DATA_PATH)
-    before_filter = len(trips)
+    before_filter = trips.height
     valid_list = sorted(valid_zone_ids)
-    trips = cast(
-        pd.DataFrame,
-        trips[
-            trips["pickup_zone"].isin(valid_list)
-            & trips["dropoff_zone"].isin(valid_list)
-        ].copy(),
-    )
-    trips = trips.reset_index(drop=True)
+    trips = trips.filter(
+        pl.col("pickup_zone").is_in(valid_list)
+        & pl.col("dropoff_zone").is_in(valid_list)
+    ).with_row_index(name="row_id")
     logger.info(
         "Trips restricted to Manhattan zones: %d → %d",
         before_filter,
-        len(trips),
+        trips.height,
     )
 
     sampler = ZoneSampler(edges_gdf)
 
-    pu_x, pu_y = gen_coords_for_trips(
-        trips, "pickup_zone", sampler, zone_geoms, PICKUP_SEED
+    pickup_zones = trips["pickup_zone"].to_numpy()
+    dropoff_zones = trips["dropoff_zone"].to_numpy()
+
+    pu_x, pu_y = gen_coords_for_zones(
+        pickup_zones, sampler, zone_geoms, PICKUP_SEED
     )
-    do_x, do_y = gen_coords_for_trips(
-        trips, "dropoff_zone", sampler, zone_geoms, DROPOFF_SEED
+    do_x, do_y = gen_coords_for_zones(
+        dropoff_zones, sampler, zone_geoms, DROPOFF_SEED
     )
-    trips["pu_x"] = pd.Series(pu_x, index=trips.index, dtype=float)
-    trips["pu_y"] = pd.Series(pu_y, index=trips.index, dtype=float)
-    trips["do_x"] = pd.Series(do_x, index=trips.index, dtype=float)
-    trips["do_y"] = pd.Series(do_y, index=trips.index, dtype=float)
 
     pu_nodes = snap_points_to_nodes(G_proj, pu_x, pu_y)
     do_nodes = snap_points_to_nodes(G_proj, do_x, do_y)
@@ -345,30 +344,36 @@ def main() -> pd.DataFrame:
     pu_lon, pu_lat = to_lonlat(pu_x, pu_y, transformer)
     do_lon, do_lat = to_lonlat(do_x, do_y, transformer)
 
-    trips["orig_node"] = (
-        pd.Series(pu_nodes, index=trips.index).replace(-1, pd.NA).astype("Int64")
+    trips = trips.with_columns(
+        pl.Series("pu_x", pu_x, dtype=pl.Float64),
+        pl.Series("pu_y", pu_y, dtype=pl.Float64),
+        pl.Series("do_x", do_x, dtype=pl.Float64),
+        pl.Series("do_y", do_y, dtype=pl.Float64),
+        pl.Series("orig_node", pu_nodes).replace(-1, None).cast(pl.Int64),
+        pl.Series("dest_node", do_nodes).replace(-1, None).cast(pl.Int64),
+        pl.Series("pu_lon", pu_lon, dtype=pl.Float64),
+        pl.Series("pu_lat", pu_lat, dtype=pl.Float64),
+        pl.Series("do_lon", do_lon, dtype=pl.Float64),
+        pl.Series("do_lat", do_lat, dtype=pl.Float64),
     )
-    trips["dest_node"] = (
-        pd.Series(do_nodes, index=trips.index).replace(-1, pd.NA).astype("Int64")
-    )
-    trips["pu_lon"], trips["pu_lat"] = pu_lon, pu_lat
-    trips["do_lon"], trips["do_lat"] = do_lon, do_lat
 
-    invalid = trips["orig_node"].isna() | trips["dest_node"].isna()
-    if invalid.any():
+    invalid_mask = trips["orig_node"].is_null() | trips["dest_node"].is_null()
+    invalid_count = invalid_mask.sum()
+    if invalid_count > 0:
         logger.info(
-            "Dropping %d trips that could not be snapped to the graph", invalid.sum()
+            "Dropping %d trips that could not be snapped to the graph",
+            int(invalid_count),
         )
-        trips = trips.loc[~invalid].copy()
+        trips = trips.filter(~invalid_mask)
 
     OUTPUT_DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
-    trips.to_parquet(OUTPUT_DATA_PATH, index=False)
+    trips.drop("row_id").write_parquet(OUTPUT_DATA_PATH)
 
     summary = format_log_block(
         "\n".join(
             [
                 "Rider location generation complete:",
-                f"Saved {len(trips)} trips to {OUTPUT_DATA_PATH}",
+                f"Saved {trips.height} trips to {OUTPUT_DATA_PATH}",
                 f"Columns available: {', '.join(trips.columns)}",
             ]
         )
