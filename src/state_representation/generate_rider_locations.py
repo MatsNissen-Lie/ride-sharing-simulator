@@ -1,10 +1,7 @@
 """Generate graph-constrained pickup and dropoff nodes for NYC FHV trips."""
 
-from __future__ import annotations
-
-from collections.abc import Iterable
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Mapping, Optional, Tuple, cast
 
 import geopandas as gpd
 import numpy as np
@@ -12,7 +9,7 @@ import osmnx as ox
 import pandas as pd
 import networkx as nx
 from pyproj import Transformer
-from shapely.geometry import Point
+from shapely.geometry import GeometryCollection, MultiPolygon, Point, Polygon
 from shapely.geometry.base import BaseGeometry
 
 from config import BASE_DIR, format_log_block, get_logger
@@ -21,7 +18,9 @@ from src.state_representation.manhatten_fast import ensure_travel_times, load_gr
 logger = get_logger(__name__)
 
 RIDER_DATA_PATH = BASE_DIR / "data" / "riders" / "fhv_tripdata_2025-01.parquet"
-OUTPUT_DATA_PATH = BASE_DIR / "data" / "riders" / "fhv_tripdata_2025-01_enriched.parquet"
+OUTPUT_DATA_PATH = (
+    BASE_DIR / "data" / "riders" / "fhv_tripdata_2025-01_enriched.parquet"
+)
 TAXI_ZONES_PATH = BASE_DIR / "data" / "zones" / "taxi_zones.shp"
 
 SAMPLE_BATCH_SIZE = 20_000
@@ -30,42 +29,34 @@ DROPOFF_SEED = 17
 
 
 class ZoneSampler:
-    """Cache per-zone subgraphs and provide reproducible edge sampling."""
+    """Cache per-zone edge subsets and provide reproducible sampling."""
 
-    def __init__(
-        self,
-        graph: nx.MultiGraph,
-        edges: gpd.GeoDataFrame,
-    ) -> None:
-        self._graph = graph
-        self._edges = edges[["geometry"]]
-        self._cache: Dict[int, Optional[Tuple[nx.MultiGraph, gpd.GeoDataFrame]]] = {}
+    def __init__(self, edges: gpd.GeoDataFrame) -> None:
+        if "length" not in edges.columns:
+            msg = "Expected edge GeoDataFrame to include a 'length' column"
+            raise ValueError(msg)
+        self._edges = edges[["geometry", "length"]].copy()
+        self._cache: Dict[int, Optional[gpd.GeoDataFrame]] = {}
 
-    def _build_cache_entry(
+    def _edges_for_zone(
         self, zone_id: int, polygon: Optional[BaseGeometry]
-    ) -> Optional[Tuple[nx.MultiGraph, gpd.GeoDataFrame]]:
+    ) -> Optional[gpd.GeoDataFrame]:
         if polygon is None or polygon.is_empty:
             self._cache[zone_id] = None
             return None
 
         mask = self._edges.geometry.intersects(polygon)
-        if not mask.any():
+        if not bool(mask.any()):
             self._cache[zone_id] = None
             return None
 
-        edge_index = self._edges.index[mask]
-        subgraph = self._graph.edge_subgraph(edge_index).copy()
-        if subgraph.number_of_edges() == 0:
+        edges = self._edges.loc[mask]
+        if edges.empty or float(edges["length"].sum()) <= 0:
             self._cache[zone_id] = None
             return None
 
-        sub_edges = ox.graph_to_gdfs(subgraph, nodes=False, edges=True)[["geometry", "length"]]
-        if sub_edges.empty or sub_edges["length"].sum() <= 0:
-            self._cache[zone_id] = None
-            return None
-
-        self._cache[zone_id] = (subgraph, sub_edges)
-        return self._cache[zone_id]
+        self._cache[zone_id] = edges
+        return edges
 
     def sample_points(
         self,
@@ -77,27 +68,26 @@ class ZoneSampler:
         if n <= 0:
             return None
 
-        cached = self._cache.get(zone_id)
-        if cached is None:
-            cached = self._build_cache_entry(zone_id, polygon)
-        if cached is None:
+        edges = self._cache.get(zone_id)
+        if edges is None:
+            edges = self._edges_for_zone(zone_id, polygon)
+        if edges is None:
             return None
 
-        _, sub_edges = cached
-        weights = sub_edges["length"].to_numpy(dtype=float)
+        weights = edges["length"].to_numpy(dtype=float)
         total = float(weights.sum())
         if not np.isfinite(total) or total <= 0:
             return None
         weights = weights / total
 
-        indices = rng.choice(len(sub_edges), size=n, p=weights)
-        lines = sub_edges.iloc[indices]["geometry"].to_numpy()
+        selection = rng.choice(len(edges), size=n, p=weights)
+        chosen = edges.iloc[selection]
         positions = rng.random(n)
         geoms = [
-            line.interpolate(float(pos), normalized=True)
-            for line, pos in zip(lines, positions)
+            geom.interpolate(float(pos), normalized=True)
+            for geom, pos in zip(chosen["geometry"], positions)
         ]
-        return gpd.GeoSeries(geoms, crs=sub_edges.crs)
+        return gpd.GeoSeries(geoms, crs=edges.crs)
 
 
 def load_trips(path: Path) -> pd.DataFrame:
@@ -143,15 +133,19 @@ def uniform_points_in_geometry(
     if geom is None or geom.is_empty or count <= 0:
         return []
 
-    if geom.geom_type == "GeometryCollection":
+    if isinstance(geom, GeometryCollection):
         geom = geom.buffer(0)
 
-    if geom.geom_type == "Polygon":
-        polygons: Iterable[BaseGeometry] = [geom]
-    elif geom.geom_type == "MultiPolygon":
-        polygons = [poly for poly in geom.geoms if not poly.is_empty]
+    if isinstance(geom, Polygon):
+        polygons: list[Polygon] = [geom]
+    elif isinstance(geom, MultiPolygon):
+        polygons = [
+            poly
+            for poly in geom.geoms
+            if isinstance(poly, Polygon) and not poly.is_empty
+        ]
     else:
-        polygons = [geom.convex_hull]
+        polygons = [cast(Polygon, geom.convex_hull)]
 
     polygons = [poly for poly in polygons if poly.area > 0]
     if not polygons:
@@ -190,7 +184,7 @@ def gen_coords_for_trips(
     trips: pd.DataFrame,
     zone_column: str,
     sampler: ZoneSampler,
-    zone_geoms: Dict[int, BaseGeometry],
+    zone_geoms: Mapping[int, BaseGeometry],
     seed: int,
 ) -> Tuple[np.ndarray, np.ndarray]:
     rng = np.random.default_rng(seed)
@@ -200,8 +194,9 @@ def gen_coords_for_trips(
     for start in range(0, len(trips), SAMPLE_BATCH_SIZE):
         stop = min(start + SAMPLE_BATCH_SIZE, len(trips))
         chunk = trips.iloc[start:stop]
-        for zone_key, indices in chunk.groupby(zone_column).groups.items():
-            zone_id = int(zone_key)
+        for zone_key, group in chunk.groupby(zone_column):
+            zone_id = int(zone_key)  # type: ignore[arg-type]
+            indices = group.index.to_numpy()
             n_points = len(indices)
             polygon = zone_geoms.get(zone_id)
             sampled = sampler.sample_points(zone_id, polygon, n_points, rng)
@@ -211,8 +206,12 @@ def gen_coords_for_trips(
             else:
                 fallback = uniform_points_in_geometry(polygon, n_points, rng)
                 if fallback:
-                    xs[indices] = np.fromiter((pt.x for pt in fallback), float, count=n_points)
-                    ys[indices] = np.fromiter((pt.y for pt in fallback), float, count=n_points)
+                    xs[indices] = np.fromiter(
+                        (pt.x for pt in fallback), float, count=n_points
+                    )
+                    ys[indices] = np.fromiter(
+                        (pt.y for pt in fallback), float, count=n_points
+                    )
                 else:
                     xs[indices] = np.nan
                     ys[indices] = np.nan
@@ -220,7 +219,7 @@ def gen_coords_for_trips(
 
 
 def snap_points_to_nodes(
-    graph: ox.graph.Graph,
+    graph: nx.MultiDiGraph,
     xs: np.ndarray,
     ys: np.ndarray,
 ) -> np.ndarray:
@@ -230,7 +229,7 @@ def snap_points_to_nodes(
     valid = np.isfinite(xs) & np.isfinite(ys)
     if valid.any():
         edges, _ = ox.distance.nearest_edges(
-            graph, xs[valid], ys[valid], return_dist=True
+            graph, xs[valid], ys[valid], return_dist=True  # type: ignore[arg-type]
         )
         chosen = []
         for (u, v, _), x, y in zip(edges, xs[valid], ys[valid]):
@@ -263,20 +262,24 @@ def main() -> pd.DataFrame:
     logger.info("Preparing Manhattan graph context")
     G = ensure_travel_times(load_graph())
     G_proj = ox.project_graph(G)
-    G_undir = ox.convert.to_undirected(G_proj)
-    nodes_gdf, edges_gdf = ox.graph_to_gdfs(G_undir, nodes=True, edges=True)
+    nodes_gdf, edges_gdf = ox.graph_to_gdfs(G_proj, nodes=True, edges=True)
     logger.info(
-        "Graph projected: %d nodes, %d edges", G_undir.number_of_nodes(), G_undir.number_of_edges()
+        "Graph projected: %d nodes, %d edges",
+        G_proj.number_of_nodes(),
+        G_proj.number_of_edges(),
     )
 
-    zones = load_zones(TAXI_ZONES_PATH, G_undir.graph["crs"])
-    zone_geoms = {
-        int(row.LocationID): row.geometry for row in zones.itertuples(index=False)
-    }
+    zones = load_zones(TAXI_ZONES_PATH, G_proj.graph["crs"])
+    zone_geoms: Dict[int, BaseGeometry] = {}
+    for _, row in zones.iterrows():
+        geometry = cast(BaseGeometry, row["geometry"])
+        zone_geoms[int(row["LocationID"])] = geometry
 
     graph_hull = nodes_gdf.geometry.unary_union.convex_hull
     valid_zone_ids = {
-        zone_id for zone_id, geom in zone_geoms.items() if geom.intersects(graph_hull)
+        zone_id
+        for zone_id, geom in zone_geoms.items()
+        if geom is not None and geom.intersects(graph_hull)
     }
     logger.info(
         "Zones intersecting the Manhattan graph: %d of %d",
@@ -286,10 +289,14 @@ def main() -> pd.DataFrame:
 
     trips = load_trips(RIDER_DATA_PATH)
     before_filter = len(trips)
-    trips = trips[
-        trips["pickup_zone"].isin(valid_zone_ids)
-        & trips["dropoff_zone"].isin(valid_zone_ids)
-    ].copy()
+    valid_list = sorted(valid_zone_ids)
+    trips = cast(
+        pd.DataFrame,
+        trips[
+            trips["pickup_zone"].isin(valid_list)
+            & trips["dropoff_zone"].isin(valid_list)
+        ].copy(),
+    )
     trips = trips.reset_index(drop=True)
     logger.info(
         "Trips restricted to Manhattan zones: %d → %d",
@@ -297,40 +304,40 @@ def main() -> pd.DataFrame:
         len(trips),
     )
 
-    sampler = ZoneSampler(G_undir, edges_gdf)
+    sampler = ZoneSampler(edges_gdf)
 
-    trips.loc[:, "pu_x"], trips.loc[:, "pu_y"] = gen_coords_for_trips(
+    pu_x, pu_y = gen_coords_for_trips(
         trips, "pickup_zone", sampler, zone_geoms, PICKUP_SEED
     )
-    trips.loc[:, "do_x"], trips.loc[:, "do_y"] = gen_coords_for_trips(
+    do_x, do_y = gen_coords_for_trips(
         trips, "dropoff_zone", sampler, zone_geoms, DROPOFF_SEED
     )
+    trips["pu_x"] = pd.Series(pu_x, index=trips.index, dtype=float)
+    trips["pu_y"] = pd.Series(pu_y, index=trips.index, dtype=float)
+    trips["do_x"] = pd.Series(do_x, index=trips.index, dtype=float)
+    trips["do_y"] = pd.Series(do_y, index=trips.index, dtype=float)
 
-    pu_nodes = snap_points_to_nodes(G_undir, trips["pu_x"].to_numpy(), trips["pu_y"].to_numpy())
-    do_nodes = snap_points_to_nodes(G_undir, trips["do_x"].to_numpy(), trips["do_y"].to_numpy())
+    pu_nodes = snap_points_to_nodes(G_proj, pu_x, pu_y)
+    do_nodes = snap_points_to_nodes(G_proj, do_x, do_y)
 
-    transformer = Transformer.from_crs(
-        G_undir.graph["crs"], "EPSG:4326", always_xy=True
-    )
-    pu_lon, pu_lat = to_lonlat(trips["pu_x"].to_numpy(), trips["pu_y"].to_numpy(), transformer)
-    do_lon, do_lat = to_lonlat(trips["do_x"].to_numpy(), trips["do_y"].to_numpy(), transformer)
+    transformer = Transformer.from_crs(G_proj.graph["crs"], "EPSG:4326", always_xy=True)
+    pu_lon, pu_lat = to_lonlat(pu_x, pu_y, transformer)
+    do_lon, do_lat = to_lonlat(do_x, do_y, transformer)
 
     trips["orig_node"] = (
-        pd.Series(pu_nodes, index=trips.index)
-        .replace(-1, pd.NA)
-        .astype("Int64")
+        pd.Series(pu_nodes, index=trips.index).replace(-1, pd.NA).astype("Int64")
     )
     trips["dest_node"] = (
-        pd.Series(do_nodes, index=trips.index)
-        .replace(-1, pd.NA)
-        .astype("Int64")
+        pd.Series(do_nodes, index=trips.index).replace(-1, pd.NA).astype("Int64")
     )
     trips["pu_lon"], trips["pu_lat"] = pu_lon, pu_lat
     trips["do_lon"], trips["do_lat"] = do_lon, do_lat
 
     invalid = trips["orig_node"].isna() | trips["dest_node"].isna()
     if invalid.any():
-        logger.info("Dropping %d trips that could not be snapped to the graph", invalid.sum())
+        logger.info(
+            "Dropping %d trips that could not be snapped to the graph", invalid.sum()
+        )
         trips = trips.loc[~invalid].copy()
 
     OUTPUT_DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
