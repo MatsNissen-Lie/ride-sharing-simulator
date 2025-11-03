@@ -24,3 +24,6 @@ Use `config.BASE_DIR` and `pathlib.Path` chaining for filesystem work, prefer ab
 
 ## Context7 Documentation Lookup
 - Resolve with `context7.resolve-library-id` then fetch via `context7.get-library-docs`; use `/websites/osmnx_readthedocs_io_en_stable` for OSMnx, `/websites/networkx_stable` for NetworkX.
+- For Polars use `/websites/pola_rs_api_python_stable_reference` after resolving.
+
+## POLARS is the default dataframe library (DO NOT USE PANDAS)
