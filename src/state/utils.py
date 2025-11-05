@@ -1,4 +1,4 @@
-"""Shared helpers for visualising state assignments."""
+"""Utilities for visualising rider/vehicle assignments."""
 
 from pathlib import Path
 from typing import TYPE_CHECKING

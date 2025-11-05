@@ -27,9 +27,7 @@ from src.state.utils import plot_assignment
 logger = get_logger(__name__)
 
 
-RIDER_DATA_PATH = (
-    BASE_DIR / "data" / "riders" / "fhv_tripdata_2025-01_enriched.parquet"
-)
+RIDER_DATA_PATH = BASE_DIR / "data" / "riders" / "fhv_tripdata_2025-01_enriched.parquet"
 """Enriched rider dataset with pre-computed origin/destination nodes."""
 
 RIDER_COLUMNS: list[str] = [
@@ -62,6 +60,8 @@ class RiderVehicleMatch:
     vehicle_node: int
     dispatch: RouteSegment
     enroute: RouteSegment
+    pickup_zone: Optional[int]
+    dropoff_zone: Optional[int]
 
 
 def load_minimal_graph() -> nx.MultiDiGraph:
@@ -70,7 +70,9 @@ def load_minimal_graph() -> nx.MultiDiGraph:
     logger.info("Loading Manhattan drive network (cached if available)...")
     graph = ensure_travel_times(load_graph())
     logger.info(
-        "Graph ready: %d nodes / %d edges", graph.number_of_nodes(), graph.number_of_edges()
+        "Graph ready: %d nodes / %d edges",
+        graph.number_of_nodes(),
+        graph.number_of_edges(),
     )
     return graph
 
@@ -132,7 +134,9 @@ def _summarise_route(graph: nx.MultiDiGraph, path: list[int]) -> RouteSegment:
         total_length += float(chosen.get("length", 0.0) or 0.0)
         total_travel_time += float(chosen.get("travel_time", 0.0) or 0.0)
 
-    return RouteSegment(nodes=path, distance_m=total_length, travel_time_s=total_travel_time)
+    return RouteSegment(
+        nodes=path, distance_m=total_length, travel_time_s=total_travel_time
+    )
 
 
 def _shortest_route(
@@ -208,12 +212,20 @@ def match_riders_to_nearest_vehicles(
     for idx, rider in enumerate(riders.iter_rows(named=True)):
         pickup_node = int(rider["orig_node"])
         dropoff_node = int(rider["dest_node"])
+        pickup_zone = rider.get("pickup_zone")
+        dropoff_zone = rider.get("dropoff_zone")
+        pickup_zone_val = int(pickup_zone) if pickup_zone is not None else None
+        dropoff_zone_val = int(dropoff_zone) if dropoff_zone is not None else None
 
-        vehicle_id, vehicle_node, dispatch = _choose_vehicle(graph, pickup_node, vehicles)
+        vehicle_id, vehicle_node, dispatch = _choose_vehicle(
+            graph, pickup_node, vehicles
+        )
         try:
             enroute = _shortest_route(graph, pickup_node, dropoff_node)
         except (nx.NetworkXNoPath, nx.NodeNotFound) as error:
-            msg = f"No path from pickup node {pickup_node} to dropoff node {dropoff_node}"
+            msg = (
+                f"No path from pickup node {pickup_node} to dropoff node {dropoff_node}"
+            )
             raise ValueError(msg) from error
 
         assignments.append(
@@ -225,6 +237,8 @@ def match_riders_to_nearest_vehicles(
                 vehicle_node=vehicle_node,
                 dispatch=dispatch,
                 enroute=enroute,
+                pickup_zone=pickup_zone_val,
+                dropoff_zone=dropoff_zone_val,
             )
         )
 
@@ -242,10 +256,17 @@ def describe_match(match: RiderVehicleMatch) -> str:
     enroute_summary = (
         f"en-route {enroute.travel_time_s:.0f}s over {enroute.distance_m/1000:.2f} km"
     )
+    zone_summary = ""
+    if match.pickup_zone is not None or match.dropoff_zone is not None:
+        zone_summary = (
+            f" [zones pu={match.pickup_zone if match.pickup_zone is not None else '-'}"
+            f"/do={match.dropoff_zone if match.dropoff_zone is not None else '-'}]"
+        )
+
     return (
         f"rider #{match.rider_index}: vehicle {match.vehicle_id} "
         f"(node {match.vehicle_node}) -> pickup {match.pickup_node} -> dropoff {match.dropoff_node}; "
-        f"{dispatch_summary}, {enroute_summary}"
+        f"{dispatch_summary}, {enroute_summary}{zone_summary}"
     )
 
 
@@ -262,8 +283,17 @@ __all__ = [
 def main() -> None:
     """Quick smoke test when executed as a script."""
 
+    sample_rider_count = 2
+    sample_vehicle_count = 50
+    sample_seed: Optional[int] = 69
+
     graph = load_minimal_graph()
-    matches = match_riders_to_nearest_vehicles(graph=graph)
+    matches = match_riders_to_nearest_vehicles(
+        rider_count=sample_rider_count,
+        vehicle_count=sample_vehicle_count,
+        seed=sample_seed,
+        graph=graph,
+    )
     for match in matches:
         print(describe_match(match))
         plot_assignment(graph, match)
