@@ -1,6 +1,6 @@
 """Convenience re-exports for the project's logging helpers."""
 
-from .config import (
+from config.config import (
     BASE_DIR,
     LOGGING_GLOBAL_LEVEL,
     LOGGING_LEVEL,
