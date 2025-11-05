@@ -1,6 +1,5 @@
 """Generate graph-constrained pickup and dropoff nodes for NYC FHV trips."""
 
-from collections.abc import Iterable
 from pathlib import Path
 from typing import Dict, Mapping, Optional, Tuple, cast
 
@@ -330,12 +329,8 @@ def main() -> pl.DataFrame:
     pickup_zones = trips["pickup_zone"].to_numpy()
     dropoff_zones = trips["dropoff_zone"].to_numpy()
 
-    pu_x, pu_y = gen_coords_for_zones(
-        pickup_zones, sampler, zone_geoms, PICKUP_SEED
-    )
-    do_x, do_y = gen_coords_for_zones(
-        dropoff_zones, sampler, zone_geoms, DROPOFF_SEED
-    )
+    pu_x, pu_y = gen_coords_for_zones(pickup_zones, sampler, zone_geoms, PICKUP_SEED)
+    do_x, do_y = gen_coords_for_zones(dropoff_zones, sampler, zone_geoms, DROPOFF_SEED)
 
     pu_nodes = snap_points_to_nodes(G_proj, pu_x, pu_y)
     do_nodes = snap_points_to_nodes(G_proj, do_x, do_y)

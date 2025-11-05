@@ -66,16 +66,14 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def parse_time(value: Optional[str]) -> Optional[pd.Timestamp]:
+def parse_time(value: Optional[str]) -> Optional[pl.Datetime]:
     if value is None:
         return None
     try:
-        ts = pd.Timestamp(value)
-        if ts is pd.NaT:
-            return None
-        return cast(pd.Timestamp, ts)
-    except ValueError as exc:  # pragma: no cover - handled at runtime
+        ts = pl.Series([value]).str.strptime(pl.Datetime, strict=False).item()
+    except pl.exceptions.ComputeError as exc:  # pragma: no cover - runtime validation
         raise argparse.ArgumentTypeError(str(exc)) from exc
+    return ts
 
 
 def main() -> None:
@@ -85,35 +83,30 @@ def main() -> None:
     start_ts = parse_time(args.start)
     end_ts = parse_time(args.end)
 
-    sample: Optional[DataFrame]
     if args.vehicles:
         sample = None
     else:
         logger.info("Loading enriched rider data from %s", RIDER_DATA_PATH)
-        trips: DataFrame = cast(DataFrame, pd.read_parquet(RIDER_DATA_PATH))
-        if trips.empty:
+        trips = pl.read_parquet(RIDER_DATA_PATH)
+        if trips.is_empty():
             logger.warning("No trips available; nothing to plot")
             return
 
-        trips["pickup_datetime"] = pd.to_datetime(trips["pickup_datetime"], utc=False)
+        trips = trips.with_columns(
+            pl.col("pickup_datetime").cast(pl.Datetime(time_unit="us"))
+        )
 
         if start_ts is not None:
-            trips = cast(
-                DataFrame,
-                trips.loc[trips["pickup_datetime"] >= start_ts].copy(),
-            )
+            trips = trips.filter(pl.col("pickup_datetime") >= pl.lit(start_ts))
         if end_ts is not None:
-            trips = cast(
-                DataFrame,
-                trips.loc[trips["pickup_datetime"] <= end_ts].copy(),
-            )
+            trips = trips.filter(pl.col("pickup_datetime") <= pl.lit(end_ts))
 
-        if trips.empty:
+        if trips.is_empty():
             logger.warning("No trips left after applying the time window")
             return
 
-        sample_size = max(1, min(args.count, len(trips)))
-        sample = trips.sample(n=sample_size, random_state=args.seed)
+        sample_size = max(1, min(args.count, trips.height))
+        sample = trips.sample(n=sample_size, seed=args.seed).to_pandas()
 
     logger.info("Loading Manhattan graph for plotting")
     graph = ensure_travel_times(load_graph())
@@ -167,11 +160,15 @@ def main() -> None:
 
     assert sample is not None
     sample_size_display = sample.shape[0]
-    subtitle = (
-        f"Count: {sample_size_display} | "
-        f"Start: {start_ts.isoformat() if start_ts is not None else '-∞'} | "
-        f"End: {end_ts.isoformat() if end_ts is not None else '∞'}"
-    )
+
+    def fmt_ts(value: Optional[pl.Datetime]) -> str:
+        if value is None:
+            return "-∞"
+        return pl.Series([value]).dt.strftime("%Y-%m-%d %H:%M:%S").item()
+
+    start_repr = fmt_ts(start_ts)
+    end_repr = fmt_ts(end_ts)
+    subtitle = f"Count: {sample_size_display} | Start: {start_repr} | End: {end_repr}"
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 7), constrained_layout=True)
     fig.suptitle(subtitle)
@@ -236,11 +233,7 @@ def main() -> None:
         f"Trips visualised: {sample_size_display}",
     ]
     if start_ts is not None or end_ts is not None:
-        summary.append(
-            "Applied time window: "
-            f"{start_ts.isoformat() if start_ts is not None else '-∞'} → "
-            f"{end_ts.isoformat() if end_ts is not None else '∞'}"
-        )
+        summary.append(f"Applied time window: {start_repr} → {end_repr}")
     summary.append(f"Seed: {args.seed}")
     logger.info(format_log_block("\n".join(summary)))
 
