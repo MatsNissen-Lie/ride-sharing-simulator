@@ -139,15 +139,40 @@ def describe_route(G: nx.MultiDiGraph) -> None:
     origin_lat, origin_lon = coordinates[origin_address]
     dest_lat, dest_lon = coordinates[dest_address]
 
+    # log the time to find nearest nodes
+    start = datetime.now()
     origin_node = ox.nearest_nodes(G, origin_lon, origin_lat)
     dest_node = ox.nearest_nodes(G, dest_lon, dest_lat)
+    elapsed_milliseconds = (datetime.now() - start).microseconds / 1000
+    logger.info(
+        "Found nearest graph nodes to origin/destination in %.2f ms",
+        elapsed_milliseconds,
+    )
 
+    # log each time we compute a route
+    start = datetime.now()
     route_nodes = nx.shortest_path(G, origin_node, dest_node, weight="travel_time")
+    logger.info(
+        "Computed shortest path from origin to destination in %.2f ms",
+        (datetime.now() - start).microseconds / 1000,
+    )
+
+    start = datetime.now()
     route_time_seconds = nx.shortest_path_length(
         G, origin_node, dest_node, weight="travel_time"
     )
+    logger.info(
+        "Computed route travel time in %.2f ms",
+        (datetime.now() - start).microseconds / 1000,
+    )
+
+    start = datetime.now()
     route_distance_meters = nx.shortest_path_length(
         G, origin_node, dest_node, weight="length"
+    )
+    logger.info(
+        "Computed route distance in %.2f ms",
+        (datetime.now() - start).microseconds / 1000,
     )
 
     if route_time_seconds > 0:
@@ -167,18 +192,18 @@ def describe_route(G: nx.MultiDiGraph) -> None:
     )
     logger.info(format_log_block(summary))
 
-    fig, ax = ox.plot_graph_route(
-        G,
-        route_nodes,
-        route_linewidth=4,
-        node_size=0,
-        bgcolor="k",
-        show=False,
-        close=False,
-    )
-    fig.savefig(ROUTE_PLOT_PATH, dpi=200, bbox_inches="tight")
-    plt.show()
-    plt.close(fig)
+    # fig, ax = ox.plot_graph_route(
+    #     G,
+    #     route_nodes,
+    #     route_linewidth=4,
+    #     node_size=0,
+    #     bgcolor="k",
+    #     show=False,
+    #     close=False,
+    # )
+    # fig.savefig(ROUTE_PLOT_PATH, dpi=200, bbox_inches="tight")
+    # plt.show()
+    # plt.close(fig)
     logger.info("Route map saved to %s", ROUTE_PLOT_PATH)
 
 

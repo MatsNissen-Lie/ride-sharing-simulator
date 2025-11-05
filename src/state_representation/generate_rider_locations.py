@@ -102,7 +102,9 @@ def load_trips(path: Path) -> pl.DataFrame:
         ],
     )
 
-    trips = trips.drop_nulls(subset=["PUlocationID", "DOlocationID"]).rename(
+    trips = trips.drop_nulls(
+        subset=["PUlocationID", "DOlocationID", "pickup_datetime"]
+    ).rename(
         {
             "PUlocationID": "pickup_zone",
             "DOlocationID": "dropoff_zone",
@@ -227,6 +229,10 @@ def snap_points_to_nodes(
     xs: np.ndarray,
     ys: np.ndarray,
 ) -> np.ndarray:
+    """
+    Snap points to their nearest graph nodes. Uses edge midpoints to decide
+    which node to snap to.
+    """
     xs = np.asarray(xs, dtype=float)
     ys = np.asarray(ys, dtype=float)
     nodes = np.full(xs.shape, -1, dtype=np.int64)
@@ -260,6 +266,21 @@ def to_lonlat(
         lon[valid] = lon_valid
         lat[valid] = lat_valid
     return lon, lat
+
+
+def mask_points_inside_polygon(
+    xs: np.ndarray,
+    ys: np.ndarray,
+    polygon: BaseGeometry,
+) -> np.ndarray:
+    mask = np.zeros_like(xs, dtype=bool)
+    finite = np.isfinite(xs) & np.isfinite(ys)
+    if not finite.any():
+        return mask
+    points = (Point(float(x), float(y)) for x, y in zip(xs[finite], ys[finite]))
+    inside = np.fromiter((polygon.contains(pt) for pt in points), dtype=bool)
+    mask[finite] = inside
+    return mask
 
 
 def main() -> pl.DataFrame:
@@ -331,6 +352,13 @@ def main() -> pl.DataFrame:
 
     pu_x, pu_y = gen_coords_for_zones(pickup_zones, sampler, zone_geoms, PICKUP_SEED)
     do_x, do_y = gen_coords_for_zones(dropoff_zones, sampler, zone_geoms, DROPOFF_SEED)
+
+    pu_inside = mask_points_inside_polygon(pu_x, pu_y, graph_hull)
+    do_inside = mask_points_inside_polygon(do_x, do_y, graph_hull)
+    pu_x = np.where(pu_inside, pu_x, np.nan)
+    pu_y = np.where(pu_inside, pu_y, np.nan)
+    do_x = np.where(do_inside, do_x, np.nan)
+    do_y = np.where(do_inside, do_y, np.nan)
 
     pu_nodes = snap_points_to_nodes(G_proj, pu_x, pu_y)
     do_nodes = snap_points_to_nodes(G_proj, do_x, do_y)
