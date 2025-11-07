@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from abc import ABC, abstractmethod
 from typing import Any, Tuple
 
@@ -26,7 +26,7 @@ class INetworkService(ABC):
 class FeasibilityResult:
     """Base class for the route planner's response."""
 
-    is_feasible: bool
+    is_feasible: bool = field(init=False)
 
 
 @dataclass(frozen=True)
@@ -35,7 +35,9 @@ class FeasibleRoute(FeasibilityResult):
 
     route: Route  # The optimal route (sequence of stops)
     cost: float  # The resulting sum of delays (sum(delta_r))
-    is_feasible: bool = True
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "is_feasible", True)
 
 
 @dataclass(frozen=True)
@@ -43,7 +45,9 @@ class Infeasible(FeasibilityResult):
     """Returned when no valid route exists."""
 
     reason: str  # e.g., "Violates max_wait", "Violates capacity"
-    is_feasible: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "is_feasible", False)
 
 
 class ISingleVehicleRoutePlanner(ABC):
@@ -76,12 +80,12 @@ class ISingleVehicleRoutePlanner(ABC):
 
 # A type alias for a graph object, e.g., networkx.Graph
 # Nodes are Request and Vehicle objects.
-RVGraph = Any
+RVGraph = Any  # TODO
 
 # A type alias for a bipartite graph object (e.g., networkx.Graph)
 # One set of nodes is 'Trip' objects (which are sets of Requests)
 # The other set of nodes is 'Vehicle' objects.
-RTVGraph = Any
+RTVGraph = Any  # TODO
 
 
 class IRVGraphBuilder(ABC):
