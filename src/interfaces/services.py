@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from abc import ABC, abstractmethod
 from typing import Any, Tuple
 
-from src.interfaces.entities import Request, Vehicle, Route, Path
+from src.interfaces.data_models import Request, Vehicle, Route, Path
 
 
 class INetworkService(ABC):

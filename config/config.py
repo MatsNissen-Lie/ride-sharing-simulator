@@ -1,21 +1,11 @@
-"""Backwards-compatible re-exports for config helpers."""
+"""Project-wide constant values."""
 
-from .logging import (
-    LOGGING_GLOBAL_LEVEL,
-    LOGGING_LEVEL,
-    LOGGING_SCOPE,
-    LoggingScope,
-    format_log_block,
-    get_logger,
-)
-from .paths import BASE_DIR
+# Graph
+OMEGA = 3
+DELTA = 5
+
 
 __all__ = [
-    "BASE_DIR",
-    "LOGGING_GLOBAL_LEVEL",
-    "LOGGING_LEVEL",
-    "LOGGING_SCOPE",
-    "LoggingScope",
-    "format_log_block",
-    "get_logger",
+    "OMEGA",
+    "DELTA",
 ]
