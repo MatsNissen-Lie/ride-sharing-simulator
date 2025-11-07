@@ -397,6 +397,7 @@ def main() -> pl.DataFrame:
             [
                 "Rider location generation complete:",
                 f"Saved {trips.height} trips to {OUTPUT_DATA_PATH}",
+                f"Same-zones trips: {trips.filter(pl.col('pickup_zone') == pl.col('dropoff_zone')).height}",
                 f"Columns available: {', '.join(trips.columns)}",
             ]
         )
