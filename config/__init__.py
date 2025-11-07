@@ -1,7 +1,6 @@
-"""Convenience re-exports for the project's logging helpers."""
+"""Convenience re-exports for filesystem and logging helpers."""
 
-from config.config import (
-    BASE_DIR,
+from .logging import (
     LOGGING_GLOBAL_LEVEL,
     LOGGING_LEVEL,
     LOGGING_SCOPE,
@@ -9,6 +8,7 @@ from config.config import (
     format_log_block,
     get_logger,
 )
+from .paths import BASE_DIR
 
 __all__ = [
     "BASE_DIR",

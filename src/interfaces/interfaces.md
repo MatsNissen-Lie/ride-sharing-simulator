@@ -122,7 +122,15 @@ The resulting structure is clear, scalable, and testable, supporting the real-ti
 [16] Experiment timing and batching parameters.
 
 [17] Batch orchestration overview.
-A Minimalist Architectural Framework for the Alonso-Mora et al. High-Capacity Ride-Sharing AlgorithmThis report outlines a minimalist, object-oriented structure for implementing the high-capacity ride-sharing algorithm presented by Alonso-Mora et al..1 The focus is on defining stable data classes and abstract interfaces that isolate system components, manage complexity, and map directly to the paper's methodology. The architecture is designed to be scalable, testable, and robust, respecting the data basis of street networks and ride requests.2I. Core Data Entities and ServicesThe foundation of the system is built on a set of immutable data structures (dataclasses) representing the core "nouns" of the ride-sharing domain, and a foundational service for network calculations.Core Entities1. RequestA Request represents a customer's submitted travel desire, existing before a vehicle is assigned. It is the fundamental unit of demand.
+A Minimalist Architectural Framework for the Alonso-Mora et al. High-Capacity Ride-Sharing Algorithm
+This report outlines a minimalist, object-oriented structure for implementing the high-capacity ride-sharing algorithm presented by Alonso-Mora et al..1 The focus is on defining stable data classes and abstract interfaces that isolate system components, manage complexity, and map directly to the paper's methodology. The architecture is designed to be scalable, testable, and robust, respecting the data basis of street networks and ride requests.2
+
+I. Core Data Entities and Services
+The foundation of the system is built on a set of immutable data structures (dataclasses) representing the core "nouns" of the ride-sharing domain, and a foundational service for network calculations.
+
+Core Entities
+1. Request
+A Request represents a customer's submitted travel desire, existing before a vehicle is assigned. It is the fundamental unit of demand.
 
 ```Python
 Python@dataclass(frozen=True)
@@ -143,12 +151,11 @@ class Request:
 
 ```
 
-2. PassengerA Passenger represents a request that has been picked up and is currently onboard a vehicle. It is a stateful entity, distinct 
-
+2. Passenger
+A Passenger represents a request that has been picked up and is currently onboard a vehicle. It is a stateful entity, distinct from a Request.2
 
 ```Python
-
-from a Request.2Python@dataclass
+Python@dataclass
 class Passenger:
     """A request that is currently in a vehicle's possession."""
     original_request: Request
@@ -159,11 +166,10 @@ class Passenger:
 
 ```
 
-1. VehicleA Vehicle represents the state of a single unit in the fleet. This is the most complex stateful object, tracking location, occupancy, and its current plan.
-
+1. Vehicle
+A Vehicle represents the state of a single unit in the fleet. This is the most complex stateful object, tracking location, occupancy, and its current plan.
 
 ```Python
-
 @dataclass
 class Vehicle:
     """Represents the current state of a fleet vehicle."""
@@ -186,8 +192,12 @@ class Vehicle:
     def is_idle(self) -> bool:
         return self.current_route is None and self.current_occupancy == 0
 ```
-        
-Route and Network PrimitivesThe system's logic is built upon the concept of a Route as an explicit sequence of actions (Stop objects) that a vehicle must follow.1. Stop and RouteThese classes define a vehicle's plan. The ISingleVehicleRoutePlanner (defined later) will create and return Route objects.
+
+Route and Network Primitives
+The system's logic is built upon the concept of a Route as an explicit sequence of actions (Stop objects) that a vehicle must follow.
+
+1. Stop and Route
+These classes define a vehicle's plan. The ISingleVehicleRoutePlanner (defined later) will create and return Route objects.
 
 ```Python
 @dataclass(frozen=True)
@@ -214,10 +224,11 @@ class Route:
 
 ```
 
-1. INetworkServiceThis abstract interface provides all interactions with the underlying road network graph. It abstracts away the graph implementation (e.g., networkx [Minimal code showcase]) and precomputed path data.Pythonfrom abc import ABC, abstractmethod
+1. INetworkService
+This abstract interface provides all interactions with the underlying road network graph. It abstracts away the graph implementation (e.g., networkx [Minimal code showcase]) and precomputed path data.
+Pythonfrom abc import ABC, abstractmethod
 
 ```Python
-
 @dataclass(frozen=True)
 class Path:
     """The result of a shortest-path query."""
@@ -237,7 +248,12 @@ class INetworkService(ABC):
        ...
 ```
 
-II. The Core "Engine": Single-Vehicle Routing (DARP)The most critical sub-problem in the entire system is determining if a single vehicle can feasibly serve a set of new requests given its current state (passengers and location). This is the travel(v, \mathcal{R}_v) function described in the paper.2This sub-problem is a well-known variant of the Vehicle Routing Problem (VRP), specifically the Dynamic Dial-a-Ride Problem (DARP) 5 or Pickup and Delivery Problem with Time Windows (PDPTW).8 The interface ISingleVehicleRoutePlanner abstracts this complex solver.Feasibility Result DataclassesThe planner's output is not just a boolean "yes" or "no" but a structured result.
+II. The Core "Engine": Single-Vehicle Routing (DARP)
+The most critical sub-problem in the entire system is determining if a single vehicle can feasibly serve a set of new requests given its current state (passengers and location). This is the travel(v, \mathcal{R}_v) function described in the paper.2
+This sub-problem is a well-known variant of the Vehicle Routing Problem (VRP), specifically the Dynamic Dial-a-Ride Problem (DARP) 5 or Pickup and Delivery Problem with Time Windows (PDPTW).8 The interface ISingleVehicleRoutePlanner abstracts this complex solver.
+
+Feasibility Result Dataclasses
+The planner's output is not just a boolean "yes" or "no" but a structured result.
 
 ```Python
 @dataclass(frozen=True)
@@ -260,7 +276,8 @@ class Infeasible(FeasibilityResult):
 
 ```
 
-ISingleVehicleRoutePlanner InterfaceThis interface defines the "engine" that will be called thousands of times per batch to build the shareability graphs.
+ISingleVehicleRoutePlanner Interface
+This interface defines the "engine" that will be called thousands of times per batch to build the shareability graphs.
 
 ```Python
 class ISingleVehicleRoutePlanner(ABC):
@@ -289,11 +306,26 @@ class ISingleVehicleRoutePlanner(ABC):
 
 ```
 
-Core ConstraintsAny implementation of ISingleVehicleRoutePlanner must enforce the following constraints within its search to find an optimal Route:Capacity Constraint: The number of passengers in the vehicle ($n_v^{pass}$) must never exceed the vehicle's capacity ($u$) at any point along the proposed Route.2Precedence Constraint: For every Request (both new and existing passengers), its pickup Stop must occur before its drop-off Stop.9Max Wait Time Constraint ($\Omega$): For every new request $r \in$ requests_to_add, its planned pickup time $t_r^p$ must satisfy: $t_r^p - r.request\_time \le r.max\_wait\_time$.2Max Total Delay Constraint ($\Delta$): For all requests and passengers (both requests_to_add and vehicle.passengers_onboard), their final drop-off time $t_r^d$ must satisfy: $t_r^d - r.earliest\_dropoff\_time \le r.max\_total\_delay$.2For vehicles with low capacity (e.g., $u \le 4$), this check can be an exhaustive search over all valid permutations of stops. For high-capacity vehicles ($u=10$), this must be a heuristic (e.g., Lin-Kernighan, Tabu search) to remain computationally tractable, as noted in the paper.13III. The Four-Step Assignment Pipeline: Abstract InterfacesThe algorithm's scalability is achieved by decoupling the intractable global VRP.2 It separates the problem into two phases:Candidate Generation (Steps 1-2): An intensive, but highly parallelizable, search for all locally feasible vehicle-trip combinations using the ISingleVehicleRoutePlanner.Global Assignment (Steps 3-4): A centralized, a-priori-NP-hard optimization that selects the best global assignment from the pre-vetted candidates.This process is modeled as a pipeline of four services, each corresponding to a step in the paper.2Step 1: IRVGraphBuilderThis component builds the pairwise shareability graph (RV-graph).2 This graph connects requests that can be shared and vehicles that can serve them.Python# A type alias for a graph object, e.g., networkx.Graph
+Core Constraints
+Any implementation of ISingleVehicleRoutePlanner must enforce the following constraints within its search to find an optimal Route:
+Capacity Constraint: The number of passengers in the vehicle ($n_v^{pass}$) must never exceed the vehicle's capacity ($u$) at any point along the proposed Route.2
+Precedence Constraint: For every Request (both new and existing passengers), its pickup Stop must occur before its drop-off Stop.9
+Max Wait Time Constraint ($\Omega$): For every new request $r \in$ requests_to_add, its planned pickup time $t_r^p$ must satisfy: $t_r^p - r.request\_time \le r.max\_wait\_time$.2
+Max Total Delay Constraint ($\Delta$): For all requests and passengers (both requests_to_add and vehicle.passengers_onboard), their final drop-off time $t_r^d$ must satisfy: $t_r^d - r.earliest\_dropoff\_time \le r.max\_total\_delay$.2
+For vehicles with low capacity (e.g., $u \le 4$), this check can be an exhaustive search over all valid permutations of stops. For high-capacity vehicles ($u=10$), this must be a heuristic (e.g., Lin-Kernighan, Tabu search) to remain computationally tractable, as noted in the paper.13
+
+III. The Four-Step Assignment Pipeline: Abstract Interfaces
+The algorithm's scalability is achieved by decoupling the intractable global VRP.2 It separates the problem into two phases:
+Candidate Generation (Steps 1-2): An intensive, but highly parallelizable, search for all locally feasible vehicle-trip combinations using the ISingleVehicleRoutePlanner.
+Global Assignment (Steps 3-4): A centralized, a-priori-NP-hard optimization that selects the best global assignment from the pre-vetted candidates.
+This process is modeled as a pipeline of four services, each corresponding to a step in the paper.2
+
+Step 1: IRVGraphBuilder
+This component builds the pairwise shareability graph (RV-graph).2 This graph connects requests that can be shared and vehicles that can serve them.
+Python# A type alias for a graph object, e.g., networkx.Graph
 # Nodes are Request and Vehicle objects.
 
 ```Python
-
 RVGraph = Any 
 
 class IRVGraphBuilder(ABC):
@@ -319,11 +351,12 @@ class IRVGraphBuilder(ABC):
        ...
 ```
 
-Step 2: IRTVGraphBuilderThis component finds cliques in the RVGraph to form candidate Trips (a set of requests) and then validates which real vehicles can serve them, creating the RTV-graph.2Python# A type alias for a bipartite graph object (e.g., networkx.Graph)
+Step 2: IRTVGraphBuilder
+This component finds cliques in the RVGraph to form candidate Trips (a set of requests) and then validates which real vehicles can serve them, creating the RTV-graph.2
+Python# A type alias for a bipartite graph object (e.g., networkx.Graph)
 # One set of nodes is 'Trip' objects (which are sets of Requests)
 # The other set of nodes is 'Vehicle' objects.
 ```Python
-
 RTVGraph = Any
 
 class IRTVGraphBuilder(ABC):
@@ -356,7 +389,8 @@ class IRTVGraphBuilder(ABC):
        ...
 ```
 
-Step 3: IAssignmentSolver (Main ILP)This component formulates and solves the main Integer Linear Program (ILP) from Algorithm 1 in the paper to find the optimal assignment.1
+Step 3: IAssignmentSolver (Main ILP)
+This component formulates and solves the main Integer Linear Program (ILP) from Algorithm 1 in the paper to find the optimal assignment.1
 
 ```Python
 @dataclass(frozen=True)
@@ -399,7 +433,8 @@ class IAssignmentSolver(ABC):
        ...
 ```
 
-Step 4: IRebalancingSolver (Rebalancing LP)The paper specifies a fourth step: rebalancing idle vehicles to serve unassigned requests.2 This is not part of the main ILP but a subsequent, simpler Linear Program (LP) that optimizes a different objective. This separation simplifies the main ILP by removing rebalancing concerns, which are handled only for the remaining idle vehicles and unserved requests.
+Step 4: IRebalancingSolver (Rebalancing LP)
+The paper specifies a fourth step: rebalancing idle vehicles to serve unassigned requests.2 This is not part of the main ILP but a subsequent, simpler Linear Program (LP) that optimizes a different objective. This separation simplifies the main ILP by removing rebalancing concerns, which are handled only for the remaining idle vehicles and unserved requests.
 
 ```Python
 @dataclass(frozen=True)
@@ -435,4 +470,55 @@ class IRebalancingSolver(ABC):
        ...
 ```
 
-Summary of Pipeline InterfacesThis table summarizes the data flow and dependencies of the complete four-step pipeline.Table 1: Interfaces of the Four-Step Assignment PipelineInterfacePrimary Input(s)Primary OutputCore Task (from Paper)Key DependenciesIRVGraphBuilderset, set[Vehicle]RVGraph"computing a pairwise request-vehicle shareability graph" 2ISingleVehicleRoutePlannerIRTVGraphBuilderRVGraph, set[Vehicle]RTVGraph"computing a graph of feasible trips... (RTV-graph)" 2ISingleVehicleRoutePlannerIAssignmentSolverRTVGraph, setAssignmentResult"solving an ILP to compute the best assignment" 2ILP Solver LibraryIRebalancingSolverset[Vehicle] (idle), set (unassigned)RebalancingResult"rebalancing the remaining idle vehicles" 2INetworkService, LP SolverIV. System Orchestration and Data FlowThe components above are orchestrated by a central controller that manages the system's state and executes the assignment pipeline in discrete batches.17The BatchAssignmentControllerThis central controller manages the main application loop, which runs on a fixed time interval (e.g., 30 seconds, as used in the paper's experiments).16Core Dependencies:RequestPool (Global state: stores all active $\mathcal{R}$)VehicleFleet (Global state: stores state of all $\mathcal{V}$)IRVGraphBuilder (Service)IRTVGraphBuilder (Service)IAssignmentSolver (Service)IRebalancingSolver (Service)Core Logic (The 30-Second Batch Cycle):T=0s: Controller wakes up.T=0s: Fetches current state: requests = RequestPool.get_all() and vehicles = VehicleFleet.get_all().T=1s: rv_graph = rv_builder.build_graph(requests, vehicles)T=5s: rtv_graph = rtv_builder.build_graph(rv_graph, vehicles, max_trip_size=10)T=10s: assignment_result = assignment_solver.solve(rtv_graph, requests, vehicles, solver_timeout=19.0)T=29s: idle_vehicles and unassigned_requests are extracted from assignment_result.T=29s: rebalance_result = rebalancing_solver.solve(idle_vehicles, unassigned_requests)T=30s: The controller commits the results:Updates VehicleFleet with the new current_route for all assigned vehicles (from both assignment_result and rebalance_result).Updates RequestPool, removing requests that have been successfully assigned.T=30s: Controller sleeps until the next batch window."Anytime" vs. "Batch" OrchestrationThe paper's "anytime optimal" property 3 must be balanced with the "real-time" requirement of the system. The architecture achieves this as follows:The "real-time" nature is handled by the strict batch window.16 A 30-second processing time is acceptable.The "anytime" property applies specifically to the IAssignmentSolver (Step 3). This step is initialized with a fast, low-quality greedy assignment.3The BatchAssignmentController then gives the ILP solver a fixed time budget (e.g., 19 seconds) to find a better solution.When the timeout expires, the controller interrupts the solver and uses the best solution found so far.3 This ensures the system always has a good-quality, valid assignment within the 30-second real-time window.Data Flow for a Single RequestIngestion: A user submits a ride. A Request object is created and added to the global RequestPool.Batching: At the start of the next 30s window, the BatchAssignmentController pulls this Request into its active set.Step 1 (RV): The Request becomes a node in the RVGraph, connected to other requests and vehicles it is pairwise shareable with.Step 2 (RTV): The Request becomes a member of one or more candidate Trip nodes in the RTVGraph. These Trip nodes are connected to Vehicle nodes that can feasibly serve them.Step 3 (ILP): The IAssignmentSolver runs.Success: An $\epsilon_{i,j}$ variable is set to 1, where Trip $T_i$ contains this Request. The AssignmentResult maps a Vehicle $v_j$ to Trip $T_i$. The Request is removed from the RequestPool. The Vehicle $v_j$ has its current_route updated to the new optimal Route that includes this Request.Failure (Ignored): The $\chi_k$ variable for this Request is set to 1. The Request is placed in the unassigned_requests set.Step 4 (Rebalance):Success: The Request is in the unassigned_requests set. The IRebalancingSolver finds an idle vehicle and the RebalancingResult maps a Vehicle to it. The Vehicle's route is updated, and the Request is removed from the RequestPool.Failure: The Request is not assigned by the rebalancing LP. It remains in the RequestPool for the next 30s batch. Its max_wait_time constraint will become tighter.Architectural RecommendationsParallelism: The IRVGraphBuilder and IRTVGraphBuilder are the primary computational bottlenecks. Their core logic (thousands of calls to check_feasibility) is "embarrassingly parallel." Their implementations should use a distributed worker pool to farm out these checks, drastically reducing the time for steps 1 and 2. This aligns with the paper's note that higher parallelization would reduce computation time.16Solver Abstraction: The IAssignmentSolver and IRebalancingSolver interfaces abstract the specific optimization library (e.g., Gurobi, CPLEX).Engine Specialization: The ISingleVehicleRoutePlanner implementation can be selected at runtime: a fast, exhaustive search for $u \le 4$ and a slower, heuristic-based search for $u=10$.13V. ConclusionThis report details an architectural blueprint for the Alonso-Mora et al. (2017) ride-sharing algorithm. By defining a clear set of dataclasses (Request, Vehicle, Passenger, Route) and abstract interfaces (INetworkService, ISingleVehicleRoutePlanner, IRVGraphBuilder, IRTVGraphBuilder, IAssignmentSolver, IRebalancingSolver), the system's immense complexity is managed.The core architectural pattern is one of decoupling:The complex, single-vehicle routing logic (DARP) is isolated into a single ISingleVehicleRoutePlanner "engine."The global assignment problem is decoupled into a highly-parallelizable candidate generation phase (Steps 1-2) and a centralized optimization phase (Step 3).The fleet rebalancing problem is further decoupled from service, handled as a subsequent, simpler optimization problem (Step 4).This structure provides a clear, scalable, and testable path to implementing the algorithm, capable of managing the real-time, high-capacity demands described in the paper.
+### Summary of Pipeline Interfaces
+
+This table summarizes the data flow and dependencies for the complete four-step pipeline.
+
+| Interface            | Primary Input(s)                           | Primary Output      | Core Task (from Paper)                                        | Key Dependencies             |
+| -------------------- | ------------------------------------------ | ------------------- | ------------------------------------------------------------- | ---------------------------- |
+| `IRVGraphBuilder`    | `set[Request]`, `set[Vehicle]`             | `RVGraph`           | "computing a pairwise request-vehicle shareability graph" [2] | `ISingleVehicleRoutePlanner` |
+| `IRTVGraphBuilder`   | `RVGraph`, `set[Vehicle]`                  | `RTVGraph`          | "computing a graph of feasible trips... (RTV-graph)" [2]      | `ISingleVehicleRoutePlanner` |
+| `IAssignmentSolver`  | `RTVGraph`, `set[Request]`, `set[Vehicle]` | `AssignmentResult`  | "solving an ILP to compute the best assignment" [2]           | ILP solver library           |
+| `IRebalancingSolver` | `set[Vehicle]` (idle), `set[Request]`      | `RebalancingResult` | "rebalancing the remaining idle vehicles" [2]                 | `INetworkService`, LP solver |
+
+### IV. System Orchestration and Data Flow
+
+The interfaces above are orchestrated by a central controller that runs the assignment pipeline in discrete batches.
+
+**BatchAssignmentController**
+- Manages the main application loop on a fixed cadence (e.g., every 30 seconds [16]).
+- Core dependencies: `RequestPool` for $\mathcal{R}$, `VehicleFleet` for $\mathcal{V}$, plus `IRVGraphBuilder`, `IRTVGraphBuilder`, `IAssignmentSolver`, and `IRebalancingSolver`.
+
+**30-Second Batch Cycle**
+1. `T = 0s`: Wake; fetch state via `RequestPool.get_all()` and `VehicleFleet.get_all()`.
+2. `T = 1s`: Build `rv_graph = rv_builder.build_graph(requests, vehicles)`.
+3. `T = 5s`: Build `rtv_graph = rtv_builder.build_graph(rv_graph, vehicles, max_trip_size=10)`.
+4. `T = 10s`: Solve `assignment_result = assignment_solver.solve(..., solver_timeout=19.0)`.
+5. `T = 29s`: Derive `idle_vehicles` and `unassigned_requests` from the assignment output.
+6. `T = 29s`: Solve `rebalance_result = rebalancing_solver.solve(idle_vehicles, unassigned_requests)`.
+7. `T = 30s`: Commit results to `VehicleFleet` and `RequestPool`, then sleep until the next batch.
+
+### "Anytime" vs. "Batch" Orchestration
+
+- The strict batch window enforces real-time guarantees (30 seconds is acceptable [16]).
+- `IAssignmentSolver` honors the anytime requirement by starting from a greedy warm start [3].
+- The controller interrupts the ILP at the timeout and keeps the best solution found so far [3].
+
+### Data Flow for a Single Request
+
+1. **Ingestion**: Create a `Request` and add it to the `RequestPool`.
+2. **Batching**: Pull the request into the active set at the next batch boundary.
+3. **Step 1 (RV)**: Add the request as a node in the RV-graph with shareable edges.
+4. **Step 2 (RTV)**: Add the request to candidate trip nodes in the RTV-graph, linked to feasible vehicles.
+5. **Step 3 (ILP)**: If some $\epsilon_{i,j} = 1$ for trip $T_i$, assign the request and update the vehicle route; otherwise $\chi_k = 1$ and the request remains unassigned.
+6. **Step 4 (Rebalance)**: Attempt to match idle vehicles to unassigned requests; on success the vehicle and request are updated, otherwise the request waits for the next batch with tighter constraints.
+
+### Architectural Recommendations
+
+- **Parallelism**: Distribute `check_feasibility` calls across workers to accelerate Steps 1–2 [16].
+- **Solver abstraction**: Keep optimization libraries behind `IAssignmentSolver` and `IRebalancingSolver`.
+- **Engine specialization**: Choose exhaustive search for $u \le 4$ and heuristic planners for $u = 10$ during runtime [13].
+
+### V. Conclusion
+
+This architectural blueprint defines dataclasses (`Request`, `Vehicle`, `Passenger`, `Route`) and abstract services (`INetworkService`, `ISingleVehicleRoutePlanner`, `IRVGraphBuilder`, `IRTVGraphBuilder`, `IAssignmentSolver`, `IRebalancingSolver`) that encapsulate the algorithm’s complexity. The design decouples single-vehicle routing from global assignment, separates candidate generation from centralized optimization, and isolates fleet rebalancing into its own step—yielding a scalable, testable implementation for real-time, high-capacity ride-sharing.

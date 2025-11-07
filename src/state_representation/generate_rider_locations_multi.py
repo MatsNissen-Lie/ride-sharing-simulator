@@ -18,7 +18,7 @@ from src.state_representation.manhatten_fast import ensure_travel_times, load_gr
 logger = get_logger(__name__)
 
 INPUT_DIR = BASE_DIR / "data" / "riders"
-OUTPUT_DIR = BASE_DIR / "data" / "riders"
+OUTPUT_DIR = BASE_DIR / "data" / "rich_riders"
 FILE_PATTERN = "fhv_tripdata_2025-*.parquet"
 TAXI_ZONES_PATH = BASE_DIR / "data" / "zones" / "taxi_zones.shp"
 
