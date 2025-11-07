@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 import matplotlib.pyplot as plt
 import networkx as nx
 import osmnx as ox
+from matplotlib.lines import Line2D
 
 from config import BASE_DIR, get_logger
 
@@ -46,12 +47,40 @@ def plot_assignment(
         graph,
         routes=routes,
         route_colors=colors,
-        route_linewidths=[3.0, 3.0],
+        route_linewidths=[2.0, 2.0],
+        orig_dest_size=8,
+        orig_dest_color=colors,
         show=False,
         close=False,
         bgcolor="white",
         node_size=0,
     )
+
+    legend_items = [
+        Line2D([0], [0], color=colors[0], lw=3.0, label="dispatch"),
+        Line2D([0], [0], color=colors[1], lw=3.0, label="en route"),
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            color="w",
+            markerfacecolor=colors[0],
+            markeredgecolor="none",
+            markersize=6,
+            label="pickup",
+        ),
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            color="w",
+            markerfacecolor=colors[1],
+            markeredgecolor="none",
+            markersize=6,
+            label="dropoff",
+        ),
+    ]
+    ax.legend(handles=legend_items, loc="lower left")
 
     ax.set_title(
         f"Rider {match.rider_index} / Vehicle {match.vehicle_id}",
@@ -70,4 +99,3 @@ def plot_assignment(
 
 
 __all__ = ["plot_assignment"]
-
