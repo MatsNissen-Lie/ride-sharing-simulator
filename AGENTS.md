@@ -27,3 +27,9 @@ Use `config.BASE_DIR` and `pathlib.Path` chaining for filesystem work, prefer ab
 - For Polars use `/websites/pola_rs_api_python_stable_reference` after resolving.
 
 ## POLARS is the default dataframe library (DO NOT USE PANDAS)
+
+## USER PREFERENCES (IMPORTANT):
+- If new code is added, assume it is written by THE MASTER DEVELOPER. ALWAYS ASK BEFORE DELETING NEW CODE.
+- MINIMAL CODE IS GOOD CODE.
+- FOCUS ON A NARROW SCOPE AND DO THAT WELL. AVOID BIG CHANGES THAT TOUCH MANY PARTS OF THE CODEBASE. 
+- PRESENT MASTER DEVELOPER WITH A PLAN IF THE SCOPE OF WORK IS LARGE OR UNCERTAIN.

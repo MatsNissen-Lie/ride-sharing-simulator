@@ -11,4 +11,5 @@ NUMBER_OF_VEHICLES = 300
 __all__ = [
     "OMEGA",
     "DELTA",
+    "NUMBER_OF_VEHICLES",
 ]

@@ -5,8 +5,8 @@
 #
 # ---------------------------------------------------------------------------
 
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Optional, Tuple
 
 # ---------------------------------------------------------------------------
 #  I. Core Data Entities and Services
@@ -102,3 +102,47 @@ class Path:
     nodes: list[int]
     travel_time: float  # Travel time in seconds
     travel_distance: float  # Travel distance in meters
+
+
+@dataclass(frozen=True)
+class FeasibilityResult:
+    """Base class for the route planner's response."""
+
+    is_feasible: bool = field(init=False)
+
+
+@dataclass(frozen=True)
+class FeasibleRoute(FeasibilityResult):
+    """Returned when a valid route is found."""
+
+    route: Route  # The optimal route (sequence of stops)
+    cost: float  # The resulting sum of delays (sum(delta_r))
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "is_feasible", True)
+
+
+@dataclass(frozen=True)
+class Infeasible(FeasibilityResult):
+    """Returned when no valid route exists."""
+
+    reason: str  # e.g., "Violates max_wait", "Violates capacity"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "is_feasible", False)
+
+
+@dataclass(frozen=True)
+class AssignmentResult:
+    """The output of the main assignment ILP."""
+
+    assignments: list[Tuple[Vehicle, set[Request], Route]]
+    unassigned_requests: set[Request]
+    total_cost: float
+
+
+@dataclass(frozen=True)
+class RebalancingResult:
+    """The output of the rebalancing LP."""
+
+    assignments: list[Tuple[Vehicle, Request]]

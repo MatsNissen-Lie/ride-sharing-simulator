@@ -1,6 +1,6 @@
 """Convenience re-exports for filesystem and logging helpers."""
 
-from .config import OMEGA, DELTA
+from .config import NUMBER_OF_VEHICLES, OMEGA, DELTA
 from .logging import (
     LOGGING_GLOBAL_LEVEL,
     LOGGING_LEVEL,
@@ -24,6 +24,7 @@ __all__ = [
     "LoggingScope",
     "OMEGA",
     "DELTA",
+    "NUMBER_OF_VEHICLES",
     "format_log_block",
     "get_logger",
 ]

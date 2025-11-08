@@ -1,8 +1,17 @@
-from dataclasses import dataclass, field
 from abc import ABC, abstractmethod
-from typing import Any, Tuple
+from typing import Any
 
-from src.interfaces.data_models import Request, Vehicle, Route, Path
+from src.interfaces.data_models import (
+    AssignmentResult,
+    FeasibilityResult,
+    FeasibleRoute,
+    Infeasible,
+    Path,
+    RebalancingResult,
+    Request,
+    Route,
+    Vehicle,
+)
 
 
 class INetworkService(ABC):
@@ -20,34 +29,6 @@ class INetworkService(ABC):
 # ---------------------------------------------------------------------------
 #  II. The Core "Engine": Single-Vehicle Routing (DARP)
 # ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class FeasibilityResult:
-    """Base class for the route planner's response."""
-
-    is_feasible: bool = field(init=False)
-
-
-@dataclass(frozen=True)
-class FeasibleRoute(FeasibilityResult):
-    """Returned when a valid route is found."""
-
-    route: Route  # The optimal route (sequence of stops)
-    cost: float  # The resulting sum of delays (sum(delta_r))
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "is_feasible", True)
-
-
-@dataclass(frozen=True)
-class Infeasible(FeasibilityResult):
-    """Returned when no valid route exists."""
-
-    reason: str  # e.g., "Violates max_wait", "Violates capacity"
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "is_feasible", False)
 
 
 class ISingleVehicleRoutePlanner(ABC):
@@ -141,17 +122,6 @@ class IRTVGraphBuilder(ABC):
         pass
 
 
-@dataclass(frozen=True)
-class AssignmentResult:
-    """The output of the main assignment ILP."""
-
-    # The (Vehicle, Trip, Route) tuples define the new assignments
-    # A 'Trip' is a set[Request]
-    assignments: list[Tuple[Vehicle, set[Request], Route]]
-    unassigned_requests: set[Request]
-    total_cost: float
-
-
 class IAssignmentSolver(ABC):
 
     @abstractmethod
@@ -182,14 +152,6 @@ class IAssignmentSolver(ABC):
           to the 'solver_timeout' to ensure 'anytime' performance.
         """
         pass
-
-
-@dataclass(frozen=True)
-class RebalancingResult:
-    """The output of the rebalancing LP."""
-
-    # Simple (Vehicle, Request) pairs
-    assignments: list[Tuple[Vehicle, Request]]
 
 
 class IRebalancingSolver(ABC):

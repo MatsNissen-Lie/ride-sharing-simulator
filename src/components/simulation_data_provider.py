@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterable, Iterator, Optional
+from typing import Iterable, Iterator
 
 import networkx as nx
 import polars as pl
 
-from config import get_logger, RIDER_DIR, RIDER_PATTERN
+from config import NUMBER_OF_VEHICLES, get_logger, RIDER_DIR, RIDER_PATTERN
 from src.interfaces.data_models import Passenger, Request, Vehicle
 from src.state_representation.manhatten_fast import load_graph
+from src.state_representation.vehicle_sampling import sample_vehicle_positions
 
 logger = get_logger(__name__)
 
@@ -23,12 +24,12 @@ class SimulationDataProvider:
         *,
         rider_dir: Path = RIDER_DIR,
         rider_pattern: str = RIDER_PATTERN,
-        vehicle_path: Optional[Path] = None,
+        vehicle_count: int = NUMBER_OF_VEHICLES,
     ) -> None:
         self._graph: nx.MultiDiGraph = load_graph()
         self._rider_dir = rider_dir
         self._rider_pattern = rider_pattern
-        self._vehicle_path = vehicle_path
+        self._vehicle_count = vehicle_count
         self._request_counter = 0
 
     # ------------------------------------------------------------------
@@ -88,10 +89,10 @@ class SimulationDataProvider:
     # ------------------------------------------------------------------
 
     def iter_vehicles(self) -> Iterator[Vehicle]:
-        if self._vehicle_path is None:
-            return iter(())  # type: ignore[return-value]
-        logger.info("Loading vehicle file %s", self._vehicle_path)
-        df = pl.read_parquet(self._vehicle_path)
+        logger.info(
+            "Sampling %d vehicle positions from graph", self._vehicle_count
+        )
+        df = sample_vehicle_positions(self._graph, self._vehicle_count, seed=42)
         for row in df.to_dicts():
             yield self._vehicle_from_row(row)
 
@@ -99,8 +100,8 @@ class SimulationDataProvider:
         passengers: set[Passenger] = set()
         return Vehicle(
             id=str(row["vehicle_id"]),
-            current_node=int(row["current_node"]),
-            capacity=int(row["capacity"]),
+            current_node=int(row.get("current_node", row["node_id"])),
+            capacity=int(row.get("capacity", 4)),
             passengers_onboard=passengers,
             current_route=None,
         )
