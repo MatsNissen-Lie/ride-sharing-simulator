@@ -14,6 +14,14 @@ from typing import Optional
 
 
 @dataclass(frozen=True)
+class QoSConstraints:
+    """Quality of Service (QoS) constraints for a request. Times are in seconds."""
+
+    max_wait_time: float  # Maximum allowable wait time (Omega)
+    max_total_delay: float  # Maximum allowable total delay (Delta)
+
+
+@dataclass(frozen=True)
 class Request:
     """A single, unassigned travel request."""
 
@@ -25,10 +33,6 @@ class Request:
     # Pre-calculated earliest drop-off time
     # t_r^* = t_r^r + tau(o_r, d_r)
     earliest_dropoff_time: float
-
-    # --- Quality of Service (QoS) Constraints ---
-    max_wait_time: float  # Max wait (Omega)
-    max_total_delay: float  # Max delay (Delta)
 
 
 @dataclass

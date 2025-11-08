@@ -9,11 +9,15 @@ from .logging import (
     format_log_block,
     get_logger,
 )
-from .paths import BASE_DIR, DATA_DIR
+from .paths import BASE_DIR, DATA_DIR, RIDER_DIR, RIDER_PATTERN, VEHICLE_SAMPLE_PATH
+
 
 __all__ = [
     "BASE_DIR",
     "DATA_DIR",
+    "RIDER_DIR",
+    "RIDER_PATTERN",
+    "VEHICLE_SAMPLE_PATH",
     "LOGGING_GLOBAL_LEVEL",
     "LOGGING_LEVEL",
     "LOGGING_SCOPE",

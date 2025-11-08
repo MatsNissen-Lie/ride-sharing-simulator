@@ -12,13 +12,13 @@ from pyproj import Transformer
 from shapely.geometry import GeometryCollection, MultiPolygon, Point, Polygon
 from shapely.geometry.base import BaseGeometry
 
-from config import BASE_DIR, format_log_block, get_logger
+from config import BASE_DIR, format_log_block, get_logger, RIDER_DIR
 from src.state_representation.manhatten_fast import ensure_travel_times, load_graph
 
 logger = get_logger(__name__)
 
-INPUT_DIR = BASE_DIR / "data" / "riders"
-OUTPUT_DIR = BASE_DIR / "data" / "rich_riders"
+INPUT_DIR = RIDER_DIR
+OUTPUT_DIR = RIDER_DIR
 FILE_PATTERN = "fhv_tripdata_2025-*.parquet"
 TAXI_ZONES_PATH = BASE_DIR / "data" / "zones" / "taxi_zones.shp"
 
@@ -358,6 +358,7 @@ def process_trip_file(
 
     final_count = trips.height
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    trips = trips.sort("pickup_datetime")
     trips.drop("row_id").write_parquet(output_path)
 
     summary = format_log_block(

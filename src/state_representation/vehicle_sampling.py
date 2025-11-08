@@ -10,6 +10,8 @@ import polars as pl
 from pyproj import Transformer
 from shapely.geometry import LineString
 
+from config import VEHICLE_SAMPLE_PATH
+
 __all__ = ["VehicleSample", "sample_vehicle_positions"]
 
 
@@ -167,6 +169,9 @@ def sample_vehicle_positions(
     lies on the street network.
     """
 
+    if VEHICLE_SAMPLE_PATH.exists():
+        return pl.read_parquet(VEHICLE_SAMPLE_PATH)
+
     if count <= 0:
         raise ValueError("count must be positive")
 
@@ -208,4 +213,15 @@ def sample_vehicle_positions(
         data["lon"] = [None] * count
         data["lat"] = [None] * count
 
-    return pl.DataFrame(data)
+    vehicles = pl.DataFrame(data)
+    VEHICLE_SAMPLE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    vehicles.write_parquet(VEHICLE_SAMPLE_PATH)
+    return vehicles
+
+
+if __name__ == "__main__":
+    from src.state_representation.manhatten_fast import load_graph
+
+    street_graph = load_graph()
+    df = sample_vehicle_positions(street_graph, 10, seed=42)
+    print(f"Saved {df.height} vehicle samples to {VEHICLE_SAMPLE_PATH}")
