@@ -283,6 +283,10 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
 
                 # 4. Check Total Delay (Delta)
                 # This check applies to EVERYONE (new and old passengers)
+                if req.earliest_dropoff_time is None:
+                    raise ValueError(
+                        f"Earliest dropoff time not set for request {req.id}"
+                    )
                 total_delay = current_time - req.earliest_dropoff_time
                 if total_delay > DELTA:
                     return Infeasible(reason=f"Violates max delay for {req.id}")

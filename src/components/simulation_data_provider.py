@@ -98,12 +98,15 @@ class SimulationDataProvider:
 
     def _vehicle_from_row(self, row: dict) -> Vehicle:
         passengers: set[Passenger] = set()
+        node_id = int(row.get("current_node", row["node_id"]))
         return Vehicle(
             id=str(row["vehicle_id"]),
-            current_node=int(row.get("current_node", row["node_id"])),
             capacity=int(row.get("capacity", 4)),
             passengers_onboard=passengers,
+            last_visited_node=node_id,
+            last_visited_time=0.0,
             current_route=None,
+            route_assignment_time=None,
         )
 
 
