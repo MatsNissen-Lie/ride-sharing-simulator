@@ -15,6 +15,15 @@ from src.state_representation.vehicle_sampling import sample_vehicle_positions
 
 logger = get_logger(__name__)
 
+RIDER_COLUMNS: list[str] = [
+    "pickup_datetime",  # NOTE: We are assuming the pickup time is the the order time in our system.
+    # "dropoff_datetime",
+    # "pickup_zone",
+    # "dropoff_zone",
+    "orig_node",
+    "dest_node",
+]
+
 
 class SimulationDataProvider:
     """Loads the Manhattan graph and yields vehicle/request dataclasses."""
@@ -50,23 +59,16 @@ class SimulationDataProvider:
     def iter_requests(self) -> Iterator[Request]:
         for path in self.iter_request_files():
             logger.info("Loading rider file %s", path.name)
-            df = pl.read_parquet(
-                path,
-                columns=[
-                    "pickup_datetime",
-                    "pickup_zone",
-                    "dropoff_zone",
-                ],
-            )
+            df = pl.read_parquet(path, columns=RIDER_COLUMNS)
             series = df["pickup_datetime"]
             if not series.is_sorted():
                 raise AssertionError(
                     f"Pickup datetimes in {path.name} are not sorted ascending"
                 )
             for row in df.to_dicts():
-                yield self._request_from_row(path.stem, row)
+                yield self._request_from_row(row)
 
-    def _request_from_row(self, source_id: str, row: dict) -> Request:
+    def _request_from_row(self, row: dict) -> Request:
         pickup_dt = row["pickup_datetime"]
         if hasattr(pickup_dt, "strftime"):
             month_day = pickup_dt.strftime("%m%d")
@@ -78,8 +80,8 @@ class SimulationDataProvider:
         request_id = f"{month_day}_{self._request_counter}"
         return Request(
             id=request_id,
-            origin_node=int(row["pickup_zone"]),
-            destination_node=int(row["dropoff_zone"]),
+            origin_node=int(row["orig_node"]),
+            destination_node=int(row["dest_node"]),
             request_time=float(timestamp),
             earliest_dropoff_time=float(timestamp),
         )
@@ -89,9 +91,7 @@ class SimulationDataProvider:
     # ------------------------------------------------------------------
 
     def iter_vehicles(self) -> Iterator[Vehicle]:
-        logger.info(
-            "Sampling %d vehicle positions from graph", self._vehicle_count
-        )
+        logger.info("Sampling %d vehicle positions from graph", self._vehicle_count)
         df = sample_vehicle_positions(self._graph, self._vehicle_count, seed=42)
         for row in df.to_dicts():
             yield self._vehicle_from_row(row)

@@ -29,13 +29,16 @@ class Request:
     origin_node: int  # Graph node ID of pickup
     destination_node: int  # Graph node ID of drop-off
     request_time: float  # Timestamp of request (t_r^r)
+    promised_pickup_time: (
+        float  # Assigned pickup time (t_r^p), but not committed (aka not picked up yet)
+    )
 
     # Pre-calculated earliest drop-off time
     # t_r^* = t_r^r + tau(o_r, d_r)
     earliest_dropoff_time: float
 
 
-@dataclass
+@dataclass(frozen=True)
 class Passenger:
     """A request that is currently in a vehicle's possession."""
 
@@ -46,20 +49,40 @@ class Passenger:
     # The drop-off constraints (max_total_delay) are in original_request
 
 
+# In src/interfaces/data_models.py
+
+
 @dataclass
 class Vehicle:
-    """Represents the current state of a fleet vehicle."""
+    """
+    The main, mutable 'source of truth' for a vehicle in the fleet.
+    This object is ONLY managed by the main controller and simulation state.
+    It should NEVER be passed to planners or graph builders.
+    """
 
     id: str
-    current_node: int  # Last known graph node ID
-    capacity: int  # Max passengers (u)
+    capacity: int
 
-    # Passengers currently onboard (P_v in the paper)
+    # --- Live State ---
+
+    # Passengers currently onboard
     passengers_onboard: set[Passenger]
 
-    # The vehicle's current committed plan
+    # The last *stop* node the vehicle visited.
+    # If idle, this is its last known location.
+    last_visited_node: int
+
+    # The simulation time it arrived at/left 'last_visited_node'
+    last_visited_time: float
+
+    # --- Intent / Future Plan ---
+
+    # The vehicle's committed plan
     # This is 'None' if the vehicle is idle.
     current_route: Optional["Route"] = None
+
+    # The simulation time this route was assigned
+    route_assignment_time: Optional[float] = None
 
     @property
     def current_occupancy(self) -> int:
@@ -67,7 +90,57 @@ class Vehicle:
 
     @property
     def is_idle(self) -> bool:
+        # A vehicle is idle if it has no route AND no passengers
         return self.current_route is None and self.current_occupancy == 0
+
+
+@dataclass(frozen=True)
+class VehicleAvailability:
+    """
+    An immutable, read-only snapshot of a vehicle's future availability.
+    This is the *only* vehicle data passed to the graph builders
+    and route planners.
+    """
+
+    # ID to link back to the real vehicle
+    vehicle_id: str
+
+    # The vehicle's total capacity
+    capacity: int
+
+    # --- Availability State ---
+
+    # The node from which a *new* route would begin
+    available_at_node: int
+
+    # The future simulation time when the vehicle arrives at that node
+    available_from_time: float
+
+    # --- Passenger State at Availability Time ---
+
+    # The set of passengers who will *still* be on board
+    # at 'available_from_time'
+    passengers_onboard: frozenset[Passenger]
+
+    # The list of *remaining* stops the vehicle is *still* required to visit from its old route.
+    remaining_stops_to_serve: tuple["Stop", ...]
+
+    # make this from a Vehicle
+    @staticmethod
+    def from_vehicle(vehicle: Vehicle, sim_time: float) -> "VehicleAvailability":
+        if vehicle.is_idle:
+            return VehicleAvailability(
+                vehicle_id=vehicle.id,
+                capacity=vehicle.capacity,
+                available_at_node=vehicle.last_visited_node,
+                available_from_time=sim_time,
+                passengers_onboard=frozenset(),
+                remaining_stops_to_serve=(),
+            )
+        else:
+            raise NotImplementedError(
+                "Conversion from non-idle Vehicle not implemented."
+            )
 
 
 @dataclass(frozen=True)
@@ -96,8 +169,8 @@ class Route:
 
 
 @dataclass(frozen=True)
-class Path:
-    """The result of a shortest-path query."""
+class NetworkPath:
+    """The result of a shortest-path query from the network service."""
 
     nodes: list[int]
     travel_time: float  # Travel time in seconds

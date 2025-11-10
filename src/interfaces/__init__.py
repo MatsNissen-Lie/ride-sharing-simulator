@@ -1,35 +1,43 @@
 """Public re-exports for the interfaces package."""
 
-from .data_models import Passenger, Path, Request, Route, Stop, Vehicle
-from .services import (
-    AssignmentResult,
+from .data_models import (
+    VehicleAvailability,
+    RebalancingResult,
     FeasibilityResult,
+    AssignmentResult,
     FeasibleRoute,
+    Infeasible,
+    NetworkPath,
+    Passenger,
+    Request,
+    Route,
+    Stop,
+    Vehicle,
+)
+from .services import (
     IAssignmentSolver,
     INetworkService,
     IRTVGraphBuilder,
     IRVGraphBuilder,
     IRebalancingSolver,
     ISingleVehicleRoutePlanner,
-    Infeasible,
-    RebalancingResult,
     RTVGraph,
     RVGraph,
 )
 
 __all__ = [
-    "AssignmentResult",
-    "FeasibilityResult",
-    "FeasibleRoute",
     "IAssignmentSolver",
     "INetworkService",
     "IRTVGraphBuilder",
     "IRVGraphBuilder",
     "IRebalancingSolver",
     "ISingleVehicleRoutePlanner",
+    "AssignmentResult",
+    "FeasibilityResult",
+    "FeasibleRoute",
     "Infeasible",
+    "NetworkPath",
     "Passenger",
-    "Path",
     "RTVGraph",
     "RVGraph",
     "RebalancingResult",
@@ -37,4 +45,5 @@ __all__ = [
     "Route",
     "Stop",
     "Vehicle",
+    "VehicleAvailability",
 ]

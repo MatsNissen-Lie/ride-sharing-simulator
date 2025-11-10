@@ -49,12 +49,14 @@ logger = get_logger(__name__)
 
 def load_graph() -> nx.MultiDiGraph:
     start = datetime.now()
-    if GRAPH_PATH.exists():
+    if GRAPH_PATH.exists() and True:
         logger.info("Loading cached street graph from %s", GRAPH_PATH)
         G = ox.load_graphml(GRAPH_PATH)
     else:
         logger.info("Downloading Manhattan drive network (first run will be slower)...")
         G = ox.graph_from_place(PLACE_NAME, network_type="drive", simplify=True)
+        # ensure travel times are present
+        G = ensure_travel_times(G)
         ox.save_graphml(G, GRAPH_PATH)
         logger.info("Saved graph to %s", GRAPH_PATH)
     elapsed = (datetime.now() - start).total_seconds()
@@ -68,6 +70,21 @@ def ensure_travel_times(G: nx.MultiDiGraph) -> nx.MultiDiGraph:
     G = ox.add_edge_speeds(G)
     G = ox.add_edge_travel_times(G)
 
+    #     osmnx.routing.add_edge_travel_times(G)
+    # Add edge travel time (seconds) to graph as new travel_time edge attributes.
+
+    # Calculates free-flow travel time along each edge, based on length and speed_kph attributes. Note: run add_edge_speeds first to generate the speed_kph attribute. All edges must have length and speed_kph attributes and all their values must be non-null.
+
+    # Parameters:
+    # G (MultiDiGraph) – Input graph.
+
+    # Returns:
+    # G – Graph with travel_time attributes on all edges.
+
+    # Return type:
+    # networkx.MultiDiGraph
+    G = ox.routing.add_edge_travel_times(G)
+
     patched_edges = 0
     for _, _, data in G.edges(data=True):
         length = data.get("length")
@@ -77,8 +94,7 @@ def ensure_travel_times(G: nx.MultiDiGraph) -> nx.MultiDiGraph:
             data.setdefault("speed_kph", FALLBACK_SPEED_KPH)
             patched_edges += 1
 
-    if patched_edges:
-        logger.info("Applied fallback travel time to %d edges", patched_edges)
+    logger.info("Applied fallback travel time to %d edges", patched_edges)
 
     return G
 
@@ -191,19 +207,6 @@ def describe_route(G: nx.MultiDiGraph) -> None:
         ]
     )
     logger.info(format_log_block(summary))
-
-    # fig, ax = ox.plot_graph_route(
-    #     G,
-    #     route_nodes,
-    #     route_linewidth=4,
-    #     node_size=0,
-    #     bgcolor="k",
-    #     show=False,
-    #     close=False,
-    # )
-    # fig.savefig(ROUTE_PLOT_PATH, dpi=200, bbox_inches="tight")
-    # plt.show()
-    # plt.close(fig)
     logger.info("Route map saved to %s", ROUTE_PLOT_PATH)
 
 

@@ -1,16 +1,14 @@
 from abc import ABC, abstractmethod
+from functools import lru_cache
 from typing import Any
 
 from src.interfaces.data_models import (
     AssignmentResult,
     FeasibilityResult,
-    FeasibleRoute,
-    Infeasible,
-    Path,
+    NetworkPath,
     RebalancingResult,
     Request,
-    Route,
-    Vehicle,
+    VehicleAvailability,
 )
 
 
@@ -18,7 +16,8 @@ class INetworkService(ABC):
     """Abstract interface for all road network and travel time queries."""
 
     @abstractmethod
-    def get_shortest_path(self, origin_node: int, destination_node: int) -> Path:
+    @lru_cache(maxsize=200_000)
+    def get_shortest_path(self, origin_node: int, destination_node: int) -> NetworkPath:
         """
         Returns the pre-computed fastest path between two nodes.
         This provides the baseline travel time tau(o_r, d_r).
@@ -43,7 +42,9 @@ class ISingleVehicleRoutePlanner(ABC):
 
     @abstractmethod
     def check_feasibility(
-        self, vehicle: Vehicle, requests_to_add: set[Request]
+        self,
+        vehicle: VehicleAvailability,
+        requests_to_add: set[Request],
     ) -> FeasibilityResult:
         """
         Solves the DARP for a single vehicle.
@@ -76,7 +77,9 @@ class IRVGraphBuilder(ABC):
         pass
 
     @abstractmethod
-    def build_graph(self, requests: set[Request], vehicles: set[Vehicle]) -> RVGraph:
+    def build_graph(
+        self, requests: set[Request], vehicles: set[VehicleAvailability]
+    ) -> RVGraph:
         """
         Constructs the RV-graph by checking two types of pairwise shareability:
 
@@ -100,7 +103,7 @@ class IRTVGraphBuilder(ABC):
 
     @abstractmethod
     def build_graph(
-        self, rv_graph: RVGraph, vehicles: set[Vehicle], max_trip_size: int
+        self, rv_graph: RVGraph, vehicles: set[VehicleAvailability], max_trip_size: int
     ) -> RTVGraph:
         """
         Builds the RTV-graph:
@@ -129,7 +132,7 @@ class IAssignmentSolver(ABC):
         self,
         rtv_graph: RTVGraph,
         requests: set[Request],
-        vehicles: set[Vehicle],
+        vehicles: set[VehicleAvailability],
         solver_timeout: float,
     ) -> AssignmentResult:
         """
@@ -162,7 +165,7 @@ class IRebalancingSolver(ABC):
 
     @abstractmethod
     def solve(
-        self, idle_vehicles: set[Vehicle], unassigned_requests: set[Request]
+        self, idle_vehicles: set[VehicleAvailability], unassigned_requests: set[Request]
     ) -> RebalancingResult:
         """
         Formulates and solves the LP from SI Appendix, Algorithm 4:

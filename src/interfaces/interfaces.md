@@ -230,7 +230,7 @@ Pythonfrom abc import ABC, abstractmethod
 
 ```Python
 @dataclass(frozen=True)
-class Path:
+class NetworkPath:
     """The result of a shortest-path query."""
     nodes: list[int]
     travel_time: float      # Travel time in seconds
@@ -240,7 +240,7 @@ class INetworkService(ABC):
     """Abstract interface for all road network and travel time queries."""
     
     @abstractmethod
-    def get_shortest_path(self, origin_node: int, destination_node: int) -> Path:
+    def get_shortest_path(self, origin_node: int, destination_node: int) -> NetworkPath:
         """
         Returns the pre-computed fastest path between two nodes.
         This provides the baseline travel time tau(o_r, d_r).
