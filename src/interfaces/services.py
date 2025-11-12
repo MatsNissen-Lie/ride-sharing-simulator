@@ -17,7 +17,9 @@ class INetworkService(ABC):
 
     @abstractmethod
     @lru_cache(maxsize=200_000)
-    def get_shortest_path(self, origin_node: int, destination_node: int) -> NetworkPath:
+    def get_shortest_path(
+        self, origin_node: int, destination_node: int
+    ) -> NetworkPath | None:
         """
         Returns the pre-computed fastest path between two nodes.
         This provides the baseline travel time tau(o_r, d_r).

@@ -11,5 +11,13 @@ RIDER_PATTERN = "*_enriched.parquet"
 
 # vehicle sample path
 VEHICLE_SAMPLE_PATH = DATA_DIR / "vehicles" / "vehicle_samples.parquet"
+TAXI_ZONES_PATH = BASE_DIR / "data" / "zones" / "taxi_zones.shp"
 
-__all__ = ["BASE_DIR", "DATA_DIR", "RIDER_DIR", "RIDER_PATTERN", "VEHICLE_SAMPLE_PATH"]
+__all__ = [
+    "BASE_DIR",
+    "DATA_DIR",
+    "RIDER_DIR",
+    "RIDER_PATTERN",
+    "VEHICLE_SAMPLE_PATH",
+    "TAXI_ZONES_PATH",
+]

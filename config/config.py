@@ -15,5 +15,6 @@ NUMBER_OF_VEHICLES = 300
 __all__ = [
     "OMEGA",
     "DELTA",
+    "BATCH_DURATION",
     "NUMBER_OF_VEHICLES",
 ]

@@ -1,5 +1,6 @@
 """Batch enrich FHV trip parquet files with network snaps and coordinates."""
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Mapping, Optional, Tuple, cast
 
@@ -12,19 +13,38 @@ from pyproj import Transformer
 from shapely.geometry import GeometryCollection, MultiPolygon, Point, Polygon
 from shapely.geometry.base import BaseGeometry
 
-from config import BASE_DIR, format_log_block, get_logger, RIDER_DIR
-from src.state_representation.manhatten_fast import ensure_travel_times, load_graph
+from config import format_log_block, get_logger, RIDER_DIR
+from config.paths import TAXI_ZONES_PATH
+from src.components.network_service import NetworkXService
+from src.state_representation.manhatten_fast import load_graph
 
 logger = get_logger(__name__)
+logger.setLevel("DEBUG")
+
+
+@dataclass(frozen=True)
+class TripStats:
+    total_before: int
+    candidate_count: int
+    pickup_missing: int
+    dropoff_missing: int
+    datetime_missing: int
+    after_zone: int
+    removed_after_filter: int
+    written: int
+    dropped_snapping: int
+    path_resample_success: int
+    path_resample_fail: int
+
 
 INPUT_DIR = RIDER_DIR
 OUTPUT_DIR = RIDER_DIR
 FILE_PATTERN = "fhv_tripdata_2025-*.parquet"
-TAXI_ZONES_PATH = BASE_DIR / "data" / "zones" / "taxi_zones.shp"
 
 SAMPLE_BATCH_SIZE = 20_000
 PICKUP_SEED = 7
 DROPOFF_SEED = 17
+MAX_RESAMPLE_ATTEMPTS = 10
 
 
 class ZoneSampler:
@@ -100,10 +120,7 @@ def load_trips(path: Path) -> pl.DataFrame:
             "DOlocationID",
         ],
     )
-
-    trips = trips.drop_nulls(
-        subset=["PUlocationID", "DOlocationID", "pickup_datetime"]
-    ).rename(
+    trips = trips.rename(
         {
             "PUlocationID": "pickup_zone",
             "DOlocationID": "dropoff_zone",
@@ -282,45 +299,63 @@ def mask_points_inside_polygon(
     return mask
 
 
-def process_trip_file(
-    input_path: Path,
-    output_path: Path,
-    graph_proj: nx.MultiDiGraph,
+# --- helpers: filtering / loading -------------------------------------------------
+
+
+def _filter_candidates(
+    trips: pl.DataFrame, valid_zone_ids: set[int]
+) -> tuple[pl.DataFrame, dict]:
+    valid_list = sorted(valid_zone_ids)
+
+    pickup_valid_or_nan = (
+        pl.col("pickup_zone").is_in(valid_list) | pl.col("pickup_zone").is_null()
+    )
+    dropoff_valid_or_nan = (
+        pl.col("dropoff_zone").is_in(valid_list) | pl.col("dropoff_zone").is_null()
+    )
+    both_nan = pl.col("pickup_zone").is_null() & pl.col("dropoff_zone").is_null()
+
+    candidates = trips.filter(pickup_valid_or_nan & dropoff_valid_or_nan & ~both_nan)
+
+    pickup_missing = candidates.filter(pl.col("pickup_zone").is_null()).height
+    dropoff_missing = candidates.filter(pl.col("dropoff_zone").is_null()).height
+    datetime_missing = candidates.filter(pl.col("pickup_datetime").is_null()).height
+
+    datetime_valid_mask = pl.col("pickup_datetime").is_not_null()
+    pickup_valid_mask = pl.col("pickup_zone").is_in(valid_list)
+    dropoff_valid_mask = pl.col("dropoff_zone").is_in(valid_list)
+
+    trimmed = candidates.filter(
+        pickup_valid_mask & dropoff_valid_mask & datetime_valid_mask
+    ).with_row_index(name="row_id")
+
+    stats = dict(
+        candidate_count=candidates.height,
+        pickup_missing=pickup_missing,
+        dropoff_missing=dropoff_missing,
+        datetime_missing=datetime_missing,
+        removed_after_candidates=candidates.height - trimmed.height,
+    )
+    return trimmed, stats
+
+
+# --- helpers: geometry / snapping -------------------------------------------------
+
+
+def _gen_and_snap(
+    pickup_zones: np.ndarray,
+    dropoff_zones: np.ndarray,
     sampler: ZoneSampler,
     zone_geoms: Mapping[int, BaseGeometry],
-    valid_zone_ids: set[int],
     graph_hull: BaseGeometry,
-) -> Tuple[int, int, int, int]:
-    # TODO: Currently I am dropping 5/6 of all trips due to missing data. That will make the simulation un realistic.
-
-    logger.info("Processing %s", input_path.name)
-    trips = load_trips(input_path)
-    total_before = trips.height
-    if total_before == 0:
-        logger.info("Skipping %s (no trips)", input_path.name)
-        return 0, 0, 0, 0
-
-    valid_list = sorted(valid_zone_ids)
-    trips = trips.filter(
-        pl.col("pickup_zone").is_in(valid_list)
-        & pl.col("dropoff_zone").is_in(valid_list)
-    ).with_row_index(name="row_id")
-    after_zone = trips.height
-    if after_zone == 0:
-        logger.info(
-            "Skipping %s (no trips remain after zone filter)",
-            input_path.name,
-        )
-        return total_before, 0, 0, 0
-
-    pickup_zones = trips["pickup_zone"].to_numpy()
-    dropoff_zones = trips["dropoff_zone"].to_numpy()
-
+    graph_proj: nx.MultiDiGraph,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     pu_x, pu_y = gen_coords_for_zones(pickup_zones, sampler, zone_geoms, PICKUP_SEED)
     do_x, do_y = gen_coords_for_zones(dropoff_zones, sampler, zone_geoms, DROPOFF_SEED)
 
     pu_inside = mask_points_inside_polygon(pu_x, pu_y, graph_hull)
     do_inside = mask_points_inside_polygon(do_x, do_y, graph_hull)
+
     pu_x = np.where(pu_inside, pu_x, np.nan)
     pu_y = np.where(pu_inside, pu_y, np.nan)
     do_x = np.where(do_inside, do_x, np.nan)
@@ -328,14 +363,146 @@ def process_trip_file(
 
     pu_nodes = snap_points_to_nodes(graph_proj, pu_x, pu_y)
     do_nodes = snap_points_to_nodes(graph_proj, do_x, do_y)
+    return pu_x, pu_y, do_x, do_y, pu_nodes, do_nodes
 
+
+# --- helpers: SCC / reachability --------------------------------------------------
+
+
+def _get_node2scc(
+    graph_proj: nx.MultiDiGraph, network_service: NetworkXService
+) -> dict[int, int]:
+    node2scc_attr = getattr(network_service, "node2scc", None)
+    if isinstance(node2scc_attr, dict):
+        return cast(dict[int, int], node2scc_attr)
+    node2scc: dict[int, int] = {}
+    for cid, comp in enumerate(nx.strongly_connected_components(graph_proj)):
+        for n in comp:
+            node2scc[n] = cid
+    return node2scc
+
+
+def _pairs_need_resample(
+    pu_nodes: np.ndarray, do_nodes: np.ndarray, node2scc: dict[int, int]
+) -> np.ndarray:
+    invalid_nodes = (pu_nodes == -1) | (do_nodes == -1)
+    need = invalid_nodes.copy()
+    idxs = np.where(~invalid_nodes)[0]
+    if idxs.size:
+
+        def eq(u, v):
+            cu = node2scc.get(int(u))
+            cv = node2scc.get(int(v))
+            return (cu is not None) and (cv is not None) and (cu == cv)
+
+        mismatch = np.fromiter(
+            (not eq(pu_nodes[i], do_nodes[i]) for i in idxs), bool, count=idxs.size
+        )
+        need[idxs] |= mismatch
+    return need
+
+
+# --- helpers: batched resampling --------------------------------------------------
+
+
+def _batch_resample_indices(
+    idxs: np.ndarray,
+    pickup_zones: np.ndarray,
+    dropoff_zones: np.ndarray,
+    sampler: ZoneSampler,
+    zone_geoms: Mapping[int, BaseGeometry],
+    graph_hull: BaseGeometry,
+    graph_proj: nx.MultiDiGraph,
+    node2scc: dict[int, int],
+    pu_x: np.ndarray,
+    pu_y: np.ndarray,
+    do_x: np.ndarray,
+    do_y: np.ndarray,
+    pu_nodes: np.ndarray,
+    do_nodes: np.ndarray,
+) -> tuple[np.ndarray, int]:
+    """Resample PU/DO for provided indices in one pass; return updated fail_mask for those indices and count fixed."""
+    if idxs.size == 0:
+        return np.zeros(0, dtype=bool), 0
+
+    rng = np.random.default_rng(PICKUP_SEED + DROPOFF_SEED)
+    seed1 = int(rng.integers(0, 2**32 - 1))
+    seed2 = seed1 ^ 0x9E3779B9
+
+    new_pu_x, new_pu_y = gen_coords_for_zones(
+        pickup_zones[idxs], sampler, zone_geoms, seed1
+    )
+    new_do_x, new_do_y = gen_coords_for_zones(
+        dropoff_zones[idxs], sampler, zone_geoms, seed2
+    )
+
+    inside_pu = mask_points_inside_polygon(new_pu_x, new_pu_y, graph_hull)
+    inside_do = mask_points_inside_polygon(new_do_x, new_do_y, graph_hull)
+
+    # snap
+    snapped_pu = snap_points_to_nodes(
+        graph_proj,
+        np.where(inside_pu, new_pu_x, np.nan),
+        np.where(inside_pu, new_pu_y, np.nan),
+    )
+    snapped_do = snap_points_to_nodes(
+        graph_proj,
+        np.where(inside_do, new_do_x, np.nan),
+        np.where(inside_do, new_do_y, np.nan),
+    )
+
+    # write back where both snaps succeeded
+    ok = (snapped_pu != -1) & (snapped_do != -1)
+    if np.any(ok):
+        ok_idx = idxs[ok]
+        pu_x[ok_idx] = new_pu_x[ok]
+        pu_y[ok_idx] = new_pu_y[ok]
+        do_x[ok_idx] = new_do_x[ok]
+        do_y[ok_idx] = new_do_y[ok]
+        pu_nodes[ok_idx] = snapped_pu[ok]
+        do_nodes[ok_idx] = snapped_do[ok]
+
+    # recompute failures for these indices
+    still_invalid = (pu_nodes[idxs] == -1) | (do_nodes[idxs] == -1)
+    still_mismatch = np.zeros(idxs.size, dtype=bool)
+    ok_nodes = ~still_invalid
+    if np.any(ok_nodes):
+        sub = idxs[ok_nodes]
+
+        def eq(u, v):
+            cu = node2scc.get(int(u))
+            cv = node2scc.get(int(v))
+            return (cu is not None) and (cv is not None) and (cu == cv)
+
+        still_mismatch[ok_nodes] = np.fromiter(
+            (not eq(pu_nodes[i], do_nodes[i]) for i in sub), bool, count=sub.size
+        )
+
+    fail_mask_sub = still_invalid | still_mismatch
+    fixed_count = int(np.sum(~fail_mask_sub))
+    return fail_mask_sub, fixed_count
+
+
+# --- helpers: attach outputs / write --------------------------------------------
+
+
+def _attach_outputs(
+    trips: pl.DataFrame,
+    pu_x: np.ndarray,
+    pu_y: np.ndarray,
+    do_x: np.ndarray,
+    do_y: np.ndarray,
+    pu_nodes: np.ndarray,
+    do_nodes: np.ndarray,
+    graph_proj: nx.MultiDiGraph,
+) -> tuple[pl.DataFrame, int]:
     transformer = Transformer.from_crs(
         graph_proj.graph["crs"], "EPSG:4326", always_xy=True
     )
     pu_lon, pu_lat = to_lonlat(pu_x, pu_y, transformer)
     do_lon, do_lat = to_lonlat(do_x, do_y, transformer)
 
-    trips = trips.with_columns(
+    out = trips.with_columns(
         pl.Series("pu_x", pu_x, dtype=pl.Float64),
         pl.Series("pu_y", pu_y, dtype=pl.Float64),
         pl.Series("do_x", do_x, dtype=pl.Float64),
@@ -348,15 +515,112 @@ def process_trip_file(
         pl.Series("do_lat", do_lat, dtype=pl.Float64),
     )
 
-    invalid_mask = trips["orig_node"].is_null() | trips["dest_node"].is_null()
+    invalid_mask = out["orig_node"].is_null() | out["dest_node"].is_null()
     invalid_count = int(invalid_mask.sum())
     if invalid_count > 0:
         logger.info(
-            "Dropping %d trips in %s that could not be snapped",
-            invalid_count,
-            input_path.name,
+            "Dropping %d trips that could not be snapped / connected", invalid_count
         )
-        trips = trips.filter(~invalid_mask)
+        out = out.filter(~invalid_mask)
+    return out, invalid_count
+
+
+# --- orchestration: main function ------------------------------------------------
+
+
+def process_trip_file(
+    input_path: Path,
+    output_path: Path,
+    graph_proj: nx.MultiDiGraph,
+    network_service: NetworkXService,
+    sampler: ZoneSampler,
+    zone_geoms: Mapping[int, BaseGeometry],
+    valid_zone_ids: set[int],
+    graph_hull: BaseGeometry,
+) -> TripStats:
+    logger.info("Processing %s", input_path.name)
+    trips = load_trips(input_path)
+    total_before = trips.height
+    if total_before == 0:
+        logger.info("Skipping %s (no trips)", input_path.name)
+        return TripStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+
+    trips, pre_stats = _filter_candidates(trips, valid_zone_ids)
+    logger.info(
+        "Trips w/ Manhattan zone (%s): total=%d, pickup_missing=%d, dropoff_missing=%d, "
+        "missing_datetime=%d, removed_after_filter=%d",
+        input_path.name,
+        pre_stats["candidate_count"],
+        pre_stats["pickup_missing"],
+        pre_stats["dropoff_missing"],
+        pre_stats["datetime_missing"],
+        pre_stats["removed_after_candidates"],
+    )
+    after_zone = trips.height
+    logger.info("Trips remaining after all filters: %d", after_zone)
+    if after_zone == 0:
+        return TripStats(
+            total_before=total_before,
+            candidate_count=pre_stats["candidate_count"],
+            pickup_missing=pre_stats["pickup_missing"],
+            dropoff_missing=pre_stats["dropoff_missing"],
+            datetime_missing=pre_stats["datetime_missing"],
+            after_zone=0,
+            removed_after_filter=pre_stats["removed_after_candidates"],
+            written=0,
+            dropped_snapping=0,
+            path_resample_success=0,
+            path_resample_fail=0,
+        )
+
+    pickup_zones = trips["pickup_zone"].to_numpy()
+    dropoff_zones = trips["dropoff_zone"].to_numpy()
+
+    pu_x, pu_y, do_x, do_y, pu_nodes, do_nodes = _gen_and_snap(
+        pickup_zones, dropoff_zones, sampler, zone_geoms, graph_hull, graph_proj
+    )
+
+    node2scc = _get_node2scc(graph_proj, network_service)
+    need_resample = _pairs_need_resample(pu_nodes, do_nodes, node2scc)
+
+    path_resample_success = 0
+    path_resample_fail = 0
+
+    # Batched attempts
+    fail_mask = need_resample.copy()
+    for _ in range(MAX_RESAMPLE_ATTEMPTS):
+        idxs = np.where(fail_mask)[0]
+        if idxs.size == 0:
+            break
+        fail_mask_sub, fixed = _batch_resample_indices(
+            idxs,
+            pickup_zones,
+            dropoff_zones,
+            sampler,
+            zone_geoms,
+            graph_hull,
+            graph_proj,
+            node2scc,
+            pu_x,
+            pu_y,
+            do_x,
+            do_y,
+            pu_nodes,
+            do_nodes,
+        )
+        path_resample_success += fixed
+        # merge submask back
+        fail_mask[idxs] = fail_mask_sub
+
+    if np.any(fail_mask):
+        path_resample_fail += int(np.sum(fail_mask))
+        pu_nodes[fail_mask] = -1
+        do_nodes[fail_mask] = -1
+
+    # Attach outputs, drop invalids, write parquet
+    trips, invalid_count = _attach_outputs(
+        trips, pu_x, pu_y, do_x, do_y, pu_nodes, do_nodes, graph_proj
+    )
 
     final_count = trips.height
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -368,19 +632,51 @@ def process_trip_file(
             [
                 f"{input_path.name} summary:",
                 f"  total trips: {total_before}",
+                f"  candidates with Manhattan zone: {pre_stats['candidate_count']}",
+                f"  pickup missing: {pre_stats['pickup_missing']}",
+                f"  dropoff missing: {pre_stats['dropoff_missing']}",
+                f"  datetime missing: {pre_stats['datetime_missing']}",
                 f"  after zone filter: {after_zone}",
                 f"  dropped during snapping: {invalid_count}",
+                f"  path resample success: {path_resample_success}",
+                f"  path resample failures: {path_resample_fail}",
                 f"  written: {final_count} → {output_path.name}",
             ]
         )
     )
     logger.info(summary)
-    return total_before, after_zone, final_count, invalid_count
+
+    # TEST_PATH = True
+    # if TEST_PATH:
+    #     orig_nodes = trips["orig_node"].to_numpy()
+    #     dest_nodes = trips["dest_node"].to_numpy()
+    #     for i in range(final_count):
+    #         orig_node = orig_nodes[i]
+    #         dest_node = dest_nodes[i]
+    #         if orig_node is None or dest_node is None:
+    #             continue
+    #         length = network_service.get_shortest_path(int(orig_node), int(dest_node))
+    #         if length is None:
+    #             raise ValueError("Invalid path after snapping!")
+
+    return TripStats(
+        total_before=total_before,
+        candidate_count=pre_stats["candidate_count"],
+        pickup_missing=pre_stats["pickup_missing"],
+        dropoff_missing=pre_stats["dropoff_missing"],
+        datetime_missing=pre_stats["datetime_missing"],
+        after_zone=after_zone,
+        removed_after_filter=pre_stats["removed_after_candidates"],
+        written=final_count,
+        dropped_snapping=invalid_count,
+        path_resample_success=path_resample_success,
+        path_resample_fail=path_resample_fail,
+    )
 
 
 def main() -> None:
     logger.info("Preparing Manhattan graph context")
-    graph = ensure_travel_times(load_graph())
+    graph = load_graph()
     graph_proj = ox.project_graph(graph)
     nodes_gdf, edges_gdf = ox.graph_to_gdfs(graph_proj, nodes=True, edges=True)
     logger.info(
@@ -436,15 +732,17 @@ def main() -> None:
         logger.warning("No input files matching %s in %s", FILE_PATTERN, INPUT_DIR)
         return
 
+    network_service = NetworkXService(graph_proj)
     sampler = ZoneSampler(edges_gdf)
 
-    totals: list[Tuple[int, int, int, int]] = []
+    totals: list[TripStats] = []
     for input_path in files:
         output_path = OUTPUT_DIR / f"{input_path.stem}_enriched.parquet"
         stats = process_trip_file(
             input_path,
             output_path,
             graph_proj,
+            network_service,
             sampler,
             zone_geoms,
             set(valid_zone_ids),
@@ -453,19 +751,33 @@ def main() -> None:
         totals.append(stats)
 
     total_files = len(files)
-    total_before = sum(item[0] for item in totals)
-    total_after_zone = sum(item[1] for item in totals)
-    total_written = sum(item[2] for item in totals)
-    total_dropped = sum(item[3] for item in totals)
+    total_before = sum(item.total_before for item in totals)
+    total_candidates = sum(item.candidate_count for item in totals)
+    total_pickup_missing = sum(item.pickup_missing for item in totals)
+    total_dropoff_missing = sum(item.dropoff_missing for item in totals)
+    total_datetime_missing = sum(item.datetime_missing for item in totals)
+    total_after_zone = sum(item.after_zone for item in totals)
+    total_removed_after_filter = sum(item.removed_after_filter for item in totals)
+    total_written = sum(item.written for item in totals)
+    total_dropped = sum(item.dropped_snapping for item in totals)
+    total_path_resample_success = sum(item.path_resample_success for item in totals)
+    total_path_resample_fail = sum(item.path_resample_fail for item in totals)
 
     summary = format_log_block(
         "\n".join(
             [
                 "Batch rider enrichment complete:",
                 f"Processed files: {total_files}",
-                f"Trips before zone filter: {total_before}",
-                f"Trips after zone filter: {total_after_zone}",
+                f"Trips total: {total_before}",
+                f"Trips with Manhattan zone: {total_candidates}",
+                f"Pickup missing among candidates: {total_pickup_missing}",
+                f"Dropoff missing among candidates: {total_dropoff_missing}",
+                f"Datetime missing among candidates: {total_datetime_missing}",
+                f"Trips after strict zone filter: {total_after_zone}",
+                f"Removed after zone filter: {total_removed_after_filter}",
                 f"Trips dropped during snapping: {total_dropped}",
+                f"Path resample success: {total_path_resample_success}",
+                f"Path resample failures: {total_path_resample_fail}",
                 f"Trips written: {total_written}",
             ]
         )

@@ -3,7 +3,7 @@
 import itertools
 from typing import cast
 
-from config import DELTA, OMEGA, get_logger
+from config import BATCH_DURATION, DELTA, OMEGA, get_logger
 from src.components.batch_controller import BatchController
 from src.components.network_service import NetworkXService
 from src.interfaces import (
@@ -36,6 +36,11 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
         requests_to_add: set[Request],
         find_best_route: bool = False,  # <-- ADDED PARAM
     ) -> FeasibilityResult:
+
+        if not requests_to_add:
+            raise ValueError("RoutePlanner requires at least one request to evaluate")
+
+        self._validate_batch_window(vehicle, requests_to_add)
 
         passengers_onboard = vehicle.passengers_onboard
 
@@ -75,10 +80,10 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
         # 1. Lower-Bound Check
         path_1_to_2 = self._network.get_shortest_path(r1.origin_node, r2.origin_node)
         path_2_to_1 = self._network.get_shortest_path(r2.origin_node, r1.origin_node)
-        tt_1_to_2 = path_1_to_2.travel_time
+        tt_1_to_2 = path_1_to_2.travel_time if path_1_to_2 else float("inf")
         arrival_at_r2 = r1.request_time + tt_1_to_2
         if arrival_at_r2 - r2.request_time > OMEGA:
-            tt_2_to_1 = path_2_to_1.travel_time
+            tt_2_to_1 = path_2_to_1.travel_time if path_2_to_1 else float("inf")
             arrival_at_r1 = r2.request_time + tt_2_to_1
             if arrival_at_r1 - r1.request_time > OMEGA:
                 return Infeasible(reason="Fails R-R lower-bound check")
@@ -130,6 +135,16 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
                     return feasible_route  # Early exit for RV graph
 
                 if feasible_route.cost < min_cost:
+                    if feasible_route.cost < 0:
+                        # NOTE: remove after validating the system end-to-end
+                        logger.error(
+                            "Negative cost in feasible route: %.2f", feasible_route.cost
+                        )
+                        # look at the vehicle and requests to debug
+                        logger.error("Vehicle: %s", vehicle)
+                        logger.error("Requests: %s", requests)
+                        logger.error("Feasible Route: %s", feasible_route)
+                        raise ValueError("Negative cost encountered in feasible route")
                     min_cost = feasible_route.cost
                     best_route = feasible_route.route
         # yes
@@ -187,10 +202,11 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
             )
             travel_time_cache = self._build_travel_time_cache(nodes_to_cache)
         else:
+            network_path = self._network.get_shortest_path(
+                availability.available_at_node, p_new.node
+            )
             travel_time_cache[(availability.available_at_node, p_new.node)] = (
-                self._network.get_shortest_path(
-                    availability.available_at_node, p_new.node
-                ).travel_time
+                network_path.travel_time if network_path else float("inf")
             )
 
         all_requests_map = {
@@ -252,6 +268,20 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
             else Infeasible(reason="No R-V route satisfied constraints")
         )
 
+    def _validate_batch_window(
+        self, vehicle: VehicleAvailability, requests: set[Request]
+    ) -> None:
+        times = [req.request_time for req in requests]
+        earliest = min(times)
+        latest = max(times)
+        if latest - earliest > BATCH_DURATION:
+            raise ValueError("RoutePlanner received requests outside the batch window")
+
+        if vehicle.available_from_time < earliest:
+            raise ValueError(
+                "Vehicle availability precedes batch time; snapshot is stale"
+            )
+
     def _simulate_route(
         self,
         start_node: int,
@@ -290,6 +320,10 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
                 else:
                     # Do the "expensive" network call on-demand
                     path = self._network.get_shortest_path(current_node, stop.node)
+                    if path is None:
+                        return Infeasible(
+                            reason=f"No path between nodes {current_node} and {stop.node}"
+                        )
                     travel_time = path.travel_time
 
                 # Store it in the cache in case this route uses
@@ -367,7 +401,7 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
                     cache[(u, v)] = 0.0
                 else:
                     path = self._network.get_shortest_path(u, v)
-                    cache[(u, v)] = path.travel_time
+                    cache[(u, v)] = path.travel_time if path else float("inf")
         return cache
 
     @staticmethod
@@ -389,7 +423,7 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
 
 
 if __name__ == "__main__":
-    from itertools import islice
+    from itertools import combinations, islice
 
     from src.components.simulation_data_provider import SimulationDataProvider
 
@@ -398,36 +432,139 @@ if __name__ == "__main__":
     planner = RoutePlanner(network_service=network_service)
     batch_controller = BatchController(network=network_service)
 
-    try:
-        demo_vehicle = VehicleAvailability.from_vehicle(
-            next(provider.iter_vehicles()), 10
-        )
-    except StopIteration as exc:  # pragma: no cover - demo guard
-        raise SystemExit("No vehicles available from provider") from exc
-
-    demo_requests = batch_controller.convert_meta_requests(
-        list(islice(provider.iter_requests(), 2))
-    )
-    if len(demo_requests) < 2:  # pragma: no cover - demo guard
-        raise SystemExit("Need at least two rider requests for the demo")
-
-    feasibility = planner.check_feasibility(demo_vehicle, set(demo_requests))
-
-    if feasibility.is_feasible and isinstance(feasibility, FeasibleRoute):
-        logger.info(
-            "Found feasible shared route with total cost %.2f", feasibility.cost
-        )
-        for idx, stop in enumerate(feasibility.route.stops, start=1):
-            action = "Pickup" if stop.is_pickup else "Dropoff"
-            logger.info(
-                "%d. %s request %s at node %d",
-                idx,
-                action,
-                stop.request_id,
-                stop.node,
+    def _log_result(label: str, result: FeasibilityResult) -> None:
+        if result.is_feasible and isinstance(result, FeasibleRoute):
+            logger.info("[%s] cost %.2f", label, result.cost)
+            for idx, stop in enumerate(result.route.stops, start=1):
+                action = "Pickup" if stop.is_pickup else "Dropoff"
+                logger.info(
+                    "[%s] %d. %s request %s at node %d",
+                    label,
+                    idx,
+                    action,
+                    stop.request_id,
+                    stop.node,
+                )
+        else:
+            logger.warning(
+                "[%s] infeasible: %s",
+                label,
+                getattr(result, "reason", "unknown"),
             )
-    else:
+
+    meta_requests = list(islice(provider.iter_requests(), 100))
+    if len(meta_requests) < 2:
+        raise SystemExit("Need at least two rider requests for demos")
+
+    request_pool: list[Request] = list(
+        batch_controller.convert_meta_requests(meta_requests)
+    )
+
+    request_pool.sort(key=lambda r: r.id)
+    if len(request_pool) < 2:
+        raise SystemExit("Need at least two convertible requests for demos")
+
+    vehicles = list(provider.iter_vehicles())
+    if not vehicles:
+        raise SystemExit("No vehicles available from provider")
+    base_vehicle = vehicles[0]
+
+    def _vehicle_snapshot(start_time: float) -> VehicleAvailability:
+        return VehicleAvailability.from_vehicle(base_vehicle, start_time)
+
+    def _windowed_requests(pool: list[Request]):
+        for seed in pool:
+            start = seed.request_time
+            window = [
+                req for req in pool if 0 <= req.request_time - start <= BATCH_DURATION
+            ]
+            if window:
+                yield start, window
+
+    def _run_rr_demo() -> None:
+        feasible_found = False
+        infeasible_found = False
+
+        for start_time, window in _windowed_requests(request_pool):
+            if len(window) < 2:
+                continue
+            vehicle = _vehicle_snapshot(start_time)
+            for r1, r2 in combinations(window, 2):
+                try:
+                    result = planner.check_feasibility(
+                        vehicle,
+                        {r1, r2},
+                        find_best_route=True,
+                    )
+                except ValueError as exc:
+                    logger.warning("[RR] skipped pair %s/%s: %s", r1.id, r2.id, exc)
+                    continue
+                _log_result("RR", result)
+                if result.is_feasible:
+                    feasible_found = True
+                else:
+                    infeasible_found = True
+                if feasible_found and infeasible_found:
+                    return
+
         logger.warning(
-            "Planner deemed the sampled pair infeasible: %s",
-            getattr(feasibility, "reason", "unknown"),
+            "RR demo: unable to find both feasible and infeasible combinations"
         )
+
+    def _run_rv_demo() -> None:
+        feasible_found = False
+        infeasible_found = False
+
+        for existing_req in request_pool:
+            passenger = Passenger(
+                original_request=existing_req,
+                pickup_time=existing_req.request_time,
+            )
+            for start_time, window in _windowed_requests(request_pool):
+                if not window:
+                    continue
+                availability = VehicleAvailability(
+                    vehicle_id="demo-rv",
+                    capacity=2,
+                    available_at_node=existing_req.origin_node,
+                    available_from_time=start_time,
+                    passengers_onboard=frozenset({passenger}),
+                    remaining_stops_to_serve=(
+                        Stop(
+                            node=existing_req.destination_node,
+                            is_pickup=False,
+                            request_id=existing_req.id,
+                        ),
+                    ),
+                )
+                for new_req in window:
+                    if new_req.id == existing_req.id:
+                        continue
+                    try:
+                        result = planner.check_feasibility(
+                            availability,
+                            {new_req},
+                            find_best_route=True,
+                        )
+                    except ValueError as exc:
+                        logger.warning(
+                            "[RV] skipped pair %s/%s: %s",
+                            existing_req.id,
+                            new_req.id,
+                            exc,
+                        )
+                        continue
+                    _log_result("RV", result)
+                    if result.is_feasible:
+                        feasible_found = True
+                    else:
+                        infeasible_found = True
+                    if feasible_found and infeasible_found:
+                        return
+
+        logger.warning(
+            "RV demo: unable to find both feasible and infeasible combinations"
+        )
+
+    _run_rr_demo()
+    _run_rv_demo()
