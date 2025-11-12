@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Iterator
 
@@ -9,7 +10,8 @@ import networkx as nx
 import polars as pl
 
 from config import NUMBER_OF_VEHICLES, get_logger, RIDER_DIR, RIDER_PATTERN
-from src.interfaces.data_models import Passenger, Request, Vehicle
+from src.interfaces.data_models import MetaRequest, Passenger, Request, Vehicle
+from src.utils.sim_clock import SimulationClock
 from src.state_representation.manhatten_fast import load_graph
 from src.state_representation.vehicle_sampling import sample_vehicle_positions
 
@@ -40,6 +42,7 @@ class SimulationDataProvider:
         self._rider_pattern = rider_pattern
         self._vehicle_count = vehicle_count
         self._request_counter = 0
+        self._clock: SimulationClock | None = None
 
     # ------------------------------------------------------------------
     # Graph access
@@ -56,10 +59,16 @@ class SimulationDataProvider:
     def iter_request_files(self) -> Iterable[Path]:
         return sorted(self._rider_dir.glob(self._rider_pattern))
 
-    def iter_requests(self) -> Iterator[Request]:
+    def iter_requests(self) -> Iterator[MetaRequest]:
         for path in self.iter_request_files():
             logger.info("Loading rider file %s", path.name)
             df = pl.read_parquet(path, columns=RIDER_COLUMNS)
+            # set up clock on first file and set dates for date column
+            if self._clock is None:
+                first_date_value = self._ensure_datetime(df["pickup_datetime"][0])
+                self._clock = SimulationClock(start_time=first_date_value)
+
+            df = df.with_columns(pl.col("pickup_datetime").cast(pl.Datetime))
             series = df["pickup_datetime"]
             if not series.is_sorted():
                 raise AssertionError(
@@ -68,23 +77,26 @@ class SimulationDataProvider:
             for row in df.to_dicts():
                 yield self._request_from_row(row)
 
-    def _request_from_row(self, row: dict) -> Request:
-        pickup_dt = row["pickup_datetime"]
+    def _request_from_row(self, row: dict) -> MetaRequest:
+        pickup_dt = self._ensure_datetime(row["pickup_datetime"])
+        timestamp = self._clock.to_relative_seconds(pickup_dt)  # type: ignore
+        month_day = "0000"
         if hasattr(pickup_dt, "strftime"):
             month_day = pickup_dt.strftime("%m%d")
-            timestamp = float(pickup_dt.timestamp())
-        else:
-            month_day = "0000"
-            timestamp = float(pickup_dt)
         self._request_counter += 1
         request_id = f"{month_day}_{self._request_counter}"
-        return Request(
+        return MetaRequest(
             id=request_id,
             origin_node=int(row["orig_node"]),
             destination_node=int(row["dest_node"]),
             request_time=float(timestamp),
-            earliest_dropoff_time=float(timestamp),
         )
+
+    @staticmethod
+    def _ensure_datetime(value: object) -> datetime:
+        if isinstance(value, datetime):
+            return value
+        raise TypeError("pickup_datetime must be a datetime value")
 
     # ------------------------------------------------------------------
     # Vehicles

@@ -1,76 +1,73 @@
 from abc import ABC, abstractmethod
-from typing import Iterable, Tuple, Set, Optional
+from collections.abc import Iterable
+from typing import Tuple, Set, Optional
 
 from src.interfaces.data_models import (
-    Request,
-    MetaRequest,
-    VehicleAvailability,
     AssignmentResult,
+    MetaRequest,
+    Request,
+    VehicleAvailability,
 )
 from src.interfaces.services import INetworkService
 
 
-# ---------- Pure fleet projector (no side effects) ----------
+class IBatchController(ABC):
+    """
+    Owns persistent fleet + promise state.
+    Provides:
+      1) A pure projection step -> projected vehicles + promised requests.
+      2) A convenience 'prepare_batch' that also converts MetaRequest -> Request.
+      3) A commit step to apply the ILP result and update promises.
+    """
 
+    # ---- Wiring ----
+    def __init__(self, network: INetworkService) -> None:
+        self._network = network
+        super().__init__()
 
-class IFleetProjector(ABC):
+    # ---- Core: projection-only (your requested split) ----
     @abstractmethod
     def project_fleet_and_promises(
         self,
         t_now: float,
-        vehicles_state: Iterable[VehicleAvailability],
     ) -> Tuple[Set[VehicleAvailability], Set[Request]]:
         """
-        Input: current fleet state (may include en-route info and pending assignments).
-        Output:
-          - projected_vehicles: per-vehicle (available_at_node, available_from_time),
-            remaining_stops contain ONLY drop-offs for already-onboard riders.
-          - promised_requests: unpicked riders from previous plans rehydrated as
-            immutable Requests with promised_pickup_time set.
-        Must not mutate input state.
+        Project current vehicles to (available_at_node, available_from_time),
+        trim served stops, and return:
+          - projected VehicleAvailability (drop-offs only for onboard riders)
+          - promised-but-unpicked requests rehydrated as immutable Requests
+            with promised_pickup_time set and earliest_dropoff_time precomputed.
         """
         ...
 
-
-# ---------- Request factory (keeps Request frozen) ----------
-
-
-class IRequestFactory(ABC):
+    # ---- Core: Meta-Request -> Request Yielder ----
     @abstractmethod
-    def make_request(
+    def convert_meta_requests(
         self,
-        meta: MetaRequest,
-        net: INetworkService,
-        promised_pickup_time: Optional[float] = None,
-    ) -> Request:
+        new_meta: Iterable[MetaRequest],
+    ) -> Set[Request]:
         """
-        Computes earliest_dropoff_time = meta.request_time + τ(meta.o, meta.d)
-        and returns a frozen Request, optionally with promised_pickup_time.
+        Converts incoming MetaRequest ->
+        Request (computing earliest_dropoff_time = request_time + τ(o,d)),
+        merges with promised requests, and returns the full set of Requests.
         """
         ...
 
-
-# ---------- Batch controller (orchestrates per-batch flow) ----------
-
-
-class IBatchController(ABC):
+    # ---- Convenience: full batch assembly ----
     @abstractmethod
     def prepare_batch(
         self,
         t_now: float,
         new_meta: Iterable[MetaRequest],
-        vehicles_state: Iterable[VehicleAvailability],
     ) -> Tuple[Set[Request], Set[VehicleAvailability]]:
         """
-        - Uses IFleetProjector.project_fleet_and_promises(...) to get:
-            projected_vehicles, promised_requests
-        - Converts new_meta -> Requests via IRequestFactory (computing t* once)
-        - Returns:
-            requests = promised_requests ∪ new_requests
-            vehicles = projected_vehicles
+        Calls project_fleet_and_promises(t_now), then converts incoming MetaRequest ->
+        Request (computing earliest_dropoff_time = request_time + τ(o,d)),
+        merges with promised requests, and returns the batch pools.
         """
         ...
 
+    # ---- Apply solver result ----
     @abstractmethod
     def commit_assignment(
         self,
@@ -78,16 +75,14 @@ class IBatchController(ABC):
         result: AssignmentResult,
     ) -> None:
         """
-        Applies the chosen plan:
-          - set vehicles' current_route + route_start_time = t_now
-          - mark picked riders onboard; remove completed
-          - update promise registry:
-              promised_pickup_time[id] = min(old, scheduled_pickup_time)
-          (Promised-but-unpicked stay out of vehicles until actually picked)
+        - Set vehicles' current_route and route_start_time = t_now.
+        - Move picked riders to onboard; remove completed.
+        - For assigned-but-unpicked requests, update persistent promise:
+            promised[id] = min(old_promise, scheduled_pickup_time).
         """
         ...
 
-    # Optional: tiny promise registry accessors (persistent across batches)
+    # ---- Minimal promise API (optional helpers) ----
     @abstractmethod
     def get_promised_pickup_time(self, request_id: str) -> Optional[float]: ...
 

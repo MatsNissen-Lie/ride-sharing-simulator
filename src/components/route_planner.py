@@ -1,9 +1,10 @@
 """Minimal single-vehicle route planner used during prototyping."""
 
-from collections.abc import Iterable
 import itertools
+from typing import cast
 
 from config import DELTA, OMEGA, get_logger
+from src.components.batch_controller import BatchController
 from src.components.network_service import NetworkXService
 from src.interfaces import (
     FeasibilityResult,
@@ -33,6 +34,7 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
         self,
         vehicle: VehicleAvailability,
         requests_to_add: set[Request],
+        find_best_route: bool = False,  # <-- ADDED PARAM
     ) -> FeasibilityResult:
 
         passengers_onboard = vehicle.passengers_onboard
@@ -43,6 +45,7 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
             return self._handle_rr_check(
                 vehicle,
                 requests_to_add,
+                find_best_route,
             )
 
         # --- CASE 2: R-V Check ---
@@ -51,19 +54,36 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
             return self._handle_rv_check(
                 vehicle,
                 list(requests_to_add)[0],
+                find_best_route,
             )
 
         return Infeasible(reason="Planner only supports R-R and R-V checks")
 
     # --- R-R Handler ---
     def _handle_rr_check(
-        self, vehicle: VehicleAvailability, requests: set[Request]
+        self,
+        vehicle: VehicleAvailability,
+        requests: set[Request],
+        find_best_route: bool,
     ) -> FeasibilityResult:
 
         if vehicle.capacity < 2:
             return Infeasible(reason="Vehicle capacity too low for sharing")
 
         r1, r2 = tuple(requests)
+
+        # 1. Lower-Bound Check
+        path_1_to_2 = self._network.get_shortest_path(r1.origin_node, r2.origin_node)
+        path_2_to_1 = self._network.get_shortest_path(r2.origin_node, r1.origin_node)
+        tt_1_to_2 = path_1_to_2.travel_time
+        arrival_at_r2 = r1.request_time + tt_1_to_2
+        if arrival_at_r2 - r2.request_time > OMEGA:
+            tt_2_to_1 = path_2_to_1.travel_time
+            arrival_at_r1 = r2.request_time + tt_2_to_1
+            if arrival_at_r1 - r1.request_time > OMEGA:
+                return Infeasible(reason="Fails R-R lower-bound check")
+        # END Lower-Bound Check
+
         p1 = Stop(node=r1.origin_node, is_pickup=True, request_id=r1.id)
         d1 = Stop(node=r1.destination_node, is_pickup=False, request_id=r1.id)
         p2 = Stop(node=r2.origin_node, is_pickup=True, request_id=r2.id)
@@ -78,8 +98,11 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
             (p2, d2, p1, d1),
         ]
 
-        nodes_to_cache = {vehicle.available_at_node, p1.node, d1.node, p2.node, d2.node}
-        travel_time_cache = self._build_travel_time_cache(nodes_to_cache)
+        # 2. Build Travel Time Cache
+        travel_time_cache = {}  # Start with an empty cache
+        if find_best_route:
+            nodes_to_cache = {p1.node, d1.node, p2.node, d2.node}
+            travel_time_cache = self._build_travel_time_cache(nodes_to_cache)
 
         # This is a general request map for the simulation
         requests_map = {r.id: r for r in requests}
@@ -103,6 +126,9 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
 
             if sim_result.is_feasible and isinstance(sim_result, FeasibleRoute):
                 feasible_route = sim_result
+                if not find_best_route:
+                    return feasible_route  # Early exit for RV graph
+
                 if feasible_route.cost < min_cost:
                     min_cost = feasible_route.cost
                     best_route = feasible_route.route
@@ -115,13 +141,23 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
 
     # --- R-V Handler ---
     def _handle_rv_check(
-        self, vehicle: VehicleAvailability, request_to_add: Request
+        self,
+        availability: VehicleAvailability,
+        request_to_add: Request,
+        find_best_route: bool,  # <-- NEW PARAM
     ) -> FeasibilityResult:
 
-        passengers_onboard = vehicle.passengers_onboard
+        passengers_onboard = availability.passengers_onboard
+        m = len(passengers_onboard)
 
-        # 1. Define all stops that must be sequenced
-        # New stops to insert
+        # YOUR CHECK: Throw error if m > 4
+        if m > 4:
+            # We only implement exhaustive search, which is O(m!)
+            raise NotImplementedError(
+                f"RoutePlanner exhaustive search does not support m > 4 (got {m})"
+            )
+
+        # 1. Define all stops
         p_new = Stop(
             node=request_to_add.origin_node,
             is_pickup=True,
@@ -133,81 +169,87 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
             request_id=request_to_add.id,
         )
 
-        # CRITICAL ASSUMPTION: all existing passengers are already picked up.
-        # Acctually we could just use vehicle stops and assert that all are dropoffs.
-        # The controller should ensure this, before calling the route planner.
-        existing_stops: list[Stop] = list(vehicle.remaining_stops_to_serve)
+        existing_stops: list[Stop] = list(availability.remaining_stops_to_serve)
 
+        # YOUR CHECK: Assert no existing pickups
         if any(stop.is_pickup for stop in existing_stops):
-            raise ValueError(  # TODO remove this for speed after testing.
-                "Vehicle has existing pickup stops; RoutePlanner assumes all onboard passengers are already picked up."
+            # This logic assumes the controller correctly populates the snapshot
+            # with only *future* stops. This check is a good assertion.
+            raise ValueError("VehicleAvailability snapshot has existing pickup stops.")
+
+        # 2. Build Cache & Request Map
+        travel_time_cache = {}
+        if find_best_route:
+            # Pre-populate ONLY if we're finding the best route (for RTV graph)
+            nodes_to_cache = {s.node for s in existing_stops}
+            nodes_to_cache.update(
+                {p_new.node, d_new.node, availability.available_at_node}
+            )
+            travel_time_cache = self._build_travel_time_cache(nodes_to_cache)
+        else:
+            travel_time_cache[(availability.available_at_node, p_new.node)] = (
+                self._network.get_shortest_path(
+                    availability.available_at_node, p_new.node
+                ).travel_time
             )
 
-        stops_to_sequence = existing_stops + [
-            p_new,
-            d_new,
-        ]  # This is just for the cache
-
-        # 2. Build the travel time cache # TODO: make cache more transparent
-        nodes_to_cache = {s.node for s in stops_to_sequence}
-        nodes_to_cache.add(vehicle.available_at_node)
-        travel_time_cache = self._build_travel_time_cache(nodes_to_cache)
-
-        # 3. Build a map of all requests involved (new and old)
         all_requests_map = {
             p.original_request.id: p.original_request for p in passengers_onboard
         }
         all_requests_map[request_to_add.id] = request_to_add
 
-        # 4. Iterate all valid INSERTIONS (not permutations)
+        # 3. YOUR CHECK: Lower-bound pickup time
+        LB_pickup_time = (
+            availability.available_from_time
+            + travel_time_cache[(availability.available_at_node, p_new.node)]
+        )
+        if LB_pickup_time - request_to_add.request_time > OMEGA:
+            return Infeasible(reason="Fails lower-bound wait time")
+
+        # 4. Iterate all valid PERMUTATIONS of existing stops
+        #    and all valid INSERTIONS of new stops
         best_route = None
         min_cost = float("inf")
 
-        # Get the fixed, ordered list of existing stops
-        base_route: list[Stop] = list(vehicle.remaining_stops_to_serve)
-        n = len(base_route)
+        # YOUR LOGIC: Outer loop permutes existing stops (O(m!))
+        for base_route_tuple in itertools.permutations(existing_stops):
 
-        LB_pickup_time = (
-            vehicle.available_from_time
-            + travel_time_cache[(vehicle.available_at_node, p_new.node)]
-        )
-        if LB_pickup_time - request_to_add.request_time > OMEGA:
-            return Infeasible(reason="Too long to reach new pickup")
+            base_route = list(base_route_tuple)
+            n = len(base_route)  # n == m
 
-        # TODO: it is not given that the old stops should be in the same order.
-        # Find all possible insertion indices for p_new
-        for i in range(n + 1):
-            # Create a new route with p_new inserted at index i
-            route_with_p = base_route[:i] + [p_new] + base_route[i:]
+            # Inner loops do O(n^2) insertions
+            for i in range(n + 1):
+                route_with_p = base_route[:i] + [p_new] + base_route[i:]
 
-            # Find all possible insertion indices for d_new,
-            # (it must come at or after p_new)
-            for j in range(i + 1, len(route_with_p) + 1):
+                for j in range(i + 1, len(route_with_p) + 1):
+                    route_stops = route_with_p[:j] + [d_new] + route_with_p[j:]
 
-                # Create the final route with d_new inserted at index j
-                route_stops = route_with_p[:j] + [d_new] + route_with_p[j:]
+                    # 5. Simulate this route
+                    sim_result = self._simulate_route(
+                        start_node=availability.available_at_node,
+                        start_time=availability.available_from_time,
+                        passengers_onboard=passengers_onboard,
+                        all_requests_map=all_requests_map,
+                        stops_to_visit=route_stops,
+                        capacity=availability.capacity,
+                        travel_time_cache=travel_time_cache,
+                    )
 
-                # 5. Simulate this permutation (this part is the same)
-                sim_result = self._simulate_route(
-                    start_node=vehicle.available_at_node,
-                    start_time=vehicle.available_from_time,
-                    passengers_onboard=frozenset(passengers_onboard),
-                    all_requests_map=all_requests_map,
-                    stops_to_visit=route_stops,
-                    capacity=vehicle.capacity,
-                    travel_time_cache=travel_time_cache,
-                )
+                    if sim_result.is_feasible:
+                        # YOUR PARAM: Handle early exit
+                        if not find_best_route:
+                            return sim_result  # Found one, we're done (for R-V graph)
 
-                if sim_result.is_feasible and isinstance(sim_result, FeasibleRoute):
-                    feasible_route = sim_result
-                    if feasible_route.cost < min_cost:
-                        min_cost = feasible_route.cost
-                        best_route = feasible_route.route
+                        # We are finding the best (for RTV graph)
+                        feasible_route = cast(FeasibleRoute, sim_result)
+                        if feasible_route.cost < min_cost:
+                            min_cost = feasible_route.cost
+                            best_route = feasible_route.route
 
         return (
             FeasibleRoute(route=best_route, cost=min_cost)
             if best_route
-            else Infeasible(reason="No R-V route permutation satisfied constraints")
+            else Infeasible(reason="No R-V route satisfied constraints")
         )
 
     def _simulate_route(
@@ -239,11 +281,20 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
 
         for stop in stops_to_visit:
             # 1. Travel to the next stop
-            travel_time = travel_time_cache.get((current_node, stop.node))
+            travel_time_key = (current_node, stop.node)
+            travel_time = travel_time_cache.get(travel_time_key)
             if travel_time is None:
-                raise ValueError(
-                    f"Travel time not found in cache for nodes {current_node} -> {stop.node}"
-                )
+                # Cache miss: This is expected if find_best_route=False
+                if current_node == stop.node:
+                    travel_time = 0.0
+                else:
+                    # Do the "expensive" network call on-demand
+                    path = self._network.get_shortest_path(current_node, stop.node)
+                    travel_time = path.travel_time
+
+                # Store it in the cache in case this route uses
+                # the same edge again (unlikely, but good practice)
+                travel_time_cache[travel_time_key] = travel_time
 
             current_time += travel_time
             current_node = stop.node
@@ -343,6 +394,9 @@ if __name__ == "__main__":
     from src.components.simulation_data_provider import SimulationDataProvider
 
     provider = SimulationDataProvider()
+    network_service = NetworkXService(provider.graph)
+    planner = RoutePlanner(network_service=network_service)
+    batch_controller = BatchController(network=network_service)
 
     try:
         demo_vehicle = VehicleAvailability.from_vehicle(
@@ -351,11 +405,12 @@ if __name__ == "__main__":
     except StopIteration as exc:  # pragma: no cover - demo guard
         raise SystemExit("No vehicles available from provider") from exc
 
-    demo_requests = list(islice(provider.iter_requests(), 2))
+    demo_requests = batch_controller.convert_meta_requests(
+        list(islice(provider.iter_requests(), 2))
+    )
     if len(demo_requests) < 2:  # pragma: no cover - demo guard
         raise SystemExit("Need at least two rider requests for the demo")
 
-    planner = RoutePlanner(network_service=NetworkXService(provider.graph))
     feasibility = planner.check_feasibility(demo_vehicle, set(demo_requests))
 
     if feasibility.is_feasible and isinstance(feasibility, FeasibleRoute):

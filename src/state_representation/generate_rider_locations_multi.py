@@ -291,6 +291,8 @@ def process_trip_file(
     valid_zone_ids: set[int],
     graph_hull: BaseGeometry,
 ) -> Tuple[int, int, int, int]:
+    # TODO: Currently I am dropping 5/6 of all trips due to missing data. That will make the simulation un realistic.
+
     logger.info("Processing %s", input_path.name)
     trips = load_trips(input_path)
     total_before = trips.height
