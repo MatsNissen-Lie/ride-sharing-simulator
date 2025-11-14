@@ -41,6 +41,10 @@ INPUT_DIR = RIDER_DIR
 OUTPUT_DIR = RIDER_DIR
 FILE_PATTERN = "fhv_tripdata_2025-*.parquet"
 
+# new files to process:
+# fhvhv_tripdata_2025-01.parquet
+# yellow_tripdata_2025-01.parquet
+
 SAMPLE_BATCH_SIZE = 20_000
 PICKUP_SEED = 7
 DROPOFF_SEED = 17

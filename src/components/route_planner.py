@@ -165,7 +165,7 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
         passengers_onboard = availability.passengers_onboard
         m = len(passengers_onboard)
 
-        # YOUR CHECK: Throw error if m > 4
+        # Throw error if m > 4
         if m > 4:
             # We only implement exhaustive search, which is O(m!)
             raise NotImplementedError(
@@ -227,7 +227,7 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
         best_route = None
         min_cost = float("inf")
 
-        # YOUR LOGIC: Outer loop permutes existing stops (O(m!))
+        # Outer loop permutes existing stops (O(m!))
         for base_route_tuple in itertools.permutations(existing_stops):
 
             base_route = list(base_route_tuple)
