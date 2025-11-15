@@ -1,5 +1,6 @@
 """Batch enrich FHV trip parquet files with network snaps and coordinates."""
 
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Mapping, Optional, Tuple, cast
@@ -39,11 +40,30 @@ class TripStats:
 
 INPUT_DIR = RIDER_DIR
 OUTPUT_DIR = RIDER_DIR
-FILE_PATTERN = "fhv_tripdata_2025-*.parquet"
+FILE_PATTERNS = [
+    "fhv_tripdata_2025-*.parquet",
+    # "fhvhv_tripdata_2025-*.parquet",
+    # "yellow_tripdata_2025-*.parquet",
+]
 
-# new files to process:
-# fhvhv_tripdata_2025-01.parquet
-# yellow_tripdata_2025-01.parquet
+TMP_DIR = OUTPUT_DIR / "_tmp_enriched"
+
+MERGED_KEEP_COLUMNS = [
+    "pickup_datetime",
+    "dropoff_datetime",
+    "pickup_zone",
+    "dropoff_zone",
+    "orig_node",
+    "dest_node",
+    "pu_x",
+    "pu_y",
+    "do_x",
+    "do_y",
+    "pu_lon",
+    "pu_lat",
+    "do_lon",
+    "do_lat",
+]
 
 SAMPLE_BATCH_SIZE = 20_000
 PICKUP_SEED = 7
@@ -115,29 +135,66 @@ class ZoneSampler:
 
 def load_trips(path: Path) -> pl.DataFrame:
     logger.info("Loading rider trips from %s", path)
-    trips = pl.read_parquet(
-        path,
-        columns=[
-            "pickup_datetime",
-            "dropOff_datetime",
-            "PUlocationID",
-            "DOlocationID",
-        ],
-    )
-    trips = trips.rename(
-        {
-            "PUlocationID": "pickup_zone",
-            "DOlocationID": "dropoff_zone",
-            "dropOff_datetime": "dropoff_datetime",
-        }
-    )
+    df = pl.read_parquet(path)
+    cols = set(df.columns)
+
+    fhv_schema = {
+        "pickup_datetime",
+        "dropOff_datetime",
+        "PUlocationID",
+        "DOlocationID",
+    }
+    fhvhv_schema = {
+        "pickup_datetime",
+        "dropoff_datetime",
+        "PULocationID",
+        "DOLocationID",
+    }
+    yellow_schema = {
+        "tpep_pickup_datetime",
+        "tpep_dropoff_datetime",
+        "PULocationID",
+        "DOLocationID",
+    }
+
+    if fhv_schema <= cols:
+        trips = df.select(
+            [
+                pl.col("pickup_datetime"),
+                pl.col("dropOff_datetime").alias("dropoff_datetime"),
+                pl.col("PUlocationID").alias("pickup_zone"),
+                pl.col("DOlocationID").alias("dropoff_zone"),
+            ]
+        )
+    elif fhvhv_schema <= cols:
+        trips = df.select(
+            [
+                pl.col("pickup_datetime"),
+                pl.col("dropoff_datetime"),
+                pl.col("PULocationID").alias("pickup_zone"),
+                pl.col("DOLocationID").alias("dropoff_zone"),
+            ]
+        )
+    elif yellow_schema <= cols:
+        trips = df.select(
+            [
+                pl.col("tpep_pickup_datetime").alias("pickup_datetime"),
+                pl.col("tpep_dropoff_datetime").alias("dropoff_datetime"),
+                pl.col("PULocationID").alias("pickup_zone"),
+                pl.col("DOLocationID").alias("dropoff_zone"),
+            ]
+        )
+    else:
+        msg = f"Unrecognized trip schema for file {path}"
+        raise ValueError(msg)
+
     trips = trips.with_columns(
         pl.col("pickup_zone").cast(pl.Int32),
         pl.col("dropoff_zone").cast(pl.Int32),
         pl.col("pickup_datetime").cast(pl.Datetime(time_unit="us")),
         pl.col("dropoff_datetime").cast(pl.Datetime(time_unit="us")),
     )
-    logger.info("Trips loaded: %d records", trips.height)
+    logger.info("Trips loaded from %s: %d records", path.name, trips.height)
     return trips
 
 
@@ -529,25 +586,89 @@ def _attach_outputs(
     return out, invalid_count
 
 
+# --- helpers: monthly merge -----------------------------------------------------
+
+
+def merge_month_temp_files(
+    month_key: str,
+    temp_paths: list[Path],
+    output_path: Path,
+) -> int:
+    """Merge temp parquet files for a month, write final output, then delete temps."""
+    dfs: list[pl.DataFrame] = []
+    existing_paths: list[Path] = []
+    for path in temp_paths:
+        if not path.exists():
+            logger.warning("Temp file %s missing before merge", path)
+            continue
+        dfs.append(pl.read_parquet(path))
+        existing_paths.append(path)
+
+    if not dfs:
+        logger.info("No temp dataframes to merge for month %s", month_key)
+        return 0
+
+    common_cols = set(dfs[0].columns)
+    for df in dfs[1:]:
+        common_cols &= set(df.columns)
+
+    if MERGED_KEEP_COLUMNS:
+        common_cols &= set(MERGED_KEEP_COLUMNS)
+
+    if not common_cols:
+        files = ", ".join(path.name for path in existing_paths)
+        msg = f"No common columns to merge for month {month_key} (files: {files})"
+        raise ValueError(msg)
+
+    cols = sorted(common_cols)
+    merged = pl.concat([df.select(cols) for df in dfs], how="vertical")
+    if "pickup_datetime" in merged.columns:
+        merged = merged.sort("pickup_datetime")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    merged.write_parquet(output_path)
+    logger.info(
+        "Merged %d temp files for %s -> %s (%d rows, %d columns)",
+        len(dfs),
+        month_key,
+        output_path.name,
+        merged.height,
+        len(cols),
+    )
+
+    for path in existing_paths:
+        try:
+            path.unlink(missing_ok=True)
+        except FileNotFoundError:
+            pass
+    for parent in {path.parent for path in existing_paths}:
+        try:
+            parent.rmdir()
+        except OSError:
+            pass
+
+    return merged.height
+
+
 # --- orchestration: main function ------------------------------------------------
 
 
 def process_trip_file(
     input_path: Path,
-    output_path: Path,
     graph_proj: nx.MultiDiGraph,
     network_service: NetworkXService,
     sampler: ZoneSampler,
     zone_geoms: Mapping[int, BaseGeometry],
     valid_zone_ids: set[int],
     graph_hull: BaseGeometry,
-) -> TripStats:
+) -> tuple[pl.DataFrame, TripStats]:
     logger.info("Processing %s", input_path.name)
     trips = load_trips(input_path)
     total_before = trips.height
     if total_before == 0:
         logger.info("Skipping %s (no trips)", input_path.name)
-        return TripStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        empty_stats = TripStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        return pl.DataFrame(), empty_stats
 
     trips, pre_stats = _filter_candidates(trips, valid_zone_ids)
     logger.info(
@@ -563,7 +684,7 @@ def process_trip_file(
     after_zone = trips.height
     logger.info("Trips remaining after all filters: %d", after_zone)
     if after_zone == 0:
-        return TripStats(
+        stats = TripStats(
             total_before=total_before,
             candidate_count=pre_stats["candidate_count"],
             pickup_missing=pre_stats["pickup_missing"],
@@ -576,6 +697,7 @@ def process_trip_file(
             path_resample_success=0,
             path_resample_fail=0,
         )
+        return pl.DataFrame(), stats
 
     pickup_zones = trips["pickup_zone"].to_numpy()
     dropoff_zones = trips["dropoff_zone"].to_numpy()
@@ -621,15 +743,15 @@ def process_trip_file(
         pu_nodes[fail_mask] = -1
         do_nodes[fail_mask] = -1
 
-    # Attach outputs, drop invalids, write parquet
+    # Attach outputs, drop invalids
     trips, invalid_count = _attach_outputs(
         trips, pu_x, pu_y, do_x, do_y, pu_nodes, do_nodes, graph_proj
     )
 
     final_count = trips.height
-    output_path.parent.mkdir(parents=True, exist_ok=True)
     trips = trips.sort("pickup_datetime")
-    trips.drop("row_id").write_parquet(output_path)
+    if "row_id" in trips.columns:
+        trips = trips.drop("row_id")
 
     summary = format_log_block(
         "\n".join(
@@ -644,7 +766,7 @@ def process_trip_file(
                 f"  dropped during snapping: {invalid_count}",
                 f"  path resample success: {path_resample_success}",
                 f"  path resample failures: {path_resample_fail}",
-                f"  written: {final_count} → {output_path.name}",
+                f"  written (in-memory): {final_count}",
             ]
         )
     )
@@ -663,7 +785,7 @@ def process_trip_file(
     #         if length is None:
     #             raise ValueError("Invalid path after snapping!")
 
-    return TripStats(
+    stats = TripStats(
         total_before=total_before,
         candidate_count=pre_stats["candidate_count"],
         pickup_missing=pre_stats["pickup_missing"],
@@ -676,6 +798,7 @@ def process_trip_file(
         path_resample_success=path_resample_success,
         path_resample_fail=path_resample_fail,
     )
+    return trips, stats
 
 
 def main() -> None:
@@ -727,34 +850,75 @@ def main() -> None:
     if zones_without_edges:
         logger.info("Discarded %d zones without drivable edges", zones_without_edges)
 
-    files = sorted(
-        path
-        for path in INPUT_DIR.glob(FILE_PATTERN)
-        if path.is_file() and not path.name.endswith("_enriched.parquet")
-    )
-    if not files:
-        logger.warning("No input files matching %s in %s", FILE_PATTERN, INPUT_DIR)
+    all_files: list[Path] = []
+    for pattern in FILE_PATTERNS:
+        all_files.extend(
+            path
+            for path in INPUT_DIR.glob(pattern)
+            if path.is_file() and not path.name.endswith("_enriched.parquet")
+        )
+
+    if not all_files:
+        logger.warning(
+            "No input files matching any of %s in %s", FILE_PATTERNS, INPUT_DIR
+        )
         return
+
+    files_by_month: dict[str, list[Path]] = defaultdict(list)
+    for path in all_files:
+        stem = path.stem
+        parts = stem.split("_")
+        month_key = parts[-1] if len(parts) >= 2 else stem
+        files_by_month[month_key].append(path)
 
     network_service = NetworkXService(graph_proj)
     sampler = ZoneSampler(edges_gdf)
 
     totals: list[TripStats] = []
-    for input_path in files:
-        output_path = OUTPUT_DIR / f"{input_path.stem}_enriched.parquet"
-        stats = process_trip_file(
-            input_path,
-            output_path,
-            graph_proj,
-            network_service,
-            sampler,
-            zone_geoms,
-            set(valid_zone_ids),
-            graph_hull,
+    for month_key in sorted(files_by_month.keys()):
+        month_files = sorted(files_by_month[month_key])
+        logger.info(
+            "Processing month %s (%d files): %s",
+            month_key,
+            len(month_files),
+            ", ".join(path.name for path in month_files),
         )
-        totals.append(stats)
 
-    total_files = len(files)
+        month_tmp_dir = TMP_DIR / month_key
+        month_tmp_dir.mkdir(parents=True, exist_ok=True)
+        month_tmp_paths: list[Path] = []
+        for input_path in month_files:
+            df_trips, stats = process_trip_file(
+                input_path,
+                graph_proj,
+                network_service,
+                sampler,
+                zone_geoms,
+                set(valid_zone_ids),
+                graph_hull,
+            )
+            totals.append(stats)
+            if df_trips.height > 0:
+                tmp_path = month_tmp_dir / f"{input_path.stem}_tmp.parquet"
+                df_trips.write_parquet(tmp_path)
+                month_tmp_paths.append(tmp_path)
+
+        output_path = OUTPUT_DIR / f"trips_{month_key}_enriched.parquet"
+        merged_rows = merge_month_temp_files(month_key, month_tmp_paths, output_path)
+        if merged_rows == 0:
+            if output_path.exists():
+                output_path.unlink(missing_ok=True)
+            logger.info("Month %s yielded no merged trips; skipping write", month_key)
+            continue
+
+        logger.info(
+            "Wrote merged monthly parquet for %s -> %s (%d rows)",
+            month_key,
+            output_path.name,
+            merged_rows,
+        )
+
+    total_files = len(all_files)
     total_before = sum(item.total_before for item in totals)
     total_candidates = sum(item.candidate_count for item in totals)
     total_pickup_missing = sum(item.pickup_missing for item in totals)
@@ -771,7 +935,7 @@ def main() -> None:
         "\n".join(
             [
                 "Batch rider enrichment complete:",
-                f"Processed files: {total_files}",
+                f"Processed raw files: {total_files}",
                 f"Trips total: {total_before}",
                 f"Trips with Manhattan zone: {total_candidates}",
                 f"Pickup missing among candidates: {total_pickup_missing}",
