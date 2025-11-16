@@ -20,7 +20,7 @@ class NetworkXService(INetworkService):
         self.G = graph
         self._nodeset = set(graph.nodes)
 
-    # Potential improvements:
+    # TODO: Potential improvements:
     # add cache with duckDB
     # https://chatgpt.com/c/690f4825-01f4-832e-aefc-c6a34a6fdc40
 

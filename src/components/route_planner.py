@@ -474,12 +474,13 @@ if __name__ == "__main__":
 
     def _windowed_requests(pool: list[Request]):
         for seed in pool:
-            start = seed.request_time
+            seed_time = seed.request_time
             window = [
-                req for req in pool if 0 <= req.request_time - start <= BATCH_DURATION
+                req for req in pool if 0 <= req.request_time - seed_time <= BATCH_DURATION
             ]
             if window:
-                yield start, window
+                start_time = max(req.request_time for req in window)
+                yield start_time, window
 
     def _run_rr_demo() -> None:
         feasible_found = False
