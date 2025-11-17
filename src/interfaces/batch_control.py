@@ -1,11 +1,12 @@
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
-from typing import Tuple, Set, Optional
+from typing import Iterator, Tuple, Set, Optional
 
-from src.interfaces.data_models import (
+from src.interfaces import (
     AssignmentResult,
     MetaRequest,
     Request,
+    Vehicle,
     VehicleAvailability,
 )
 from src.interfaces.services import INetworkService
@@ -21,16 +22,30 @@ class IBatchController(ABC):
     """
 
     # ---- Wiring ----
-    def __init__(self, network: INetworkService) -> None:
+    def __init__(self, network: INetworkService, vehicles: set[Vehicle]) -> None:
         self._network = network
+        self._fleet: set[Vehicle] = vehicles
+        self._request_index: dict[str, Request] = {}
         super().__init__()
 
-    # ---- Core: projection-only (your requested split) ----
+    # ---- Core: Batch Yielder ----
     @abstractmethod
-    def project_fleet_and_promises(
+    def iter_batches(
+        self,
+        meta_stream: Iterable[MetaRequest],
+        batch_window: float,
+    ) -> Iterator[Tuple[float, Set[Request], Set[VehicleAvailability]]]:
+        """
+        Yields successive batches of (t_window_end, Requests, VehicleAvailability)
+        covering the incoming meta_stream in windows of size batch_window.
+        """
+        ...
+
+    @abstractmethod
+    def project_fleet_and_update_requests(
         self,
         t_now: float,
-    ) -> Tuple[Set[VehicleAvailability], Set[Request]]:
+    ) -> Set[VehicleAvailability]:
         """
         Project current vehicles to (available_at_node, available_from_time),
         trim served stops, and return:
@@ -81,10 +96,3 @@ class IBatchController(ABC):
             promised[id] = min(old_promise, scheduled_pickup_time).
         """
         ...
-
-    # ---- Minimal promise API (optional helpers) ----
-    @abstractmethod
-    def get_promised_pickup_time(self, request_id: str) -> Optional[float]: ...
-
-    @abstractmethod
-    def set_promised_pickup_time(self, request_id: str, t_pickup: float) -> None: ...

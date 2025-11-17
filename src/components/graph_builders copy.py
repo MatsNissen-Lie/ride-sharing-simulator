@@ -201,8 +201,8 @@ class RVGraphBuilder(IRVGraphBuilder):
                 try:
                     vehicle = self._make_virtual_vehicle(r1, r2, virtual_capacity)
                     result = self._route_planner.check_feasibility(
-                        vehicle,
                         {r1, r2},
+                        vehicle,
                     )
                 except Exception as exc:  # pragma: no cover - defensive
                     logger.warning(
@@ -232,8 +232,8 @@ class RVGraphBuilder(IRVGraphBuilder):
                     )
                 try:
                     result = self._route_planner.check_feasibility(
-                        vehicle,
                         {req},
+                        vehicle,
                     )
                 except Exception as exc:  # pragma: no cover - defensive
                     logger.warning(
@@ -335,7 +335,7 @@ if __name__ == "__main__":
     sim_time = max(req.request_time for req in request_pool)
 
     vehicle_snapshots: set[VehicleAvailability] = set()
-    for vehicle in islice(provider.iter_vehicles(), 10):
+    for vehicle in islice(provider.iter_vehicles(10), 10):
         try:
             snapshot = VehicleAvailability.from_vehicle(vehicle, sim_time)
         except NotImplementedError:

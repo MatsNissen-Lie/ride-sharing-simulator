@@ -169,6 +169,7 @@ def sample_vehicle_positions(
     lies on the street network.
     """
 
+    # TODO: make sure the vehicles are sampled from connected components only...
     if VEHICLE_SAMPLE_PATH.exists():
         return pl.read_parquet(VEHICLE_SAMPLE_PATH)
 

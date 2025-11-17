@@ -2,6 +2,7 @@
 
 from collections import defaultdict
 from dataclasses import dataclass
+from math import ceil
 from pathlib import Path
 from typing import Dict, Mapping, Optional, Tuple, cast
 
@@ -69,6 +70,7 @@ SAMPLE_BATCH_SIZE = 20_000
 PICKUP_SEED = 7
 DROPOFF_SEED = 17
 MAX_RESAMPLE_ATTEMPTS = 10
+MONTHLY_OUTPUT_PARTS = 5
 
 
 class ZoneSampler:
@@ -593,8 +595,8 @@ def merge_month_temp_files(
     month_key: str,
     temp_paths: list[Path],
     output_path: Path,
-) -> int:
-    """Merge temp parquet files for a month, write final output, then delete temps."""
+) -> tuple[int, list[Path]]:
+    """Merge temp parquet files for a month, write five chunked outputs, then delete temps."""
     dfs: list[pl.DataFrame] = []
     existing_paths: list[Path] = []
     for path in temp_paths:
@@ -606,7 +608,7 @@ def merge_month_temp_files(
 
     if not dfs:
         logger.info("No temp dataframes to merge for month %s", month_key)
-        return 0
+        return 0, []
 
     common_cols = set(dfs[0].columns)
     for df in dfs[1:]:
@@ -625,16 +627,44 @@ def merge_month_temp_files(
     if "pickup_datetime" in merged.columns:
         merged = merged.sort("pickup_datetime")
 
+    total_rows = merged.height
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    merged.write_parquet(output_path)
-    logger.info(
-        "Merged %d temp files for %s -> %s (%d rows, %d columns)",
-        len(dfs),
-        month_key,
-        output_path.name,
-        merged.height,
-        len(cols),
-    )
+
+    # Remove legacy single-file outputs and stale part files to avoid stale artifacts.
+    output_path.unlink(missing_ok=True)
+    stale_pattern = f"{output_path.stem}_part"
+    for stale in output_path.parent.glob(f"{stale_pattern}*{output_path.suffix}"):
+        try:
+            stale.unlink(missing_ok=True)
+        except FileNotFoundError:
+            continue
+
+    if total_rows == 0:
+        logger.info("Merged %d temp files for %s but no rows remain", len(dfs), month_key)
+        return 0, []
+
+    parts: list[Path] = []
+    chunk_size = max(1, ceil(total_rows / MONTHLY_OUTPUT_PARTS))
+    for part_idx in range(MONTHLY_OUTPUT_PARTS):
+        start = part_idx * chunk_size
+        if start >= total_rows:
+            break
+        stop = min(start + chunk_size, total_rows)
+        chunk = merged.slice(start, stop - start)
+        part_path = output_path.with_name(
+            f"{output_path.stem}_part{part_idx + 1}{output_path.suffix}"
+        )
+        chunk.write_parquet(part_path)
+        parts.append(part_path)
+        logger.info(
+            "Merged %d temp files for %s -> %s (%d rows, chunk %d/%d)",
+            len(dfs),
+            month_key,
+            part_path.name,
+            chunk.height,
+            part_idx + 1,
+            MONTHLY_OUTPUT_PARTS,
+        )
 
     for path in existing_paths:
         try:
@@ -647,7 +677,7 @@ def merge_month_temp_files(
         except OSError:
             pass
 
-    return merged.height
+    return total_rows, parts
 
 
 # --- orchestration: main function ------------------------------------------------
@@ -904,18 +934,19 @@ def main() -> None:
                 month_tmp_paths.append(tmp_path)
 
         output_path = OUTPUT_DIR / f"trips_{month_key}_enriched.parquet"
-        merged_rows = merge_month_temp_files(month_key, month_tmp_paths, output_path)
+        merged_rows, part_paths = merge_month_temp_files(
+            month_key, month_tmp_paths, output_path
+        )
         if merged_rows == 0:
-            if output_path.exists():
-                output_path.unlink(missing_ok=True)
             logger.info("Month %s yielded no merged trips; skipping write", month_key)
             continue
 
         logger.info(
-            "Wrote merged monthly parquet for %s -> %s (%d rows)",
+            "Wrote %d monthly parquet parts for %s (%d rows total): %s",
+            len(part_paths),
             month_key,
-            output_path.name,
             merged_rows,
+            ", ".join(path.name for path in part_paths),
         )
 
     total_files = len(all_files)

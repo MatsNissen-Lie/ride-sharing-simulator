@@ -60,13 +60,24 @@ class SimulationDataProvider:
         return sorted(self._rider_dir.glob(self._rider_pattern))
 
     def iter_requests(self) -> Iterator[MetaRequest]:
-        for path in self.iter_request_files():
+        last_timestamp = None
+        paths = list(self.iter_request_files())
+        for idx, path in enumerate(paths):
             logger.info("Loading rider file %s", path.name)
             df = pl.read_parquet(path, columns=RIDER_COLUMNS)
             # set up clock on first file and set dates for date column
             if self._clock is None:
                 first_date_value = self._ensure_datetime(df["pickup_datetime"][0])
                 self._clock = SimulationClock(start_time=first_date_value)
+                last_timestamp = self._ensure_datetime(df["pickup_datetime"][-1])
+
+            elif last_timestamp is not None:
+                first_date_value = self._ensure_datetime(df["pickup_datetime"][0])
+                if first_date_value < last_timestamp:
+                    raise AssertionError(
+                        f"Rider file {path.name} has pickup datetimes earlier than previous file {paths[idx-1].name}"
+                    )
+                last_timestamp = self._ensure_datetime(df["pickup_datetime"][-1])
 
             df = df.with_columns(pl.col("pickup_datetime").cast(pl.Datetime))
             series = df["pickup_datetime"]
@@ -102,9 +113,9 @@ class SimulationDataProvider:
     # Vehicles
     # ------------------------------------------------------------------
 
-    def iter_vehicles(self) -> Iterator[Vehicle]:
-        logger.info("Sampling %d vehicle positions from graph", self._vehicle_count)
-        df = sample_vehicle_positions(self._graph, self._vehicle_count, seed=42)
+    def iter_vehicles(self, vehicle_count: int) -> Iterator[Vehicle]:
+        logger.info("Sampling %d vehicle positions from graph", vehicle_count)
+        df = sample_vehicle_positions(self._graph, vehicle_count, seed=42)
         for row in df.to_dicts():
             yield self._vehicle_from_row(row)
 
@@ -121,6 +132,13 @@ class SimulationDataProvider:
             route_assignment_time=None,
         )
 
+    def get_simulation_clock(self) -> SimulationClock:
+        if self._clock is None:
+            raise RuntimeError(
+                "Simulation clock is not initialized yet before requests are loaded. Iterate requests first."
+            )
+        return self._clock
+
 
 __all__ = ["SimulationDataProvider"]
 
@@ -132,5 +150,5 @@ if __name__ == "__main__":
     requests = list(provider.iter_requests())[:5]
     print(f"Sample requests: {[req.id for req in requests]}")
 
-    vehicles = list(provider.iter_vehicles())[:5]
+    vehicles = list(provider.iter_vehicles(5))
     print(f"Sample vehicles: {[veh.id for veh in vehicles]}")

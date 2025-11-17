@@ -33,7 +33,6 @@ from src.interfaces import (
     VehicleAvailability,
     IRVGraphBuilder,
     FeasibleRoute,
-    Infeasible,
     Passenger,
     Request,
 )
@@ -138,11 +137,8 @@ class RVGraphBuilder(IRVGraphBuilder):
     def __init__(
         self,
         route_planner: ISingleVehicleRoutePlanner,
-        *,
-        max_virtual_capacity: int | None = None,
     ) -> None:
         super().__init__(route_planner)
-        self._max_virtual_capacity = max_virtual_capacity
 
     def build_graph(
         self,
@@ -183,6 +179,7 @@ class RVGraphBuilder(IRVGraphBuilder):
             for vehicle in vehicles:
                 if self._request_already_onboard(req, vehicle.passengers_onboard):
                     # This should not happen if request pool is correct
+                    # TODO REMOVE THIS AFTER TESTING FOR PERFORMANCE
                     raise ValueError(
                         f"Request {req.id} is already onboard vehicle {vehicle.vehicle_id}"
                     )
@@ -196,14 +193,6 @@ class RVGraphBuilder(IRVGraphBuilder):
                     graph.add_rv_edge(req.id, vehicle_id, feasible)
 
         return graph
-
-    def _resolve_virtual_capacity(self, vehicles: set[VehicleAvailability]) -> int:
-        if self._max_virtual_capacity is not None:
-            return max(2, self._max_virtual_capacity)
-        if not vehicles:
-            return 2  # Default to 2 if no vehicles are present
-        max_capacity = max(getattr(vehicle, "capacity", 2) for vehicle in vehicles)
-        return max(2, max_capacity)
 
     @staticmethod
     def _request_already_onboard(

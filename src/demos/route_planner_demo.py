@@ -303,7 +303,7 @@ def run_demo() -> None:
     provider = SimulationDataProvider()
     network_service = NetworkXService(provider.graph)
     planner = RoutePlanner(network_service=network_service)
-    batch_controller = BatchController(network=network_service)
+    batch_controller = BatchController(network=network_service, vehicles=set())
 
     meta_requests = list(islice(provider.iter_requests(), 100))
     if len(meta_requests) < 2:
@@ -317,7 +317,7 @@ def run_demo() -> None:
     if len(request_pool) < 2:
         raise SystemExit("Need at least two convertible requests for demos")
 
-    vehicles = list(provider.iter_vehicles())
+    vehicles = list(provider.iter_vehicles(100))
     if not vehicles:
         raise SystemExit("No vehicles available from provider")
     base_vehicle = vehicles[0]

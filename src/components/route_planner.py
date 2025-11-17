@@ -35,10 +35,8 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
     def check_feasibility(
         self,
         requests_to_add: set[Request],
-        vehicle: (
-            VehicleAvailability | None
-        ) = None,  # this is basically not needed for R-R
-        find_best_route: bool = False,  # <-- ADDED PARAM
+        vehicle: VehicleAvailability | None = None,  # this is not needed for R-R
+        find_best_route: bool = True,
     ) -> FeasibilityResult:
 
         if not requests_to_add:
@@ -290,9 +288,19 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
         m = len(passengers_onboard)
         k = len(requests_to_add)
 
-        if m + k > 4:
+        # General formula (why it works)
+        # * With (m) committed drop-offs whose **relative order is fixed**, and (k) new pairs, consider all permutations of the (m+2k) labeled items: ((m+2k)!).
+        # * Enforcing the fixed relative order among the (m) base drops “uses up” a factor of (m!) (since among all permutations, the (m) base items appear in all (m!) orders equally; we keep only one).
+        # * Enforcing (p_i \prec d_i) for each of the (k) pairs multiplies by ((1/2)^k).
+
+        # If you also **permute the base** (fully exhaustive), multiply back by (m!):
+        # [
+        # ;=; \frac{(m+2k)!}{2^k}.
+        # ]
+
+        if k > 3 or m + k > 4:
             raise NotImplementedError(
-                f"Exhaustive search only supported for m + k <= 4 (got m={m}, k={k})."
+                f"RoutePlanner exhaustive search only supports k <= 3 and m + k <= 4 (got k={k}, m={m})."
             )
 
         existing_stops: list[Stop] = list(availability.remaining_stops_to_serve)
@@ -456,6 +464,7 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
         }
         dropoff_times = {}
         total_travel_time = 0.0
+        stop_times = []
 
         for stop in stops_to_visit:
             # 1. Travel to the next stop
@@ -477,6 +486,8 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
                 # Store it in the cache in case this route uses
                 # the same edge again (unlikely, but good practice)
                 travel_time_cache[travel_time_key] = travel_time
+
+            stop_times.append(current_time)
 
             current_time += travel_time
             current_node = stop.node
@@ -532,7 +543,7 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
             total_cost += drop_time - req.earliest_dropoff_time
 
         final_route = Route(
-            stops=stops_to_visit,
+            stops=tuple(stops_to_visit),
             total_travel_time=total_travel_time,
             total_travel_distance=0,  # Not calculated
             total_delay_cost=total_cost,

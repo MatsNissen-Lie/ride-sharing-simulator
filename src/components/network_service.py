@@ -24,7 +24,7 @@ class NetworkXService(INetworkService):
     # add cache with duckDB
     # https://chatgpt.com/c/690f4825-01f4-832e-aefc-c6a34a6fdc40
 
-    @lru_cache(maxsize=200_000)  # tune based on memory; key is (o,d)
+    @lru_cache(maxsize=2_000_000)  # Est. 4GB on 36GB RAM; key is (o,d)
     def get_shortest_path(
         self, origin_node: int, destination_node: int
     ) -> NetworkPath | None:
@@ -44,9 +44,12 @@ class NetworkXService(INetworkService):
         total_time = 0.0
         total_dist = 0.0
         G = self.G  # local ref for speed
+        travel_times = []
         for u, v in zip(nodes, nodes[1:]):
             edge_attr = min(G[u][v].values(), key=lambda attrs: attrs["travel_time"])
-            total_time += edge_attr["travel_time"]
+
+            total_time += float(edge_attr["travel_time"])
+            travel_times.append(float(edge_attr["travel_time"]))
             # if dist is None:
             #     raise ValueError(
             #         f"Edge ({u},{v}) missing 'length' attribute for distance"
@@ -54,5 +57,8 @@ class NetworkXService(INetworkService):
             total_dist += float(edge_attr.get("length"))
 
         return NetworkPath(
-            nodes=nodes, travel_time=total_time, travel_distance=total_dist
+            nodes=tuple(nodes),
+            travel_times=tuple(travel_times),
+            travel_time=total_time,
+            travel_distance=total_dist,
         )

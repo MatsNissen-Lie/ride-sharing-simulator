@@ -161,13 +161,21 @@ class Stop:
     is_pickup: bool  # True for pickup, False for drop-off
     request_id: str  # Identifies which request this stop serves
 
+    # TODO perhaps the stops that have been calculated pickup time should be saved. However we also want to have stops that are not yet assigned.
+    # But a route could maybe contain the scheduled times for each stop?
+
 
 @dataclass(frozen=True)
 class Route:
     """An ordered sequence of stops for a single vehicle."""
 
+    # vehicle_id: str
+    # route_assignment_time: float
     # This sequence defines the vehicle's path.
-    stops: list[Stop]
+    # stop_times: tuple[float, ...]  # Scheduled arrival time at each stop
+    # lets keep it simple for now
+
+    stops: tuple[Stop, ...]
 
     # Pre-computed metrics for this specific route
     total_travel_time: float
@@ -182,7 +190,9 @@ class Route:
 class NetworkPath:
     """The result of a shortest-path query from the network service."""
 
-    nodes: list[int]
+    nodes: tuple[int, ...]
+    travel_times: tuple[float, ...]  # time between each consecutive node
+
     travel_time: float  # Travel time in seconds
     travel_distance: float  # Travel distance in meters
 
@@ -219,7 +229,7 @@ class Infeasible(FeasibilityResult):
 class AssignmentResult:
     """The output of the main assignment ILP."""
 
-    assignments: list[Tuple[Vehicle, set[Request], Route]]
+    assignments: list[Tuple[VehicleAvailability, set[Request], Route]]
     unassigned_requests: set[Request]
     total_cost: float
 
@@ -228,4 +238,4 @@ class AssignmentResult:
 class RebalancingResult:
     """The output of the rebalancing LP."""
 
-    assignments: list[Tuple[Vehicle, Request]]
+    assignments: list[Tuple[VehicleAvailability, Request]]

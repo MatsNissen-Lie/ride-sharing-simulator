@@ -1,7 +1,8 @@
 import time
 
-from config import BATCH_DURATION, get_logger
+from config import BATCH_DURATION, get_logger, NUMBER_OF_VEHICLES
 from src.components.batch_controller import BatchController
+from src.components.graph_builders import RVGraphBuilder
 from src.components.network_service import NetworkXService
 from src.components.route_planner import RoutePlanner
 from src.components.simulation_data_provider import SimulationDataProvider
@@ -36,6 +37,7 @@ def main(
     # --- 2. Initialize Core Components ---
     logger.info("Initializing components...")
     provider = SimulationDataProvider()
+
     network_service = NetworkXService(provider.graph)
     planner = RoutePlanner(network_service=network_service)
 
@@ -43,62 +45,24 @@ def main(
     # (Using the stubs, replace with your real ones)
 
     # State Management (Your new interface)
-    controller = controller or BatchController(network_service)
+    controller = controller or BatchController(
+        network_service, set(provider.iter_vehicles(NUMBER_OF_VEHICLES))
+    )
+    rv_builder = RVGraphBuilder(planner)
 
     if rv_builder is None or rtv_builder is None or assignment_solver is None:
         raise RuntimeError(
             "RV/RTV graph builders and assignment solver must be provided."
         )
 
-    # --- 4. Load & Sort Simulation Data ---
-    # For a real sim, you'd stream this, but for a loop
-    # demo, we load and sort all requests by time.
-    logger.info("Loading and sorting simulation data...")
-    all_requests = sorted(provider.iter_requests(), key=lambda r: r.request_time)
-    if not all_requests:
-        logger.warning("No requests found. Exiting.")
-        return
+    batch_count = 0
+    for batch in controller.iter_batches(provider.iter_requests(), BATCH_DURATION):
+        batch_count += 1
+        t_now, all_requests_in_pool, vehicle_avail_pool = batch
 
-    # --- 5. Run the Main Loop ---
-    t_now = all_requests[0].request_time
-    t_end = all_requests[-1].request_time
-
-    request_idx = 0  # To track which requests we've processed
-
-    logger.info("Simulation loop starting from t=%s to t=%s...", t_now, t_end)
-    while t_now <= t_end:
         start_loop_time = time.perf_counter()
-        logger.info("--- Batch starting at t=%.2f ---", t_now)
-
-        # 1. Collect new requests for this batch
-        t_batch_end = t_now + BATCH_DURATION
-        new_meta_requests: list[MetaRequest] = []
-        while (
-            request_idx < len(all_requests)
-            and all_requests[request_idx].request_time < t_batch_end
-        ):
-            new_meta_requests.append(all_requests[request_idx])
-            request_idx += 1
-
-        logger.info("Found %s new requests in this batch.", len(new_meta_requests))
-
-        # 2. Prepare Batch (Controller Step 1)
-        #    - Projects fleet state
-        #    - Converts new meta_requests
-        #    - Gathers all promised requests
-        all_requests_in_pool, vehicle_avail_pool = controller.prepare_batch(
-            t_now, new_meta_requests
-        )
-        logger.info(
-            "Controller prepared batch: %s total requests, %s available vehicles.",
-            len(all_requests_in_pool),
-            len(vehicle_avail_pool),
-        )
-
-        if not all_requests_in_pool:
-            logger.info("No active requests. Advancing time.")
-            t_now += BATCH_DURATION
-            continue
+        logger.info("--- Batch %d starting at t=%.2f ---", batch_count, t_now)
+        logger.info("Found %s new requests in this batch.", len(all_requests_in_pool))
 
         # 3. Build RV Graph (Algorithm Step 1)
         rv_graph = rv_builder.build_graph(all_requests_in_pool, vehicle_avail_pool)
