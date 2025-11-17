@@ -1,11 +1,13 @@
 """Minimal single-vehicle route planner used during prototyping."""
 
 import itertools
-from typing import cast
+from typing import Iterable, cast
 
 from config import BATCH_DURATION, DELTA, OMEGA, get_logger
 from src.components.batch_controller import BatchController
 from src.components.network_service import NetworkXService
+from src.components.utils import validate_route_stops
+
 from src.interfaces import (
     FeasibilityResult,
     FeasibleRoute,
@@ -32,48 +34,52 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
 
     def check_feasibility(
         self,
-        vehicle: VehicleAvailability,
         requests_to_add: set[Request],
+        vehicle: (
+            VehicleAvailability | None
+        ) = None,  # this is basically not needed for R-R
         find_best_route: bool = False,  # <-- ADDED PARAM
     ) -> FeasibilityResult:
 
         if not requests_to_add:
             raise ValueError("RoutePlanner requires at least one request to evaluate")
 
-        self._validate_batch_window(vehicle, requests_to_add)
-
-        passengers_onboard = vehicle.passengers_onboard
-
         # --- CASE 1: R-R Check ---
         # (Two new requests, empty vehicle)
-        if len(requests_to_add) == 2 and not passengers_onboard:
+        if len(requests_to_add) == 2 and vehicle is None:
             return self._handle_rr_check(
-                vehicle,
                 requests_to_add,
                 find_best_route,
             )
 
-        # --- CASE 2: R-V Check ---
-        # (One new request, vehicle state is 0..N passengers)
-        if len(requests_to_add) == 1:
-            return self._handle_rv_check(
-                vehicle,
-                list(requests_to_add)[0],
-                find_best_route,
+        if vehicle is not None:
+            self._validate_batch_window(vehicle, requests_to_add)
+            if len(requests_to_add) == 1:
+                return self._handle_rv_check(
+                    vehicle,
+                    list(requests_to_add)[0],
+                    find_best_route,
+                )
+            return self._handle_rtv_check(
+                availability=vehicle,
+                requests_to_add=requests_to_add,
+                find_best_route=find_best_route,
             )
 
-        return Infeasible(reason="Planner only supports R-R and R-V checks")
+        raise NotImplementedError(
+            "RoutePlanner only supports R-R, R-V, and RTV checks. This scenario is unsupported."
+        )
 
     # --- R-R Handler ---
     def _handle_rr_check(
         self,
-        vehicle: VehicleAvailability,
         requests: set[Request],
         find_best_route: bool,
     ) -> FeasibilityResult:
 
-        if vehicle.capacity < 2:
-            return Infeasible(reason="Vehicle capacity too low for sharing")
+        # if vehicle.capacity < 2:
+        #     return Infeasible(reason="Vehicle capacity too low for sharing")
+        # NOTE maybe I sould make somehting up here
 
         r1, r2 = tuple(requests)
 
@@ -125,7 +131,7 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
                 passengers_onboard=frozenset(),  # Empty for R-R
                 all_requests_map=requests_map,
                 stops_to_visit=list(route_stops),
-                capacity=vehicle.capacity,
+                capacity=2,
                 travel_time_cache=travel_time_cache,
             )
 
@@ -141,7 +147,6 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
                             "Negative cost in feasible route: %.2f", feasible_route.cost
                         )
                         # look at the vehicle and requests to debug
-                        logger.error("Vehicle: %s", vehicle)
                         logger.error("Requests: %s", requests)
                         logger.error("Feasible Route: %s", feasible_route)
                         raise ValueError("Negative cost encountered in feasible route")
@@ -228,16 +233,19 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
         min_cost = float("inf")
 
         # Outer loop permutes existing stops (O(m!))
+        n = len(existing_stops)  # n == m
+        n_with_p = n + 1
+        # insertion_start = 0 if m != availability.capacity else 1
         for base_route_tuple in itertools.permutations(existing_stops):
 
             base_route = list(base_route_tuple)
-            n = len(base_route)  # n == m
 
             # Inner loops do O(n^2) insertions
+            # for i in reversed(range(insertion_start, n + 1)):
             for i in range(n + 1):
                 route_with_p = base_route[:i] + [p_new] + base_route[i:]
 
-                for j in range(i + 1, len(route_with_p) + 1):
+                for j in range(i + 1, n_with_p + 1):
                     route_stops = route_with_p[:j] + [d_new] + route_with_p[j:]
 
                     # 5. Simulate this route
@@ -254,7 +262,9 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
                     if sim_result.is_feasible:
                         # YOUR PARAM: Handle early exit
                         if not find_best_route:
-                            return sim_result  # Found one, we're done (for R-V graph)
+                            return sim_result  # NOTE: we could just find the optimal and save some work for the RTV graph.
+                            # If we return early, we will have to re-run the search to find the best route for the RTV graph anyways.
+                            # And for infeasible cases, we have to run the full search anyway.
 
                         # We are finding the best (for RTV graph)
                         feasible_route = cast(FeasibleRoute, sim_result)
@@ -266,6 +276,144 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
             FeasibleRoute(route=best_route, cost=min_cost)
             if best_route
             else Infeasible(reason="No R-V route satisfied constraints")
+        )
+
+    def _handle_rtv_check(
+        self,
+        availability: VehicleAvailability,
+        requests_to_add: set[Request],
+        find_best_route: bool,
+    ) -> FeasibilityResult:
+        """Exhaustive travel(v, R_v) search for m + k <= 4."""
+
+        passengers_onboard = availability.passengers_onboard
+        m = len(passengers_onboard)
+        k = len(requests_to_add)
+
+        if m + k > 4:
+            raise NotImplementedError(
+                f"Exhaustive search only supported for m + k <= 4 (got m={m}, k={k})."
+            )
+
+        existing_stops: list[Stop] = list(availability.remaining_stops_to_serve)
+        if any(stop.is_pickup for stop in existing_stops):
+            raise ValueError(
+                "VehicleAvailability must already be serving only drop-off stops."
+            )
+
+        pairs: list[tuple[Stop, Stop]] = []
+        for request in requests_to_add:
+            pickup = Stop(
+                node=request.origin_node,
+                is_pickup=True,
+                request_id=request.id,
+            )
+            dropoff = Stop(
+                node=request.destination_node,
+                is_pickup=False,
+                request_id=request.id,
+            )
+            pairs.append((pickup, dropoff))
+
+        all_requests_map = {
+            passenger.original_request.id: passenger.original_request
+            for passenger in passengers_onboard
+        }
+        all_requests_map.update({request.id: request for request in requests_to_add})
+
+        nodes_to_cache = {availability.available_at_node}
+        nodes_to_cache |= {stop.node for stop in existing_stops}
+        for pickup, dropoff in pairs:
+            nodes_to_cache.add(pickup.node)
+            nodes_to_cache.add(dropoff.node)
+        travel_time_cache = self._build_travel_time_cache(nodes_to_cache)
+
+        best_route = None
+        min_cost = float("inf")
+
+        def base_only_feasible(base: list[Stop]) -> bool:
+            if not base:
+                return True
+            passenger_requests = {
+                passenger.original_request.id: passenger.original_request
+                for passenger in passengers_onboard
+            }
+            sim_result = self._simulate_route(
+                start_node=availability.available_at_node,
+                start_time=availability.available_from_time,
+                passengers_onboard=passengers_onboard,
+                all_requests_map=passenger_requests,
+                stops_to_visit=base,
+                capacity=availability.capacity,
+                travel_time_cache=travel_time_cache,
+            )
+            return sim_result.is_feasible
+
+        def gen_sequences(
+            base: list[Stop],
+            stop_pairs: list[tuple[Stop, Stop]],
+        ) -> Iterable[list[Stop]]:
+            sequence = list(base)
+
+            def backtrack(idx: int, current: list[Stop]) -> Iterable[list[Stop]]:
+                if idx == len(stop_pairs):
+                    yield list(current)
+                    return
+                pickup_stop, dropoff_stop = stop_pairs[idx]
+                current_length = len(current)
+                for pickup_idx in range(current_length + 1):
+                    current.insert(pickup_idx, pickup_stop)
+                    for drop_idx in range(pickup_idx + 1, current_length + 2):
+                        current.insert(drop_idx, dropoff_stop)
+                        yield from backtrack(idx + 1, current)
+                        current.pop(drop_idx)
+                    current.pop(pickup_idx)
+
+            yield from backtrack(0, sequence)
+
+        base_orders = (
+            [list(order) for order in itertools.permutations(existing_stops)]
+            if m > 0
+            else [[]]
+        )
+
+        for base in base_orders:
+            if not base_only_feasible(base):
+                continue
+
+            for route_stops in gen_sequences(base, pairs):
+                validate_route_stops(  # TODO: remove once validated code
+                    route_stops,
+                    base_drop_ids={
+                        p.original_request.id for p in availability.passengers_onboard
+                    },
+                    new_pair_ids={r.id for r in requests_to_add},
+                    initial_occupancy=len(availability.passengers_onboard),
+                    capacity=availability.capacity,
+                    assert_unique_objects=True,  # enable in tests only
+                )
+
+                sim_result = self._simulate_route(
+                    start_node=availability.available_at_node,
+                    start_time=availability.available_from_time,
+                    passengers_onboard=passengers_onboard,
+                    all_requests_map=all_requests_map,
+                    stops_to_visit=route_stops,
+                    capacity=availability.capacity,
+                    travel_time_cache=travel_time_cache,
+                )
+                if sim_result.is_feasible:
+                    feasible_result = cast(FeasibleRoute, sim_result)
+                    if not find_best_route:
+                        return feasible_result
+                    if feasible_result.cost < min_cost:
+                        min_cost = feasible_result.cost
+                        best_route = feasible_result.route
+
+        return (
+            FeasibleRoute(route=best_route, cost=min_cost)
+            if best_route is not None
+            else Infeasible(reason="No feasible route for m + k <= 4")
         )
 
     def _validate_batch_window(
@@ -423,149 +571,6 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
 
 
 if __name__ == "__main__":
-    from itertools import combinations, islice
+    from src.demos.route_planner_demo import run_demo
 
-    from src.components.simulation_data_provider import SimulationDataProvider
-
-    provider = SimulationDataProvider()
-    network_service = NetworkXService(provider.graph)
-    planner = RoutePlanner(network_service=network_service)
-    batch_controller = BatchController(network=network_service)
-
-    def _log_result(label: str, result: FeasibilityResult) -> None:
-        if result.is_feasible and isinstance(result, FeasibleRoute):
-            logger.info("[%s] cost %.2f", label, result.cost)
-            for idx, stop in enumerate(result.route.stops, start=1):
-                action = "Pickup" if stop.is_pickup else "Dropoff"
-                logger.info(
-                    "[%s] %d. %s request %s at node %d",
-                    label,
-                    idx,
-                    action,
-                    stop.request_id,
-                    stop.node,
-                )
-        else:
-            logger.warning(
-                "[%s] infeasible: %s",
-                label,
-                getattr(result, "reason", "unknown"),
-            )
-
-    meta_requests = list(islice(provider.iter_requests(), 100))
-    if len(meta_requests) < 2:
-        raise SystemExit("Need at least two rider requests for demos")
-
-    request_pool: list[Request] = list(
-        batch_controller.convert_meta_requests(meta_requests)
-    )
-
-    request_pool.sort(key=lambda r: r.id)
-    if len(request_pool) < 2:
-        raise SystemExit("Need at least two convertible requests for demos")
-
-    vehicles = list(provider.iter_vehicles())
-    if not vehicles:
-        raise SystemExit("No vehicles available from provider")
-    base_vehicle = vehicles[0]
-
-    def _vehicle_snapshot(start_time: float) -> VehicleAvailability:
-        return VehicleAvailability.from_vehicle(base_vehicle, start_time)
-
-    def _windowed_requests(pool: list[Request]):
-        for seed in pool:
-            seed_time = seed.request_time
-            window = [
-                req for req in pool if 0 <= req.request_time - seed_time <= BATCH_DURATION
-            ]
-            if window:
-                start_time = max(req.request_time for req in window)
-                yield start_time, window
-
-    def _run_rr_demo() -> None:
-        feasible_found = False
-        infeasible_found = False
-
-        for start_time, window in _windowed_requests(request_pool):
-            if len(window) < 2:
-                continue
-            vehicle = _vehicle_snapshot(start_time)
-            for r1, r2 in combinations(window, 2):
-                try:
-                    result = planner.check_feasibility(
-                        vehicle,
-                        {r1, r2},
-                        find_best_route=True,
-                    )
-                except ValueError as exc:
-                    logger.warning("[RR] skipped pair %s/%s: %s", r1.id, r2.id, exc)
-                    continue
-                _log_result("RR", result)
-                if result.is_feasible:
-                    feasible_found = True
-                else:
-                    infeasible_found = True
-                if feasible_found and infeasible_found:
-                    return
-
-        logger.warning(
-            "RR demo: unable to find both feasible and infeasible combinations"
-        )
-
-    def _run_rv_demo() -> None:
-        feasible_found = False
-        infeasible_found = False
-
-        for existing_req in request_pool:
-            passenger = Passenger(
-                original_request=existing_req,
-                pickup_time=existing_req.request_time,
-            )
-            for start_time, window in _windowed_requests(request_pool):
-                if not window:
-                    continue
-                availability = VehicleAvailability(
-                    vehicle_id="demo-rv",
-                    capacity=2,
-                    available_at_node=existing_req.origin_node,
-                    available_from_time=start_time,
-                    passengers_onboard=frozenset({passenger}),
-                    remaining_stops_to_serve=(
-                        Stop(
-                            node=existing_req.destination_node,
-                            is_pickup=False,
-                            request_id=existing_req.id,
-                        ),
-                    ),
-                )
-                for new_req in window:
-                    if new_req.id == existing_req.id:
-                        continue
-                    try:
-                        result = planner.check_feasibility(
-                            availability,
-                            {new_req},
-                            find_best_route=True,
-                        )
-                    except ValueError as exc:
-                        logger.warning(
-                            "[RV] skipped pair %s/%s: %s",
-                            existing_req.id,
-                            new_req.id,
-                            exc,
-                        )
-                        continue
-                    _log_result("RV", result)
-                    if result.is_feasible:
-                        feasible_found = True
-                    else:
-                        infeasible_found = True
-                    if feasible_found and infeasible_found:
-                        return
-
-        logger.warning(
-            "RV demo: unable to find both feasible and infeasible combinations"
-        )
-
-    _run_rr_demo()
-    _run_rv_demo()
+    run_demo()

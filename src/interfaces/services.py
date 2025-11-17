@@ -45,8 +45,8 @@ class ISingleVehicleRoutePlanner(ABC):
     @abstractmethod
     def check_feasibility(
         self,
-        vehicle: VehicleAvailability,
         requests_to_add: set[Request],
+        vehicle: VehicleAvailability | None = None,
     ) -> FeasibilityResult:
         """
         Solves the DARP for a single vehicle.

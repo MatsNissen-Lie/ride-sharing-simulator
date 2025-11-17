@@ -41,9 +41,9 @@ class TripStats:
 INPUT_DIR = RIDER_DIR
 OUTPUT_DIR = RIDER_DIR
 FILE_PATTERNS = [
-    "fhv_tripdata_2025-*.parquet",
-    # "fhvhv_tripdata_2025-*.parquet",
-    # "yellow_tripdata_2025-*.parquet",
+    # "fhv_tripdata_2025-*.parquet",
+    "fhvhv_tripdata_2025-*.parquet",
+    "yellow_tripdata_2025-*.parquet",
 ]
 
 TMP_DIR = OUTPUT_DIR / "_tmp_enriched"
