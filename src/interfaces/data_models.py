@@ -190,7 +190,6 @@ class Route:
 class NetworkPath:
     """The result of a shortest-path query from the network service."""
 
-    nodes: tuple[int, ...]
     # travel_times: tuple[float, ...]  # time between each consecutive node
 
     travel_time: float  # Travel time in seconds
@@ -201,6 +200,7 @@ class NetworkPath:
 class NetworkPathExtended(NetworkPath):
     """The result of a shortest-path query from the network service."""
 
+    nodes: tuple[int, ...]
     travel_times: tuple[float, ...]  # time between each consecutive node
 
 

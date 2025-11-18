@@ -16,3 +16,5 @@ cache/
 data/riders/
 rich_riders/
 *.parquet
+
+*.duckdb

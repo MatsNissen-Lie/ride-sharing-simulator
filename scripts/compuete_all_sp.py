@@ -1,12 +1,17 @@
 # scripts/precompute_scc32_resume.py
 
-from typing import Dict, Iterable, List, Tuple, cast
+from typing import Dict, Iterable, List, Tuple, Set
 import time
 import networkx as nx
 
+# add workspace to sys.path
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from config.paths import DATA_DIR
-from src.components.network_service import NetworkXService
-from src.database.shortest_path_db import DuckDBPathCache
+from src.database.simple_db import DuckDBPathCache  # << NEW DB
 from src.state_representation.manhatten_fast import load_graph
 from config import get_logger
 
@@ -21,10 +26,6 @@ def compute_node2scc(graph: nx.MultiDiGraph) -> Dict[int, int]:
         for n in comp:
             node2scc[int(n)] = cid
     return node2scc
-
-
-def graph_hash(G: nx.MultiDiGraph, weight_attr: str = "travel_time") -> str:
-    return NetworkXService.graph_hash(G, weight_attr)
 
 
 def project_to_minweight_digraph(
@@ -83,10 +84,10 @@ def precompute_scc_with_bidij_resumable(
 ) -> None:
     """
     Resumable APSP for a given SCC using bidirectional Dijkstra on a projected DiGraph.
-    - Skips (o,d) pairs already present in DuckDB
+    - Skips (o,d) pairs already present in DuckDB (time_simple)
     - SKIPS WHOLE BATCHES that are fully complete
-    - Logs per-batch timing
-    - Logs overall progress: done / total (percent) for simple (and extended if enabled)
+    - Logs per-batch timing + overall progress (done / total, %)
+    - Optionally also ensures path_extended is filled
 
     Requires edge attrs: 'length' (meters) and 'travel_time' (seconds).
     """
@@ -111,41 +112,35 @@ def precompute_scc_with_bidij_resumable(
     N = len(scc_nodes)
     expected_per_source = N - 1
     total_pairs = N * (N - 1)  # ordered OD pairs inside the SCC
-    scc_set = set(scc_nodes)
+    scc_set: Set[int] = set(scc_nodes)
 
     logger.info(
         f"SCC {target_scc_id}: {N} nodes (ordered pairs total = {total_pairs:,})"
     )
 
-    # --- cache + graph versioning ---
-    gh = graph_hash(G, "travel_time")
     con = cache.con
     total_inserted = 0
 
-    # helper: compute overall progress from DB (simple + extended)
-    def compute_progress_x(
-        write_extended=write_extended,
-    ) -> tuple[int, int] | tuple[int, int, int, int]:
+    # ---- progress helpers (NEW DB: no graph_hash) ----
+    def existing_time(o: int) -> Set[int]:
+        return cache.existing_dests_time(o) & scc_set
+
+    def existing_ext(o: int) -> Set[int]:
+        # path_extended exists but cache class doesn't expose a helper — query here:
+        rows = con.execute("SELECT d FROM path_extended WHERE o=?", [o]).fetchall()
+        return {int(r[0]) for r in rows} & scc_set
+
+    def compute_progress():
+        simple_done = sum(len(existing_time(o)) for o in scc_nodes)
+        return simple_done, total_pairs
+
+    def compute_progress_extended():
         simple_done = 0
         ext_done = 0
         for o in scc_nodes:
-            dset = cache.existing_dests_simple(o, gh)
-            simple_done += len(dset & scc_set)
-            if write_extended:
-                dsetx = cache.existing_dests_extended(o, gh)
-                ext_done += len(dsetx & scc_set)
-        if write_extended:
-            return simple_done, total_pairs, ext_done, total_pairs
-        else:
-            return simple_done, total_pairs
-
-    def compute_progress_extended() -> tuple[int, int, int, int]:
-        res = compute_progress_x(write_extended=True)
-        return cast(Tuple[int, int, int, int], res)
-
-    def compute_progress() -> tuple[int, int]:
-        res = compute_progress_x(write_extended=False)
-        return cast(Tuple[int, int], res)
+            simple_done += len(existing_time(o))
+            ext_done += len(existing_ext(o))
+        return simple_done, total_pairs, ext_done, total_pairs
 
     # initial progress
     if write_extended:
@@ -172,19 +167,14 @@ def precompute_scc_with_bidij_resumable(
         # ---- fast pre-check: is this batch already complete? ----
         batch_complete = True
         for o in batch_sources:
-            if len(cache.existing_dests_simple(o, gh) & scc_set) != expected_per_source:
+            if len(existing_time(o)) != expected_per_source:
                 batch_complete = False
                 break
-            if write_extended:
-                if (
-                    len(cache.existing_dests_extended(o, gh) & scc_set)
-                    != expected_per_source
-                ):
-                    batch_complete = False
-                    break
+            if write_extended and len(existing_ext(o)) != expected_per_source:
+                batch_complete = False
+                break
 
         if batch_complete:
-            # still log that we’re skipping a finished batch
             if write_extended:
                 s_done, s_tot, x_done, x_tot = compute_progress_extended()
                 logger.info(
@@ -211,15 +201,10 @@ def precompute_scc_with_bidij_resumable(
 
         # ---- process sources in the batch ----
         for i, o in enumerate(batch_sources, start=batch_start + 1):
-            # Query what's already present for this origin (and keep only SCC destinations)
-            done_simple = cache.existing_dests_simple(o, gh) & scc_set
-            done_ext = (
-                (cache.existing_dests_extended(o, gh) & scc_set)
-                if write_extended
-                else set()
-            )
+            done_simple = existing_time(o)
+            done_ext = existing_ext(o) if write_extended else set()
 
-            # Quick skip if the whole source is already complete
+            # Quick skip if this origin is already complete
             if (len(done_simple) == expected_per_source) and (
                 (not write_extended) or (len(done_ext) == expected_per_source)
             ):
@@ -246,15 +231,13 @@ def precompute_scc_with_bidij_resumable(
 
                     time_s, dist_m, edge_times = accumulate_on_path(H, path_nodes)
 
-                    # Upsert simple
+                    # Upsert simple (new schema)
                     if d not in done_simple:
-                        cache.put_simple(o, d, gh, time_s, dist_m)
+                        cache.put_simple(o, d, time_s, dist_m)
 
                     # Upsert extended if requested
                     if write_extended and d not in done_ext:
-                        cache.put_extended(
-                            o, d, gh, path_nodes, edge_times, time_s, dist_m
-                        )
+                        cache.put_extended(o, d, path_nodes, edge_times)
 
                     batch_inserted += 1
                     total_inserted += 1
@@ -262,7 +245,6 @@ def precompute_scc_with_bidij_resumable(
                 con.execute("COMMIT")
 
             except KeyboardInterrupt:
-                # Clean rollback so this source recomputes on next run
                 logger.warning(
                     f"Interrupted on source {o} — rolling back current source."
                 )
@@ -273,7 +255,6 @@ def precompute_scc_with_bidij_resumable(
                 raise
 
             except RuntimeError as e:
-                # DuckDB can remain 'interrupted' after Ctrl-C; reconnect & continue
                 msg = str(e).lower()
                 try:
                     con.execute("ROLLBACK")
@@ -285,7 +266,6 @@ def precompute_scc_with_bidij_resumable(
                     )
                     cache.reconnect()
                     con = cache.con
-                    # Skip this source for now; it will be retried on the next run
                     continue
                 else:
                     raise
@@ -325,13 +305,14 @@ def precompute_scc_with_bidij_resumable(
         # Post-batch verification (ensures batch completion)
         missing_sources = 0
         for o in batch_sources:
-            simple_count = len(cache.existing_dests_simple(o, gh) & scc_set)
+            simple_count = len(existing_time(o))
             miss_simple = expected_per_source - simple_count
             if write_extended:
-                ext_count = len(cache.existing_dests_extended(o, gh) & scc_set)
+                ext_count = len(existing_ext(o))
                 miss_ext = expected_per_source - ext_count
             else:
                 miss_ext = 0
+
             if miss_simple > 0 or miss_ext > 0:
                 missing_sources += 1
                 if write_extended:
@@ -372,7 +353,7 @@ def precompute_scc_with_bidij_resumable(
 if __name__ == "__main__":
     # ==== EDIT THESE CONSTANTS ONLY ====
     TARGET_SCC_ID = 32
-    WRITE_EXTENDED = True
+    WRITE_EXTENDED = False  # True to also populate path_extended
     LOG_EVERY = 50  # log progress every N sources (global)
     BATCH_SIZE_SOURCES = 10  # number of sources per logged batch
     # ===================================
@@ -380,7 +361,7 @@ if __name__ == "__main__":
     (DATA_DIR / "duckDB").mkdir(parents=True, exist_ok=True)
 
     G = load_graph()  # must provide 'length' and 'travel_time'
-    cache = DuckDBPathCache()
+    cache = DuckDBPathCache()  # NEW DB cache
 
     precompute_scc_with_bidij_resumable(
         G,

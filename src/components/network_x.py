@@ -1,10 +1,11 @@
+from dataclasses import dataclass
 from functools import lru_cache
 
 import networkx as nx
 
 from config import get_logger
-from src.interfaces import INetworkService, NetworkPath
-from src.interfaces.data_models import NetworkPathExtended
+from src.interfaces import INetworkService
+from src.interfaces.data_models import NetworkPath, NetworkPathExtended
 
 
 logger = get_logger(__name__)
@@ -18,10 +19,6 @@ class NetworkXService(INetworkService):
             raise TypeError("NetworkXService requires an nx.MultiDiGraph")
         self.G = graph
         self._nodeset = set(graph.nodes)
-
-    # TODO: Potential improvements:
-    # add cache with duckDB
-    # https://chatgpt.com/c/690f4825-01f4-832e-aefc-c6a34a6fdc40
 
     @lru_cache(maxsize=2_000_000)  # Est. 4GB on 36GB RAM; key is (o,d)
     def get_shortest_path(
@@ -47,8 +44,6 @@ class NetworkXService(INetworkService):
             total_dist += float(edge_attr.get("length"))
 
         return NetworkPath(
-            nodes=tuple(nodes),
-            # travel_times=tuple(travel_times),
             travel_time=total_time,
             travel_distance=total_dist,
         )
@@ -63,7 +58,6 @@ class NetworkXService(INetworkService):
         except nx.NetworkXNoPath as _:
             return None
 
-        # Sum time/dist along the chosen path (cheap Python loop)
         total_time = 0.0
         total_dist = 0.0
         G = self.G  # local ref for speed
