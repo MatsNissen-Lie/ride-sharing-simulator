@@ -104,6 +104,33 @@ class DuckDBPathCache:
             [int(o), int(d), list(nodes), list(edge_times)],
         )
 
+    def get_both(
+        self, o: int, d: int
+    ) -> tuple[float | None, float | None, list[int] | None, list[float] | None]:
+        """
+        Single round-trip: returns (time_s, dist_m, nodes, edge_times).
+        Any field may be None if not present.
+        """
+        row = self.con.execute(
+            """
+            SELECT t.time_s, t.dist_m, x.nodes, x.edge_times
+            FROM time_simple t
+            FULL OUTER JOIN path_extended x
+              ON t.o = x.o AND t.d = x.d
+            WHERE COALESCE(t.o, x.o) = ? AND COALESCE(t.d, x.d) = ?
+            """,
+            [o, d],
+        ).fetchone()
+        if not row:
+            return None, None, None, None
+        time_s, dist_m, nodes, edge_times = row
+        return (
+            float(time_s) if time_s is not None else None,
+            float(dist_m) if dist_m is not None else None,
+            list(nodes) if nodes is not None else None,
+            list(edge_times) if edge_times is not None else None,
+        )
+
     # ---------- helpers ----------
     def existing_dests_time(self, o: int) -> Set[int]:
         rows = self.con.execute("SELECT d FROM time_simple WHERE o=?", [o]).fetchall()

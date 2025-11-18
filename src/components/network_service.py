@@ -18,23 +18,22 @@ class NetworkXService(INetworkService):
       - Fallback: compute with NetworkX, write-through to DuckDB
     """
 
-    def __init__(self, graph: nx.MultiDiGraph, with_cache: bool = True):
+    def __init__(self, graph: nx.MultiDiGraph):
         if not isinstance(graph, nx.MultiDiGraph):
             raise TypeError("NetworkXService requires an nx.MultiDiGraph")
         self.G = graph
         self._nodeset = set(graph.nodes)
-        self._cache = DuckDBPathCache() if with_cache else None
+        self._cache = DuckDBPathCache()
 
     @lru_cache(maxsize=200_000)  # lean L1; rely on DuckDB for persistence
     def get_shortest_path(
         self, origin_node: int, destination_node: int
     ) -> NetworkPath | None:
         # L2: DuckDB hot table
-        if self._cache:
-            hit = self._cache.get_simple(origin_node, destination_node)
-            if hit:
-                time_s, dist_m = hit
-                return NetworkPath(travel_time=time_s, travel_distance=dist_m)
+        hit = self._cache.get_simple(origin_node, destination_node)
+        if hit:
+            time_s, dist_m = hit
+            return NetworkPath(travel_time=time_s, travel_distance=dist_m)
 
         # Compute on miss
         try:
@@ -53,45 +52,62 @@ class NetworkXService(INetworkService):
             total_dist += float(edge_attr.get("length", 0.0))
 
         # Write-through to L2 (only the tiny row)
-        if self._cache:
-            try:
-                self._cache.put_simple(
-                    origin_node, destination_node, total_time, total_dist
-                )
-            except Exception as e:
-                logger.warning(
-                    f"DuckDB put_simple failed for ({origin_node},{destination_node}): {e}"
-                )
+        self._cache.put_simple(origin_node, destination_node, total_time, total_dist)
 
         return NetworkPath(travel_time=total_time, travel_distance=total_dist)
 
     def get_shortest_path_with_travel_time(
         self, origin_node: int, destination_node: int
     ) -> NetworkPathExtended | None:
-        # First try extended payload (nodes+edge_times)
-        nodes_et = None
-        if self._cache:
-            nodes_et = self._cache.get_extended(origin_node, destination_node)
+        # 1) Single round-trip to cache
+        time_s = dist_m = None
+        nodes = edge_times = None
 
-        if nodes_et:
-            nodes, edge_times_seq = nodes_et
-            edge_times = list(edge_times_seq)
-            # We still want time+dist; try simple first for minimal IO
-            time_dist = (
-                self._cache.get_simple(origin_node, destination_node)
-                if self._cache
-                else None
+        time_s, dist_m, nodes, edge_times = self._cache.get_both(
+            origin_node, destination_node
+        )
+
+        # If we have everything, return immediately
+        if (
+            nodes is not None
+            and edge_times is not None
+            and time_s is not None
+            and dist_m is not None
+        ):
+            return NetworkPathExtended(
+                nodes=tuple(int(n) for n in nodes),
+                travel_times=tuple(float(t) for t in edge_times),
+                travel_time=float(time_s),
+                travel_distance=float(dist_m),
             )
-            if time_dist:
-                time_s, dist_m = time_dist
-                return NetworkPathExtended(
-                    nodes=tuple(int(n) for n in nodes),
-                    travel_times=tuple(float(t) for t in edge_times),
-                    travel_time=float(time_s),
-                    travel_distance=float(dist_m),
-                )
 
-        # Fall back to compute the full path
+        # 2) If we have nodes+edge_times but missing totals, derive what we can
+        if nodes is not None and edge_times is not None:
+            derived_time = float(sum(edge_times))
+            # If distance missing, recompute distance cheaply by summing along nodes in G
+            if dist_m is None:
+                total_dist = 0.0
+                G = self.G
+                for u, v in zip(nodes, nodes[1:]):
+                    # use the min-time edge (consistent with how path was produced)
+                    edge_attr = min(G[u][v].values(), key=lambda a: a["travel_time"])
+                    total_dist += float(edge_attr.get("length", 0.0))
+                dist_m = total_dist
+            if time_s is None:
+                time_s = derived_time
+
+            # Write-through minimal row if it was missing
+            if time_s is not None and dist_m is not None:
+                self._cache.put_simple(origin_node, destination_node, time_s, dist_m)
+
+            return NetworkPathExtended(
+                nodes=tuple(int(n) for n in nodes),
+                travel_times=tuple(float(t) for t in edge_times),
+                travel_time=float(time_s),
+                travel_distance=float(dist_m),
+            )
+
+        # 3) Cache miss: compute fresh
         try:
             nodes = nx.shortest_path(
                 self.G, origin_node, destination_node, weight="travel_time"
@@ -101,39 +117,22 @@ class NetworkXService(INetworkService):
 
         total_time = 0.0
         total_dist = 0.0
-        edge_times: list[float] = []
+        edge_times_list: list[float] = []
         G = self.G
         for u, v in zip(nodes, nodes[1:]):
             edge_attr = min(G[u][v].values(), key=lambda a: a["travel_time"])
             t = float(edge_attr["travel_time"])
             total_time += t
             total_dist += float(edge_attr.get("length", 0.0))
-            edge_times.append(t)
+            edge_times_list.append(t)
 
-        # Write-through:
-        if self._cache:
-            # Ensure minimal row exists
-            try:
-                self._cache.put_simple(
-                    origin_node, destination_node, total_time, total_dist
-                )
-            except Exception as e:
-                logger.warning(
-                    f"DuckDB put_simple failed for ({origin_node},{destination_node}): {e}"
-                )
-            # And extended row (optional)
-            try:
-                self._cache.put_extended(
-                    origin_node, destination_node, nodes, edge_times
-                )
-            except Exception as e:
-                logger.warning(
-                    f"DuckDB put_extended failed for ({origin_node},{destination_node}): {e}"
-                )
+        # 4) Write-through both layers
+        self._cache.put_simple(origin_node, destination_node, total_time, total_dist)
+        self._cache.put_extended(origin_node, destination_node, nodes, edge_times_list)
 
         return NetworkPathExtended(
             nodes=tuple(nodes),
-            travel_times=tuple(edge_times),
+            travel_times=tuple(edge_times_list),
             travel_time=total_time,
             travel_distance=total_dist,
         )

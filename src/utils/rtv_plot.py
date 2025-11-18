@@ -2,8 +2,9 @@
 
 from collections.abc import Iterable
 from datetime import datetime
+import math
 from pathlib import Path
-from typing import Dict, Tuple, Hashable
+from typing import Dict, Tuple
 
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -11,6 +12,7 @@ import osmnx as osmnx
 
 from src.interfaces import Request, VehicleAvailability
 from src.interfaces import RTVGraph  # adjust import to your layout
+
 
 REQ_COLOR = "black"
 VEH_COLOR = "green"
@@ -35,8 +37,9 @@ def plot_rtv_graph_on_manhattan(
       * Exactly one R-V edge is drawn: from v to the first pickup request
         in the optimal route for (T, v), in the same color.
 
-    Overlapping edges (same R-R or R-V pair used in multiple (T, v))
-    are slightly offset so that all colors are visible.
+    Edges that are nearly parallel and spatially close are grouped into
+    “bundles”; edges inside a bundle are slightly offset along a common
+    perpendicular so all colors are visible.
     """
     # Base plot of the Manhattan network
     fig, ax = osmnx.plot_graph(  # type: ignore[call-arg]
@@ -98,12 +101,20 @@ def plot_rtv_graph_on_manhattan(
         color=VEH_COLOR,
     )
 
-    # --- Build edge records grouped by logical pair ---
+    # --- Collect all edges (no offsets yet) ---
 
     class EdgeRecord:
         __slots__ = ("x1", "y1", "x2", "y2", "color", "is_rr")
 
-        def __init__(self, x1, y1, x2, y2, color, is_rr: bool):
+        def __init__(
+            self,
+            x1: float,
+            y1: float,
+            x2: float,
+            y2: float,
+            color,
+            is_rr: bool,
+        ):
             self.x1 = x1
             self.y1 = y1
             self.x2 = x2
@@ -111,12 +122,12 @@ def plot_rtv_graph_on_manhattan(
             self.color = color
             self.is_rr = is_rr
 
-    edges_by_key: Dict[Tuple[Hashable, ...], list[EdgeRecord]] = {}
+    edges: list[EdgeRecord] = []
 
     cmap = plt.get_cmap("tab20")
     trips = list(rtv_graph.trip_to_vehicles.keys())
 
-    pair_idx = 0  # color index for (trip, vehicle) pairs
+    pair_idx = 0  # for color selection per (trip, vehicle) pair
 
     for trip in trips:
         trip_req_ids = list(trip)
@@ -128,27 +139,27 @@ def plot_rtv_graph_on_manhattan(
             v = vehicles_by_id.get(v_id)
             if v is None:
                 continue
-                # 1) require that we can plot the vehicle
-            # try:
-            #     xv, yv = node_xy(v.available_at_node)
-            # except KeyError:
-            #     continue
 
-            # # 2) require that we have a route for (trip, v)
-            # route = rtv_graph.get_route(trip, v_id)
-            # if route is None:
-            #     continue
+            # require that we can plot the vehicle
+            try:
+                xv, yv = node_xy(v.available_at_node)
+            except KeyError:
+                continue
 
-            # # 3) find first pickup in this trip
-            # first_req_id = None
-            # for stop in route.route.stops:
-            #     if stop.is_pickup and stop.request_id in trip:
-            #         first_req_id = stop.request_id
-            #         break
-            # if first_req_id is None:
-            #     continue
+            # require that we have a route for (trip, v)
+            route = rtv_graph.get_route(trip, v_id)
+            if route is None:
+                continue
 
-            # Unique color per (trip, vehicle) pair
+            # find first pickup in this trip
+            first_req_id: str | None = None
+            for stop in route.route.stops:
+                if stop.is_pickup and stop.request_id in trip:
+                    first_req_id = stop.request_id
+                    break
+            if first_req_id is None:
+                continue
+
             color = cmap(pair_idx % cmap.N)
             pair_idx += 1
 
@@ -173,31 +184,9 @@ def plot_rtv_graph_on_manhattan(
                     except KeyError:
                         continue
 
-                    s_r1, s_r2 = sorted((r1_id, r2_id))
-                    key = ("rr", s_r1, s_r2)
-                    rec = EdgeRecord(x1, y1, x2, y2, color, is_rr=True)
-                    edges_by_key.setdefault(key, []).append(rec)
+                    edges.append(EdgeRecord(x1, y1, x2, y2, color, is_rr=True))
 
             # ---- R-V edge: only to first pickup in the route ----
-            try:
-                xv, yv = node_xy(v.available_at_node)
-            except KeyError:
-                continue
-
-            route = rtv_graph.get_route(trip, v_id)
-            if route is None:
-                continue
-
-            # Find first pickup in the route that belongs to this trip
-            first_req_id: str | None = None
-            for stop in route.route.stops:
-                if stop.is_pickup and stop.request_id in trip:
-                    first_req_id = stop.request_id
-                    break
-
-            if first_req_id is None:
-                continue
-
             req = requests_by_id.get(first_req_id)
             if req is None:
                 continue
@@ -207,37 +196,68 @@ def plot_rtv_graph_on_manhattan(
             except KeyError:
                 continue
 
-            key = ("rv", first_req_id, v_id)
-            rec = EdgeRecord(xr, yr, xv, yv, color, is_rr=False)
-            edges_by_key.setdefault(key, []).append(rec)
+            edges.append(EdgeRecord(xr, yr, xv, yv, color, is_rr=False))
 
-    # --- Draw edges with offsets for overlapping pairs ---
+    # --- Group edges into geometric bundles and draw with offsets ---
 
-    import math
+    # Each bundle: dict with
+    #   "u": direction unit vector (ux, uy)
+    #   "mid": representative midpoint (mx, my)
+    #   "edges": list[EdgeRecord]
+    bundles: list[dict] = []
 
-    offset_base = 0.0003  # adjust based on map scale
+    # Thresholds for considering edges "similar"
+    angle_cos_thresh = 0.996  # ~8 degrees
+    # 5 degrees would be 0.996; 10 degrees 0.985
 
-    for key, recs in edges_by_key.items():
-        n = len(recs)
-        if n == 0:
-            continue
+    dist_thresh = 0.01  # distance between midpoints (lat/lon scale)
+    offset_base = 0.0003  # offset magnitude per edge in a bundle
 
-        for idx, rec in enumerate(recs):
-            dx = rec.x2 - rec.x1
-            dy = rec.y2 - rec.y1
-            length = math.hypot(dx, dy)
-            if length == 0:
-                ux, uy = 0.0, 0.0
-            else:
-                ux = -dy / length
-                uy = dx / length
+    for rec in edges:
+        dx = rec.x2 - rec.x1
+        dy = rec.y2 - rec.y1
+        length = math.hypot(dx, dy)
+        if length == 0:
+            ux, uy = 0.0, 1.0
+        else:
+            ux, uy = dx / length, dy / length
 
-            # spread overlapping edges around base line
+        mx = 0.5 * (rec.x1 + rec.x2)
+        my = 0.5 * (rec.y1 + rec.y2)
+
+        # Try to assign to an existing bundle
+        assigned = False
+        for bundle in bundles:
+            bux, buy = bundle["u"]
+            bmx, bmy = bundle["mid"]
+
+            # parallel / antiparallel?
+            if abs(ux * bux + uy * buy) >= angle_cos_thresh:
+                # midpoints close?
+                if math.hypot(mx - bmx, my - bmy) <= dist_thresh:
+                    bundle["edges"].append(rec)
+                    assigned = True
+                    break
+
+        if not assigned:
+            bundles.append({"u": (ux, uy), "mid": (mx, my), "edges": [rec]})
+
+    # Now draw bundles with perpendicular offsets
+    for bundle in bundles:
+        ux, uy = bundle["u"]
+        # perpendicular (doesn't matter which direction)
+        px, py = -uy, ux
+
+        bundle_edges: list[EdgeRecord] = bundle["edges"]
+        n = len(bundle_edges)
+
+        for idx, rec in enumerate(bundle_edges):
+            # fan out around the center: e.g. for n=3 -> offsets -1,0,1
             k = idx - (n - 1) / 2
             offset = offset_base * k
 
-            ox = ux * offset
-            oy = uy * offset
+            ox = px * offset
+            oy = py * offset
 
             x1o = rec.x1 + ox
             y1o = rec.y1 + oy
@@ -246,8 +266,10 @@ def plot_rtv_graph_on_manhattan(
 
             if rec.is_rr:
                 linestyle = "-"
+                z = 3
             else:
                 linestyle = ":" if dotted_vehicle_edges else "-"
+                z = 4  # keep vehicle edges on top
 
             ax.plot(
                 [x1o, x2o],
@@ -255,7 +277,7 @@ def plot_rtv_graph_on_manhattan(
                 linestyle=linestyle,
                 linewidth=0.5,
                 alpha=0.9,
-                zorder=4 if rec.is_rr else 3,
+                zorder=z,
                 color=rec.color,
             )
 
@@ -276,13 +298,6 @@ def plot_rtv_graph(
 ):
     """
     High-level helper: plot RTV graph and optionally save as SVG.
-
-    Parameters
-    ----------
-    drop_singleton_trips : bool
-        If True (default), trips of length 1 (|T| == 1) are not drawn.
-    dotted_vehicle_edges : bool
-        If True, R-V edges are drawn dotted; otherwise they are solid.
     """
     fig, ax = plot_rtv_graph_on_manhattan(
         rtv_graph=rtv_graph,
@@ -299,5 +314,5 @@ def plot_rtv_graph(
         output_path = output_dir / file_name
         fig.savefig(output_path, format="svg", bbox_inches="tight")
 
-    plt.show(block=True)
+    plt.show(block=False)
     return fig, ax
