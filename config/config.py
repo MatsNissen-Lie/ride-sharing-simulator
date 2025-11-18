@@ -9,7 +9,7 @@ DELTA = 5 * 60  # 5 minutes in seconds
 # SIM
 BATCH_DURATION = 30  # 30 seconds
 # data
-NUMBER_OF_VEHICLES = 300
+NUMBER_OF_VEHICLES = 20
 
 
 __all__ = [

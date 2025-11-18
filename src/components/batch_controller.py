@@ -1,7 +1,7 @@
 """Batch controller implementation stub with meta request conversion."""
 
 from collections.abc import Iterable, Iterator
-from typing import Optional, Set, Tuple
+from typing import Set, Tuple
 
 from config.config import OMEGA
 from src.interfaces.batch_control import IBatchController
@@ -15,13 +15,13 @@ from src.interfaces import (
     Request,
     Vehicle,
 )
-from src.interfaces.data_models import Route
+from src.interfaces.data_models import NetworkPathExtended, Route
 
 
 class BatchController(IBatchController):
     """Minimal batch controller focusing on MetaRequest conversion."""
 
-    def __init__(self, network: INetworkService, vehicles: Set[Vehicle]) -> None:
+    def __init__(self, network: INetworkService, vehicles: list[Vehicle]) -> None:
         super().__init__(network, vehicles)
 
     def project_fleet_and_update_requests(
@@ -70,8 +70,8 @@ class BatchController(IBatchController):
         # (request_id -> promised_pickup_time)
         last_promised: dict[str, float] = {}
 
-        def get_path(u: int, v: int) -> NetworkPath:
-            path = self._network.get_shortest_path(u, v)
+        def get_path(u: int, v: int) -> NetworkPathExtended:
+            path = self._network.get_shortest_path_with_travel_time(u, v)
             if path is None:
                 raise RuntimeError(f"No path found from {u} to {v}")
             return path
@@ -228,7 +228,7 @@ class BatchController(IBatchController):
 
     def _snap_to_next_node_on_leg(
         self,
-        path: NetworkPath,
+        path: NetworkPathExtended,
         leg_start_time: float,
         t_now: float,
     ) -> tuple[int, float]:

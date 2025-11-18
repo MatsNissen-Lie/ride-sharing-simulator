@@ -1,64 +1,106 @@
+# network_service.py
 from functools import lru_cache
-from pathlib import Path
-
 import networkx as nx
-
-from config import get_logger
+from typing import Optional
+from src.database.shortest_path_db import DuckDBPathCache
 from src.interfaces import INetworkService, NetworkPath
-from src.state.utils import plot_nodes
-
-
-logger = get_logger(__name__)
+from src.interfaces.data_models import NetworkPathExtended
 
 
 class NetworkXService(INetworkService):
-    """Fast, minimal wrapper around a MultiDiGraph with precomputed edge weights."""
-
     def __init__(self, graph: nx.MultiDiGraph):
         if not isinstance(graph, nx.MultiDiGraph):
             raise TypeError("NetworkXService requires an nx.MultiDiGraph")
         self.G = graph
         self._nodeset = set(graph.nodes)
+        self._cache = DuckDBPathCache()
+        self._ghash = self.graph_hash(graph)
 
-    # TODO: Potential improvements:
-    # add cache with duckDB
-    # https://chatgpt.com/c/690f4825-01f4-832e-aefc-c6a34a6fdc40
-
-    @lru_cache(maxsize=2_000_000)  # Est. 4GB on 36GB RAM; key is (o,d)
+    @lru_cache(maxsize=200_000)
     def get_shortest_path(
         self, origin_node: int, destination_node: int
-    ) -> NetworkPath | None:
-        # Fastest path by precomputed time
-        # if origin_node not in self._nodeset:
-        #     raise KeyError(f"origin_node {origin_node} not in graph")
-        # if destination_node not in self._nodeset:
-        #     raise KeyError(f"destination_node {destination_node} not in graph")
+    ) -> Optional[NetworkPath]:
+        # L2: tiny row → fastest
+        hit = self._cache.get_simple(origin_node, destination_node, self._ghash)
+        if hit:
+            t, d = hit
+            # We don’t need nodes for the simple variant
+            return NetworkPath(nodes=(), travel_time=t, travel_distance=d)
+
+        # Compute
         try:
             nodes = nx.shortest_path(
                 self.G, origin_node, destination_node, weight="travel_time"
             )
-        except nx.NetworkXNoPath as _:
+        except nx.NetworkXNoPath:
             return None
 
-        # Sum time/dist along the chosen path (cheap Python loop)
+        G = self.G
         total_time = 0.0
         total_dist = 0.0
-        G = self.G  # local ref for speed
-        travel_times = []
         for u, v in zip(nodes, nodes[1:]):
-            edge_attr = min(G[u][v].values(), key=lambda attrs: attrs["travel_time"])
+            data = min(G[u][v].values(), key=lambda a: a["travel_time"])
+            total_time += float(data["travel_time"])
+            total_dist += float(data.get("length", 0.0))
 
-            total_time += float(edge_attr["travel_time"])
-            travel_times.append(float(edge_attr["travel_time"]))
-            # if dist is None:
-            #     raise ValueError(
-            #         f"Edge ({u},{v}) missing 'length' attribute for distance"
-            #     )
-            total_dist += float(edge_attr.get("length"))
+        self._cache.put_simple(
+            origin_node, destination_node, self._ghash, total_time, total_dist
+        )
 
         return NetworkPath(
+            nodes=tuple(nodes), travel_time=total_time, travel_distance=total_dist
+        )
+
+    def get_shortest_path_with_travel_time(
+        self, origin_node: int, destination_node: int
+    ) -> Optional[NetworkPathExtended]:
+        hit = self._cache.get_extended(origin_node, destination_node, self._ghash)
+        if hit:
+            nodes, edge_times, t, d = hit
+            return NetworkPathExtended(
+                nodes=tuple(nodes),
+                travel_times=tuple(edge_times),
+                travel_time=t,
+                travel_distance=d,
+            )
+
+        # Compute
+        try:
+            nodes = nx.shortest_path(
+                self.G, origin_node, destination_node, weight="travel_time"
+            )
+        except nx.NetworkXNoPath:
+            return None
+
+        G = self.G
+        total_time = 0.0
+        total_dist = 0.0
+        edge_times = []
+        for u, v in zip(nodes, nodes[1:]):
+            data = min(G[u][v].values(), key=lambda a: a["travel_time"])
+            t = float(data["travel_time"])
+            total_time += t
+            total_dist += float(data.get("length", 0.0))
+            edge_times.append(t)
+
+        self._cache.put_extended(
+            origin_node,
+            destination_node,
+            self._ghash,
+            nodes,
+            edge_times,
+            total_time,
+            total_dist,
+        )
+
+        return NetworkPathExtended(
             nodes=tuple(nodes),
-            travel_times=tuple(travel_times),
+            travel_times=tuple(edge_times),
             travel_time=total_time,
             travel_distance=total_dist,
         )
+
+    @staticmethod
+    def graph_hash(G: nx.MultiDiGraph, weight_attr: str = "travel_time") -> str:
+        # lightweight fingerprint for cache versioning
+        return f"{G.number_of_nodes()}-{G.number_of_edges()}-{int(G.size(weight=weight_attr) or 0)}"

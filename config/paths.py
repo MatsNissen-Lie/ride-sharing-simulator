@@ -16,6 +16,9 @@ VEHICLE_SAMPLE_PATH = (
 )
 TAXI_ZONES_PATH = BASE_DIR / "data" / "zones" / "taxi_zones.shp"
 
+
+PLOT_DIR = DATA_DIR / "plots"
+
 __all__ = [
     "BASE_DIR",
     "DATA_DIR",

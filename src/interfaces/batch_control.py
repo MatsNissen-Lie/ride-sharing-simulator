@@ -22,9 +22,9 @@ class IBatchController(ABC):
     """
 
     # ---- Wiring ----
-    def __init__(self, network: INetworkService, vehicles: set[Vehicle]) -> None:
+    def __init__(self, network: INetworkService, vehicles: list[Vehicle]) -> None:
         self._network = network
-        self._fleet: set[Vehicle] = vehicles
+        self._fleet: list[Vehicle] = vehicles
         self._request_index: dict[str, Request] = {}
         super().__init__()
 

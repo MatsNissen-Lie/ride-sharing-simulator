@@ -79,7 +79,11 @@ class SimulationDataProvider:
                     )
                 last_timestamp = self._ensure_datetime(df["pickup_datetime"][-1])
 
-            df = df.with_columns(pl.col("pickup_datetime").cast(pl.Datetime))
+            df = df.with_columns(
+                pl.col("pickup_datetime")
+                .cast(pl.Datetime)
+                .dt.replace_time_zone("America/New_York")
+            )
             series = df["pickup_datetime"]
             if not series.is_sorted():
                 raise AssertionError(

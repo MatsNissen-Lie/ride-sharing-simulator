@@ -1,15 +1,16 @@
 from abc import ABC, abstractmethod
 from functools import lru_cache
-from typing import Any
 
 from src.interfaces.data_models import (
     AssignmentResult,
     FeasibilityResult,
     NetworkPath,
+    NetworkPathExtended,
     RebalancingResult,
     Request,
     VehicleAvailability,
 )
+from src.interfaces.graphs import RTVGraph, RVGraph
 
 
 class INetworkService(ABC):
@@ -23,6 +24,16 @@ class INetworkService(ABC):
         """
         Returns the pre-computed fastest path between two nodes.
         This provides the baseline travel time tau(o_r, d_r).
+        """
+        pass
+
+    @abstractmethod
+    def get_shortest_path_with_travel_time(
+        self, origin_node: int, destination_node: int
+    ) -> NetworkPathExtended | None:
+        """
+        Returns the pre-computed fastest path between two nodes,
+        along with travel times between each consecutive node.
         """
         pass
 
@@ -64,12 +75,12 @@ class ISingleVehicleRoutePlanner(ABC):
 
 # A type alias for a graph object, e.g., networkx.Graph
 # Nodes are Request and Vehicle objects.
-RVGraph = Any  # TODO
+# RVGraph = Any  # TODO
 
 # A type alias for a bipartite graph object (e.g., networkx.Graph)
 # One set of nodes is 'Trip' objects (which are sets of Requests)
 # The other set of nodes is 'Vehicle' objects.
-RTVGraph = Any  # TODO
+# RTVGraph = Any  # TODO
 
 
 class IRVGraphBuilder(ABC):
@@ -105,7 +116,11 @@ class IRTVGraphBuilder(ABC):
 
     @abstractmethod
     def build_graph(
-        self, rv_graph: RVGraph, vehicles: set[VehicleAvailability], max_trip_size: int
+        self,
+        rv_graph: RVGraph,
+        vehicles: set[VehicleAvailability],
+        requests: set[Request],
+        max_trip_size: int,
     ) -> RTVGraph:
         """
         Builds the RTV-graph:

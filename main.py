@@ -1,19 +1,21 @@
 import time
 
 from config import BATCH_DURATION, get_logger, NUMBER_OF_VEHICLES
+from config.paths import PLOT_DIR
 from src.components.batch_controller import BatchController
-from src.components.graph_builders import RVGraphBuilder
+from src.components.rtv_graph_builder import RTVGraphBuilder
+from src.components.rv_graph_builder import RVGraphBuilder
 from src.components.network_service import NetworkXService
 from src.components.route_planner import RoutePlanner
 from src.components.simulation_data_provider import SimulationDataProvider
-from src.interfaces import RTVGraph, RVGraph
 from src.interfaces.batch_control import IBatchController
-from src.interfaces.data_models import MetaRequest, Request, VehicleAvailability
 from src.interfaces.services import (
     IAssignmentSolver,
     IRVGraphBuilder,
     IRTVGraphBuilder,
 )
+from src.utils.rtv_plot import plot_rtv_graph
+from src.utils.rv_plot import plot_rv_graph
 
 
 logger = get_logger(__name__)
@@ -46,33 +48,57 @@ def main(
 
     # State Management (Your new interface)
     controller = controller or BatchController(
-        network_service, set(provider.iter_vehicles(NUMBER_OF_VEHICLES))
+        network_service, list(provider.iter_vehicles(NUMBER_OF_VEHICLES))
     )
     rv_builder = RVGraphBuilder(planner)
-
-    if rv_builder is None or rtv_builder is None or assignment_solver is None:
-        raise RuntimeError(
-            "RV/RTV graph builders and assignment solver must be provided."
-        )
+    rtv_builder = RTVGraphBuilder(planner)
 
     batch_count = 0
     for batch in controller.iter_batches(provider.iter_requests(), BATCH_DURATION):
+        batch_start = time.perf_counter()
         batch_count += 1
         t_now, all_requests_in_pool, vehicle_avail_pool = batch
+        batch_datetime = provider.get_simulation_clock().from_relative_seconds(t_now)
 
         start_loop_time = time.perf_counter()
         logger.info("--- Batch %d starting at t=%.2f ---", batch_count, t_now)
+        logger.info(f"--------- {batch_datetime.isoformat()[:-6]} ---------")
         logger.info("Found %s new requests in this batch.", len(all_requests_in_pool))
+        if len(all_requests_in_pool) < 10:
+            continue
 
         # 3. Build RV Graph (Algorithm Step 1)
         rv_graph = rv_builder.build_graph(all_requests_in_pool, vehicle_avail_pool)
 
         # 4. Build RTV Graph (Algorithm Step 2)
         rtv_graph = rtv_builder.build_graph(
-            rv_graph, vehicle_avail_pool, max_trip_size=4
+            rv_graph, vehicle_avail_pool, all_requests_in_pool, max_trip_size=4
         )
-
+        batch_rtv_end = time.perf_counter()
+        logger.info(
+            "RTV graph built in %.4f seconds.",
+            batch_rtv_end - batch_start,
+        )
+        # logg number of trips and num
+        plot_rv_graph(
+            rv_graph,
+            vehicle_avail_pool,
+            all_requests_in_pool,
+            provider.graph,
+            output_dir=PLOT_DIR,
+            datetime=batch_datetime,
+        )
+        plot_rtv_graph(
+            rtv_graph,
+            vehicle_avail_pool,
+            all_requests_in_pool,
+            provider.graph,
+            output_dir=PLOT_DIR,
+            datetime=batch_datetime,
+        )
         # 5. Solve Assignment (Algorithm Step 3)
+        if assignment_solver is None:
+            raise RuntimeError("Assignment solver must be provided.")
         assignment_result = assignment_solver.solve(
             rtv_graph,
             all_requests_in_pool,

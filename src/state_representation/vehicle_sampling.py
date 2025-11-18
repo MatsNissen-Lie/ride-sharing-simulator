@@ -287,8 +287,8 @@ def sample_vehicle_positions(
     lies on the street network.
     """
 
-    if VEHICLE_SAMPLE_PATH.exists():
-        return pl.read_parquet(VEHICLE_SAMPLE_PATH)
+    # if VEHICLE_SAMPLE_PATH.exists():
+    #     return pl.read_parquet(VEHICLE_SAMPLE_PATH)
 
     if count <= 0:
         raise ValueError("count must be positive")

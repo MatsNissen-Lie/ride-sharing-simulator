@@ -191,10 +191,17 @@ class NetworkPath:
     """The result of a shortest-path query from the network service."""
 
     nodes: tuple[int, ...]
-    travel_times: tuple[float, ...]  # time between each consecutive node
+    # travel_times: tuple[float, ...]  # time between each consecutive node
 
     travel_time: float  # Travel time in seconds
     travel_distance: float  # Travel distance in meters
+
+
+@dataclass(frozen=True)
+class NetworkPathExtended(NetworkPath):
+    """The result of a shortest-path query from the network service."""
+
+    travel_times: tuple[float, ...]  # time between each consecutive node
 
 
 @dataclass(frozen=True)
