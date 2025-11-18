@@ -18,3 +18,4 @@ rich_riders/
 *.parquet
 
 *.duckdb
+*.duckdb*

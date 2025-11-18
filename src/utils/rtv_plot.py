@@ -128,6 +128,25 @@ def plot_rtv_graph_on_manhattan(
             v = vehicles_by_id.get(v_id)
             if v is None:
                 continue
+                # 1) require that we can plot the vehicle
+            # try:
+            #     xv, yv = node_xy(v.available_at_node)
+            # except KeyError:
+            #     continue
+
+            # # 2) require that we have a route for (trip, v)
+            # route = rtv_graph.get_route(trip, v_id)
+            # if route is None:
+            #     continue
+
+            # # 3) find first pickup in this trip
+            # first_req_id = None
+            # for stop in route.route.stops:
+            #     if stop.is_pickup and stop.request_id in trip:
+            #         first_req_id = stop.request_id
+            #         break
+            # if first_req_id is None:
+            #     continue
 
             # Unique color per (trip, vehicle) pair
             color = cmap(pair_idx % cmap.N)
