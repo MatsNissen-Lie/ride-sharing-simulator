@@ -1,10 +1,9 @@
-# utils/plot_rtv_graph.py
-
 from collections.abc import Iterable
 from datetime import datetime
-import math
 from pathlib import Path
 from typing import Dict, Tuple
+
+import math
 
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -12,7 +11,6 @@ import osmnx as osmnx
 
 from src.interfaces import Request, VehicleAvailability
 from src.interfaces import RTVGraph  # adjust import to your layout
-
 
 REQ_COLOR = "black"
 VEH_COLOR = "green"
@@ -38,7 +36,7 @@ def plot_rtv_graph_on_manhattan(
         in the optimal route for (T, v), in the same color.
 
     Edges that are nearly parallel and spatially close are grouped into
-    “bundles”; edges inside a bundle are slightly offset along a common
+    bundles; edges in a bundle are offset slightly along the common
     perpendicular so all colors are visible.
     """
     # Base plot of the Manhattan network
@@ -52,17 +50,19 @@ def plot_rtv_graph_on_manhattan(
         dpi=300 * 2,
     )
 
-    # Build lookup maps
+    # --- Lookup maps ---
+
     requests_by_id: Dict[str, Request] = {r.id: r for r in requests}
     vehicles_by_id: Dict[str, VehicleAvailability] = {v.vehicle_id: v for v in vehicles}
 
-    # Helper to get coordinates for a road node
     def node_xy(node_id: int) -> Tuple[float, float]:
         data = road_graph.nodes[node_id]
         return float(data["x"]), float(data["y"])
 
     # --- Plot request nodes ---
-    req_xs, req_ys = [], []
+
+    req_xs: list[float] = []
+    req_ys: list[float] = []
     for r_id, req in requests_by_id.items():
         try:
             x, y = node_xy(req.origin_node)
@@ -82,7 +82,9 @@ def plot_rtv_graph_on_manhattan(
     )
 
     # --- Plot vehicle nodes ---
-    veh_xs, veh_ys = [], []
+
+    veh_xs: list[float] = []
+    veh_ys: list[float] = []
     for v in vehicles_by_id.values():
         try:
             x, y = node_xy(v.available_at_node)
@@ -127,7 +129,7 @@ def plot_rtv_graph_on_manhattan(
     cmap = plt.get_cmap("tab20")
     trips = list(rtv_graph.trip_to_vehicles.keys())
 
-    pair_idx = 0  # for color selection per (trip, vehicle) pair
+    pair_idx = 0  # color index for (trip, vehicle) pairs
 
     for trip in trips:
         trip_req_ids = list(trip)
@@ -200,20 +202,22 @@ def plot_rtv_graph_on_manhattan(
 
     # --- Group edges into geometric bundles and draw with offsets ---
 
-    # Each bundle: dict with
-    #   "u": direction unit vector (ux, uy)
-    #   "mid": representative midpoint (mx, my)
+    # A bundle: dict with
+    #   "u": (ux, uy) direction unit vector
+    #   "mid": (mx, my) representative midpoint
     #   "edges": list[EdgeRecord]
     bundles: list[dict] = []
 
-    # Thresholds for considering edges "similar"
-    angle_cos_thresh = 0.996  # ~8 degrees
-    # 5 degrees would be 0.996; 10 degrees 0.985
+    # Thresholds for “similar” edges
+    # angle between directions small
+    angle_cos_thresh = 0.996  # ~5 degrees (cos 5° ≈ 0.996)
+    # midpoints close in lat/lon space
+    dist_thresh = 0.01
+    # offset magnitude per edge within a bundle
+    offset_base = 0.0003
 
-    dist_thresh = 0.01  # distance between midpoints (lat/lon scale)
-    offset_base = 0.0003  # offset magnitude per edge in a bundle
-
-    for rec in edges:
+    def segment_features(rec: EdgeRecord):
+        """Return (ux, uy, mx, my) for an edge."""
         dx = rec.x2 - rec.x1
         dy = rec.y2 - rec.y1
         length = math.hypot(dx, dy)
@@ -225,34 +229,58 @@ def plot_rtv_graph_on_manhattan(
         mx = 0.5 * (rec.x1 + rec.x2)
         my = 0.5 * (rec.y1 + rec.y2)
 
-        # Try to assign to an existing bundle
+        return ux, uy, mx, my
+
+    for rec in edges:
+        ux, uy, mx, my = segment_features(rec)
+
         assigned = False
         for bundle in bundles:
             bux, buy = bundle["u"]
             bmx, bmy = bundle["mid"]
 
-            # parallel / antiparallel?
-            if abs(ux * bux + uy * buy) >= angle_cos_thresh:
-                # midpoints close?
-                if math.hypot(mx - bmx, my - bmy) <= dist_thresh:
-                    bundle["edges"].append(rec)
-                    assigned = True
-                    break
+            # 1) nearly parallel / antiparallel?
+            if abs(ux * bux + uy * buy) < angle_cos_thresh:
+                continue
+
+            # 2) midpoints reasonably close?
+            if math.hypot(mx - bmx, my - bmy) > dist_thresh:
+                continue
+
+            # same bundle
+            bundle["edges"].append(rec)
+            # update bundle midpoint (simple running average)
+            n_prev = bundle["count"]
+            n_new = n_prev + 1
+            bundle["mid"] = (
+                (bmx * n_prev + mx) / n_new,
+                (bmy * n_prev + my) / n_new,
+            )
+            bundle["count"] = n_new
+            assigned = True
+            break
 
         if not assigned:
-            bundles.append({"u": (ux, uy), "mid": (mx, my), "edges": [rec]})
+            bundles.append(
+                {
+                    "u": (ux, uy),
+                    "mid": (mx, my),
+                    "edges": [rec],
+                    "count": 1,
+                }
+            )
 
-    # Now draw bundles with perpendicular offsets
+    # Now draw each bundle with perpendicular offsets
     for bundle in bundles:
         ux, uy = bundle["u"]
-        # perpendicular (doesn't matter which direction)
+        # perpendicular direction
         px, py = -uy, ux
 
         bundle_edges: list[EdgeRecord] = bundle["edges"]
         n = len(bundle_edges)
 
         for idx, rec in enumerate(bundle_edges):
-            # fan out around the center: e.g. for n=3 -> offsets -1,0,1
+            # fan out around center: e.g. for n=3 -> offsets -1, 0, 1
             k = idx - (n - 1) / 2
             offset = offset_base * k
 
@@ -269,7 +297,7 @@ def plot_rtv_graph_on_manhattan(
                 z = 3
             else:
                 linestyle = ":" if dotted_vehicle_edges else "-"
-                z = 4  # keep vehicle edges on top
+                z = 4  # keep R-V edges on top
 
             ax.plot(
                 [x1o, x2o],
@@ -314,5 +342,5 @@ def plot_rtv_graph(
         output_path = output_dir / file_name
         fig.savefig(output_path, format="svg", bbox_inches="tight")
 
-    plt.show(block=False)
+    plt.show(block=True)
     return fig, ax

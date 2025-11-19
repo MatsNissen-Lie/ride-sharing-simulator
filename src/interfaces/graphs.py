@@ -37,6 +37,9 @@ class RVGraph:
     rr_details: dict[tuple[str, str], FeasibleRoute] = field(default_factory=dict)
     rv_details: dict[tuple[str, str], FeasibleRoute] = field(default_factory=dict)
 
+    # NEW: Reverse index for fast vehicle lookup O(1)
+    vehicle_request: dict[str, set[str]] = field(default_factory=dict)
+
     def add_rr_edge(
         self,
         r1_id: str,
@@ -60,6 +63,12 @@ class RVGraph:
         """Add a request-vehicle edge to the graph."""
         self.request_vehicle.setdefault(r_id, set()).add(v_id)
         self.rv_details[(r_id, v_id)] = route
+        # NEW: Reverse link: Vehicle -> Request
+        self.vehicle_request.setdefault(v_id, set()).add(r_id)
+
+    def get_requests_for_vehicle(self, v_id: str) -> set[str]:
+        """Get all requests that vehicle v_id can feasibly serve."""
+        return self.vehicle_request.get(v_id, set())
 
     # --- Getters ---
     def get_all_request_nodes(self) -> set[str]:
@@ -140,6 +149,8 @@ class RTVGraph:
     trip_vehicle_details: dict[tuple[TripId, str], FeasibleRoute] = field(
         default_factory=dict
     )
+    # NEW: Reverse index for fast vehicle lookup O(1)
+    vehicle_to_trips: dict[str, set[TripId]] = field(default_factory=dict)
 
     # --- Edge helpers ---
 
@@ -155,13 +166,21 @@ class RTVGraph:
         """
         # Trip -> vehicle
         self.trip_to_vehicles.setdefault(trip, set()).add(vehicle_id)
+
+        # NEW: Vehicle -> trip
+        self.vehicle_to_trips.setdefault(vehicle_id, set()).add(trip)
+
         # (Trip, vehicle) -> route
         self.trip_vehicle_details[(trip, vehicle_id)] = route
+
         # Request -> trip
         for r_id in trip:
             self.request_to_trips.setdefault(r_id, set()).add(trip)
 
     # --- Convenience getters ---
+    def get_trips_for_vehicle(self, v_id: str) -> set[TripId]:
+        """Get all trips that vehicle v_id can serve."""
+        return self.vehicle_to_trips.get(v_id, set())
 
     def get_trips_for_request(self, r_id: str) -> set[TripId]:
         return self.request_to_trips.get(r_id, set())
