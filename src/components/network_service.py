@@ -31,8 +31,6 @@ class NetworkXService(INetworkService):
         self, origin_node: int, destination_node: int
     ) -> NetworkPath | None:
         # L2: DuckDB hot table
-        if origin_node == destination_node:
-            raise ValueError("Origin and destination nodes are the same")
 
         hit = self._cache.get_simple(origin_node, destination_node)
         if hit:
@@ -42,26 +40,6 @@ class NetworkXService(INetworkService):
                 return None
             return NetworkPath(travel_time=time_s, travel_distance=dist_m)
         else:
-            nodes = nx.shortest_path(
-                self.G, origin_node, destination_node, weight="travel_time"
-            )
-
-            logger.warning(
-                f"Cache miss L1/L2 for shortest path {origin_node} -> {destination_node}"
-            )
-            total_time = 0.0
-            total_dist = 0.0
-            for u, v in zip(nodes, nodes[1:]):
-                edge_attr = min(self.G[u][v].values(), key=lambda a: a["travel_time"])
-                travel_time = float(edge_attr["travel_time"])
-                travel_distance = float(edge_attr.get("length", 0.0))
-                total_time += travel_time
-                total_dist += travel_distance
-            logger.warning(
-                f"Computed shortest path {origin_node} -> {destination_node} with time {total_time} and distance {total_dist}"
-            )
-
-            logger.warning(f"Computed path nodes: {nodes}")
             raise RuntimeError("I think we have compueted all pairs already")
 
         # Compute on miss

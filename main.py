@@ -63,12 +63,13 @@ def main(
         t_now, all_requests_in_pool, vehicle_avail_pool = batch
         batch_datetime = provider.get_simulation_clock().from_relative_seconds(t_now)
 
+        if len(all_requests_in_pool) < 100:
+            continue
+
         start_loop_time = time.perf_counter()
         logger.info("--- Batch %d starting at t=%.2f ---", batch_count, t_now)
         logger.info(f"--------- {batch_datetime.isoformat()[:-6]} ---------")
         logger.info("Found %s new requests in this batch.", len(all_requests_in_pool))
-        # if len(all_requests_in_pool) < 10:
-        #     continue
 
         # 3. Build RV Graph (Algorithm Step 1)
         rv_graph = rv_builder.build_graph(all_requests_in_pool, vehicle_avail_pool)
