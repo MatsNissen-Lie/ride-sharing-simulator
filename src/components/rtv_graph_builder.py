@@ -1,3 +1,4 @@
+from config.config import MAX_REQUESTS, MAX_REQUESTS_ABOVE_CAPACITY
 from src.components.rv_graph_builder import RVGraph
 from src.interfaces import FeasibleRoute
 from collections import defaultdict
@@ -81,8 +82,9 @@ class RTVGraphBuilder(IRTVGraphBuilder):
         m = len(v_avail.passengers_onboard)
         # Capacity check: limit new requests to available seats
         # Also hard-cap at 4 per Alonso-Mora logic if needed, or use vehicle capacity
+        # available_seats = max(v_avail.capacity - m, MAX_REQUESTS_ABOVE_CAPACITY)
         available_seats = v_avail.capacity - m
-        limit_k = min(max_trip_size, available_seats)
+        limit_k = min(max_trip_size, available_seats, MAX_REQUESTS)
 
         if limit_k <= 0:
             return

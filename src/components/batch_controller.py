@@ -2,8 +2,9 @@
 
 from collections.abc import Iterable, Iterator
 from typing import Set, Tuple
+import bisect
 
-from config.config import OMEGA
+from config.config import OMEGA, BATCH_DURATION
 from src.interfaces.batch_control import IBatchController
 from src.interfaces import (
     VehicleAvailability,
@@ -23,6 +24,8 @@ class BatchController(IBatchController):
     def __init__(self, network: INetworkService, vehicles: Iterable[Vehicle]) -> None:
         super().__init__(network, vehicles)
         self._id_to_vehicle: dict[str, Vehicle] = {v.id: v for v in self._fleet}
+        # Optimized history: separate lists for bisect
+        self._batch_end_times: list[float] = []
 
     def project_fleet_and_update_requests(
         self, t_now: float
@@ -104,9 +107,12 @@ class BatchController(IBatchController):
             onboard = v.passengers_onboard  # mutate in place
             stops = list(v.current_route.stops)
 
+            # Use a local time for this vehicle to avoid polluting t_now for others
+            vehicle_t_now = t_now
+
             # If for some reason t_now is before assignment, clamp
-            if t_now < cur_time:
-                t_now = cur_time
+            if vehicle_t_now < cur_time:
+                vehicle_t_now = cur_time
 
             route_finished = True
 
@@ -114,8 +120,8 @@ class BatchController(IBatchController):
                 path = get_path(cur_node, stop.node)
                 arrival = cur_time + path.travel_time
 
-                if arrival <= t_now:
-                    # Fully reach this stop before or at t_now → serve it
+                if arrival <= vehicle_t_now:
+                    # Fully reach this stop before or at vehicle_t_now → serve it
                     cur_time = arrival
                     cur_node = stop.node
 
@@ -128,25 +134,37 @@ class BatchController(IBatchController):
                                     pickup_time=cur_time,
                                 )
                             )
+                            # remove the request once it is picked up
+                            del self._request_index[stop.request_id]
                     else:
                         target_id = stop.request_id
                         onboard = {
                             p for p in onboard if p.original_request.id != target_id
                         }
-                        # TODO: REMOVE passenger; REMOVE FROM request_dict
-                        del self._request_index[target_id]
+                        if target_id in self._request_index:
+                            raise RuntimeError(
+                                f"Request {target_id} still in index after drop-off by vehicle {v.id}"
+                            )
 
                     continue  # proceed to next stop
 
-                # --- First stop we *haven't* reached by t_now ---
+                # --- First stop we *haven't* reached by vehicle_t_now ---
                 route_finished = False
 
                 # 1) Snap physical location along this leg to a graph node
                 anchor_node, anchor_time = self._snap_to_next_node_on_leg(
                     path=path,
                     leg_start_time=cur_time,
-                    t_now=t_now,
+                    t_now=vehicle_t_now,
                 )
+
+                if anchor_time < vehicle_t_now:
+                    path_sum = sum(path.travel_times) if path.travel_times else 0
+                    raise ValueError(
+                        f"Snap failed for {v.id}: anchor_time={anchor_time} < t_now={vehicle_t_now}. "
+                        f"cur_time={cur_time}, path_tt={path.travel_time}, path_sum={path_sum}, "
+                        f"arrival={arrival}, path_nodes={path.nodes}, path_times={path.travel_times}"
+                    )
 
                 # 2) Compute original scheduled arrival times for *all remaining* stops
                 #    to generate promised pickup times.
@@ -191,7 +209,12 @@ class BatchController(IBatchController):
                 # v.current_route = None  # TODO: SHOULD THIS ROUTE BE TRIMMED? What if the planner does not assign a new route? we still have to drop off people!
 
                 # 4) Vehicle availability: it's anchored at this node,
-                #    and can be used for new routes no earlier than anchor_time (>= t_now).
+                #    and can be used for new routes no earlier than anchor_time (>= vehicle_t_now).
+                if anchor_time < t_now:
+                    raise ValueError(
+                        f"Vehicle {v.id} projected available_from_time {anchor_time} is before batch time {t_now}"
+                    )
+
                 snapshots.add(
                     VehicleAvailability(
                         vehicle_id=v.id,
@@ -205,23 +228,35 @@ class BatchController(IBatchController):
                 break  # done with this vehicle
 
             if route_finished:
-                # We have served all stops by or before t_now → route is done
+                # We have served all stops by or before vehicle_t_now → route is done
                 v.last_visited_node = cur_node
                 v.last_visited_time = cur_time
                 v.passengers_onboard = onboard
                 v.current_route = None
                 v.route_assignment_time = None
 
+                available_from = max(vehicle_t_now, cur_time)
+                if available_from < t_now:
+                    raise ValueError(
+                        f"Vehicle {v.id} projected available_from_time {available_from} is before batch time {t_now}"
+                    )
+
                 snapshots.add(
                     VehicleAvailability(
                         vehicle_id=v.id,
                         capacity=v.capacity,
                         available_at_node=cur_node,
-                        # It is effectively idle at t_now
-                        available_from_time=max(t_now, cur_time),
-                        passengers_onboard=frozenset(onboard),
+                        # It is effectively idle at vehicle_t_now
+                        available_from_time=available_from,
+                        passengers_onboard=frozenset(),  # frozenset(onboard),
                         remaining_stops_to_serve=(),
                     )
+                )
+
+        for snapshot in snapshots:
+            if snapshot.available_from_time < t_now:
+                raise ValueError(
+                    f"Vehicle {snapshot.vehicle_id} projected availability {snapshot.available_from_time} is before batch time {t_now}"
                 )
 
         return snapshots, last_promised
@@ -273,6 +308,11 @@ class BatchController(IBatchController):
 
         # If we get here, we've fully traversed the leg and t < t_now.
         # Caller should generally avoid this, but fall back safely:
+        if t < t_now:
+            raise ValueError(
+                f"Snap reached end of leg but t={t} < t_now={t_now}. "
+                f"leg_start={leg_start_time}, path_times={path.travel_times}"
+            )
         return path.nodes[-1], t
 
     def convert_meta_requests(self, new_meta: Iterable[MetaRequest]) -> Set[Request]:
@@ -348,6 +388,22 @@ class BatchController(IBatchController):
             batch_requests, snapshots = self.prepare_batch(
                 t_now=t_window_end, new_meta=window_meta
             )
+
+            # validate that all vehicle availabilities are >= t_window_end
+            # and all request times are <= t_window_end
+            self._validate_batch_consistency(
+                t_now=t_window_end,
+                snapshots=snapshots,
+                requests=batch_requests,
+            )
+
+            # Record batch history
+            self._batch_end_times.append(t_window_end)
+
+            # Prune history: remove batches older than OMEGA (plus a buffer)
+            cutoff_time = t_window_end - OMEGA - BATCH_DURATION
+            while self._batch_end_times and self._batch_end_times[0] < cutoff_time:
+                self._batch_end_times.pop(0)
 
             if batch_requests or snapshots:
                 yield t_window_end, batch_requests, snapshots
@@ -441,6 +497,44 @@ class BatchController(IBatchController):
 
         for req_id in to_remove:
             del self._request_index[req_id]
+
+    def get_batch_index(self, t: float) -> int:
+        """
+        Returns the batch index for a given time t using bisect for O(log N) lookup.
+        """
+        idx = bisect.bisect_right(self._batch_end_times, t)
+
+        if idx < len(self._batch_end_times):
+            return idx
+
+        # If t is beyond our history (future), it belongs to the next batch
+        raise ValueError(f"Time {t} is beyond known batch end times.")
+
+    def get_requests_by_batch(self) -> dict[float, list[Request]]:
+        """
+        Groups all currently active requests by their origin batch index.
+        """
+        grouped: dict[float, list[Request]] = {}
+        for req in self._request_index.values():
+            batch_time = self._batch_end_times[self.get_batch_index(req.request_time)]
+            grouped.setdefault(batch_time, []).append(req)
+        return grouped
+
+    def _validate_batch_consistency(
+        self, t_now: float, snapshots: Set[VehicleAvailability], requests: Set[Request]
+    ) -> None:
+        """Validate that all vehicle availabilities are >= t_now
+        and all request times are <= t_now."""
+        for snapshot in snapshots:
+            if snapshot.available_from_time < t_now:
+                raise ValueError(
+                    f"Vehicle {snapshot.vehicle_id} projected availability {snapshot.available_from_time} is before batch time {t_now}"
+                )
+        for req in requests:
+            if req.request_time > t_now:
+                raise ValueError(
+                    f"Request {req.id} has request_time {req.request_time} after batch time {t_now}"
+                )
 
 
 __all__ = ["BatchController"]

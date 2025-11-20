@@ -456,7 +456,7 @@ def _pairs_need_resample(
         def eq(u, v):
             cu = node2scc.get(int(u))
             cv = node2scc.get(int(v))
-            return (cu is not None) and (cv is not None) and (cu == cv)
+            return (cu is not None) and (cv is not None) and (cu == cv) and (u != v)
 
         mismatch = np.fromiter(
             (not eq(pu_nodes[i], do_nodes[i]) for i in idxs), bool, count=idxs.size
@@ -535,7 +535,7 @@ def _batch_resample_indices(
         def eq(u, v):
             cu = node2scc.get(int(u))
             cv = node2scc.get(int(v))
-            return (cu is not None) and (cv is not None) and (cu == cv)
+            return (cu is not None) and (cv is not None) and (cu == cv) and (u != v)
 
         still_mismatch[ok_nodes] = np.fromiter(
             (not eq(pu_nodes[i], do_nodes[i]) for i in sub), bool, count=sub.size
@@ -640,7 +640,9 @@ def merge_month_temp_files(
             continue
 
     if total_rows == 0:
-        logger.info("Merged %d temp files for %s but no rows remain", len(dfs), month_key)
+        logger.info(
+            "Merged %d temp files for %s but no rows remain", len(dfs), month_key
+        )
         return 0, []
 
     parts: list[Path] = []
@@ -801,19 +803,6 @@ def process_trip_file(
         )
     )
     logger.info(summary)
-
-    # TEST_PATH = True
-    # if TEST_PATH:
-    #     orig_nodes = trips["orig_node"].to_numpy()
-    #     dest_nodes = trips["dest_node"].to_numpy()
-    #     for i in range(final_count):
-    #         orig_node = orig_nodes[i]
-    #         dest_node = dest_nodes[i]
-    #         if orig_node is None or dest_node is None:
-    #             continue
-    #         length = network_service.get_shortest_path(int(orig_node), int(dest_node))
-    #         if length is None:
-    #             raise ValueError("Invalid path after snapping!")
 
     stats = TripStats(
         total_before=total_before,

@@ -11,6 +11,14 @@ BATCH_DURATION = 30  # 30 seconds
 # data
 NUMBER_OF_VEHICLES = 20
 
+# max passengers to consider in route planning
+MAX_PASSENGERS = 4
+MAX_REQUESTS = 2
+MAX_REQUESTS_ABOVE_CAPACITY = 2
+
+PLOT_RV_GRAPH = False
+PLOT_RTV_GRAPH = False
+
 
 __all__ = [
     "OMEGA",

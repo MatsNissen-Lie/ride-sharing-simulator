@@ -1,6 +1,7 @@
 import time
 
 from config import BATCH_DURATION, get_logger, NUMBER_OF_VEHICLES
+from config.config import PLOT_RTV_GRAPH
 from config.paths import PLOT_DIR
 from src.components.batch_controller import BatchController
 from src.components.rtv_graph_builder import RTVGraphBuilder
@@ -66,8 +67,8 @@ def main(
         logger.info("--- Batch %d starting at t=%.2f ---", batch_count, t_now)
         logger.info(f"--------- {batch_datetime.isoformat()[:-6]} ---------")
         logger.info("Found %s new requests in this batch.", len(all_requests_in_pool))
-        if len(all_requests_in_pool) < 10:
-            continue
+        # if len(all_requests_in_pool) < 10:
+        #     continue
 
         # 3. Build RV Graph (Algorithm Step 1)
         rv_graph = rv_builder.build_graph(all_requests_in_pool, vehicle_avail_pool)
@@ -82,22 +83,24 @@ def main(
             batch_rtv_end - batch_start,
         )
         # logg number of trips and num
-        plot_rv_graph(
-            rv_graph,
-            vehicle_avail_pool,
-            all_requests_in_pool,
-            provider.graph,
-            output_dir=PLOT_DIR,
-            datetime=batch_datetime,
-        )
-        plot_rtv_graph(
-            rtv_graph,
-            vehicle_avail_pool,
-            all_requests_in_pool,
-            provider.graph,
-            output_dir=PLOT_DIR,
-            datetime=batch_datetime,
-        )
+        if PLOT_RTV_GRAPH:
+            plot_rv_graph(
+                rv_graph,
+                vehicle_avail_pool,
+                all_requests_in_pool,
+                provider.graph,
+                output_dir=PLOT_DIR,
+                datetime=batch_datetime,
+            )
+        if PLOT_RTV_GRAPH:
+            plot_rtv_graph(
+                rtv_graph,
+                vehicle_avail_pool,
+                all_requests_in_pool,
+                provider.graph,
+                output_dir=PLOT_DIR,
+                datetime=batch_datetime,
+            )
         # 5. Solve Assignment (Algorithm Step 3)
         if assignment_solver is None:
             raise RuntimeError("Assignment solver must be provided.")
@@ -107,6 +110,11 @@ def main(
             vehicle_avail_pool,
             solver_timeout=BATCH_DURATION * 1.2,  # Give 120% of batch time
             current_time=t_now,  # Pass current time
+        )
+
+        logger.info(
+            "Assignment solved in %.4f seconds.",
+            time.perf_counter() - batch_rtv_end,
         )
 
         # 6. Commit Assignment (Controller Step 2)

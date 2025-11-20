@@ -4,8 +4,7 @@ import itertools
 from typing import Iterable, cast
 
 from config import BATCH_DURATION, DELTA, OMEGA, get_logger
-from src.components.batch_controller import BatchController
-from src.components.network_service import NetworkXService
+from config.config import MAX_REQUESTS
 from src.components.utils import validate_route_stops
 
 from src.interfaces import (
@@ -13,14 +12,14 @@ from src.interfaces import (
     FeasibleRoute,
     Infeasible,
     Request,
-    Route,
     Stop,
-    Vehicle,
+    Route,
     Passenger,
     INetworkService,
     VehicleAvailability,
     ISingleVehicleRoutePlanner,
 )
+from src.interfaces.data_models import NetworkPath
 
 
 logger = get_logger(__name__)
@@ -51,7 +50,6 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
             )
 
         if vehicle is not None:
-            self._validate_batch_window(vehicle, requests_to_add)
             if len(requests_to_add) == 1:
                 return self._handle_rv_check(
                     vehicle,
@@ -81,9 +79,21 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
 
         r1, r2 = tuple(requests)
 
+        # check the the request ids are different
+        if r1.id == r2.id:
+            raise ValueError("RoutePlanner received two requests with the same ID.")
+
         # 1. Lower-Bound Check
-        path_1_to_2 = self._network.get_shortest_path(r1.origin_node, r2.origin_node)
-        path_2_to_1 = self._network.get_shortest_path(r2.origin_node, r1.origin_node)
+        path_1_to_2 = (
+            self._network.get_shortest_path(r1.origin_node, r2.origin_node)
+            if r1.origin_node != r2.origin_node
+            else NetworkPath(travel_time=0.0, travel_distance=0.0)
+        )
+        path_2_to_1 = (
+            self._network.get_shortest_path(r2.origin_node, r1.origin_node)
+            if r2.origin_node != r1.origin_node
+            else NetworkPath(travel_time=0.0, travel_distance=0.0)
+        )
         tt_1_to_2 = path_1_to_2.travel_time if path_1_to_2 else float("inf")
         arrival_at_r2 = r1.request_time + tt_1_to_2
         if arrival_at_r2 - r2.request_time > OMEGA:
@@ -131,6 +141,7 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
                 stops_to_visit=list(route_stops),
                 capacity=2,
                 travel_time_cache=travel_time_cache,
+                is_rr_check=True,
             )
 
             if sim_result.is_feasible and isinstance(sim_result, FeasibleRoute):
@@ -298,7 +309,8 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
         # ;=; \frac{(m+2k)!}{2^k}.
         # ]
 
-        if k > 3 or m + k > 4:
+        # when k is 4 we should use rcspp or something else
+        if k > MAX_REQUESTS or m + k > 4:
             raise NotImplementedError(
                 f"RoutePlanner exhaustive search only supports k <= 3 and m + k <= 4 (got k={k}, m={m})."
             )
@@ -447,6 +459,7 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
         stops_to_visit: list[Stop],
         capacity: int,
         travel_time_cache: dict[tuple[int, int], float],
+        is_rr_check: bool = False,
     ) -> FeasibilityResult:
         """
         A general-purpose route simulator that checks all constraints.
@@ -496,8 +509,16 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
             req = all_requests_map[stop.request_id]
 
             if stop.is_pickup:
+                # Enforce causality: cannot pick up before request is made
+                if current_time < req.request_time and not is_rr_check:
+                    raise ValueError(
+                        f"Attempting to pick up request {req.id} before it was made."
+                    )
+                elif is_rr_check:
+                    # In R-R checks, we allow waiting at the pickup node
+                    current_time = max(current_time, req.request_time)
+
                 # 2. Check Wait Time (Omega)
-                wait_time = current_time - req.request_time
                 wait_time = current_time - req.request_time
                 max_wait_allowed = OMEGA
                 if req.promised_pickup_time is not None:
