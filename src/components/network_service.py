@@ -33,7 +33,12 @@ class NetworkXService(INetworkService):
         hit = self._cache.get_simple(origin_node, destination_node)
         if hit:
             time_s, dist_m = hit
+            # Check for "no path" marker
+            if time_s < 0:
+                return None
             return NetworkPath(travel_time=time_s, travel_distance=dist_m)
+        else:
+            raise RuntimeError("I think we have compueted all pairs already")
 
         # Compute on miss
         try:
@@ -41,6 +46,8 @@ class NetworkXService(INetworkService):
                 self.G, origin_node, destination_node, weight="travel_time"
             )
         except nx.NetworkXNoPath:
+            # Store "no path" to prevent re-computation
+            self._cache.put_no_path(origin_node, destination_node)
             return None
 
         total_time = 0.0
@@ -66,6 +73,10 @@ class NetworkXService(INetworkService):
         time_s, dist_m, nodes, edge_times = self._cache.get_both(
             origin_node, destination_node
         )
+
+        # Check for "no path" marker
+        if time_s is not None and time_s < 0:
+            return None
 
         # If we have everything, return immediately
         if (
@@ -113,6 +124,8 @@ class NetworkXService(INetworkService):
                 self.G, origin_node, destination_node, weight="travel_time"
             )
         except nx.NetworkXNoPath:
+            # Store "no path" to prevent re-computation
+            self._cache.put_no_path(origin_node, destination_node)
             return None
 
         total_time = 0.0

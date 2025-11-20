@@ -1,13 +1,11 @@
 from dataclasses import dataclass, field
-from typing import FrozenSet
-
 from src.interfaces import (
     FeasibleRoute,
 )
-from src.interfaces.data_models import Request
+from src.interfaces.data_models import TripId
 
 
-TripId = FrozenSet[str]
+# TripId = FrozenSet[str]
 
 
 @dataclass

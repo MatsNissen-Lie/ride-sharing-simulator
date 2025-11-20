@@ -11,6 +11,7 @@ class DuckDBPathCache:
     Tables:
       - time_simple(o BIGINT, d BIGINT, time_s DOUBLE, dist_m DOUBLE)
         * tiny hot path table
+        * time_s = -1.0, dist_m = -1.0 indicates NO PATH exists
       - path_extended(o BIGINT, d BIGINT, nodes BIGINT[], edge_times DOUBLE[])
         * optional, only populated when extended results are requested
     """
@@ -79,6 +80,10 @@ class DuckDBPathCache:
             "INSERT OR REPLACE INTO time_simple(o,d,time_s,dist_m) VALUES (?,?,?,?)",
             [int(o), int(d), float(time_s), float(dist_m)],
         )
+
+    def put_no_path(self, o: int, d: int) -> None:
+        """Explicitly store that there is NO path between o and d (using -1.0)."""
+        self.put_simple(o, d, -1.0, -1.0)
 
     # ---------- extended (optional) ----------
     def get_extended(

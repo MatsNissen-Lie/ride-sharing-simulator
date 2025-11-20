@@ -6,7 +6,8 @@
 # ---------------------------------------------------------------------------
 
 from dataclasses import dataclass, field
-from typing import Optional, Tuple
+from typing import FrozenSet, Optional, Tuple
+
 
 # ---------------------------------------------------------------------------
 #  I. Core Data Entities and Services
@@ -232,17 +233,29 @@ class Infeasible(FeasibilityResult):
         object.__setattr__(self, "is_feasible", False)
 
 
+TripId = FrozenSet[str]
+
+
+@dataclass(frozen=True)
+class Assignment:
+    vehicle_id: str
+    trip_id: "TripId"
+    route: Route
+    cost: float
+
+
 @dataclass(frozen=True)
 class AssignmentResult:
     """The output of the main assignment ILP."""
 
-    assignments: list[Tuple[VehicleAvailability, set[Request], Route]]
+    assignments: set[Assignment]
     unassigned_requests: set[Request]
     total_cost: float
+    is_optimal: bool
 
 
 @dataclass(frozen=True)
 class RebalancingResult:
     """The output of the rebalancing LP."""
 
-    assignments: list[Tuple[VehicleAvailability, Request]]
+    assignments: list[Tuple[VehicleAvailability, int]]  # (vehicle, target_node)

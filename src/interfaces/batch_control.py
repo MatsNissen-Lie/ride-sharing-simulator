@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
-from typing import Iterator, Tuple, Set, Optional
+from typing import Iterator
 
 from src.interfaces import (
     AssignmentResult,
@@ -22,9 +22,9 @@ class IBatchController(ABC):
     """
 
     # ---- Wiring ----
-    def __init__(self, network: INetworkService, vehicles: list[Vehicle]) -> None:
+    def __init__(self, network: INetworkService, vehicles: Iterable[Vehicle]) -> None:
         self._network = network
-        self._fleet: list[Vehicle] = vehicles
+        self._fleet: list[Vehicle] = list(vehicles)
         self._request_index: dict[str, Request] = {}
         super().__init__()
 
@@ -34,7 +34,7 @@ class IBatchController(ABC):
         self,
         meta_stream: Iterable[MetaRequest],
         batch_window: float,
-    ) -> Iterator[Tuple[float, Set[Request], Set[VehicleAvailability]]]:
+    ) -> Iterator[tuple[float, set[Request], set[VehicleAvailability]]]:
         """
         Yields successive batches of (t_window_end, Requests, VehicleAvailability)
         covering the incoming meta_stream in windows of size batch_window.
@@ -45,7 +45,7 @@ class IBatchController(ABC):
     def project_fleet_and_update_requests(
         self,
         t_now: float,
-    ) -> Set[VehicleAvailability]:
+    ) -> set[VehicleAvailability]:
         """
         Project current vehicles to (available_at_node, available_from_time),
         trim served stops, and return:
@@ -60,7 +60,7 @@ class IBatchController(ABC):
     def convert_meta_requests(
         self,
         new_meta: Iterable[MetaRequest],
-    ) -> Set[Request]:
+    ) -> set[Request]:
         """
         Converts incoming MetaRequest ->
         Request (computing earliest_dropoff_time = request_time + τ(o,d)),
@@ -74,7 +74,7 @@ class IBatchController(ABC):
         self,
         t_now: float,
         new_meta: Iterable[MetaRequest],
-    ) -> Tuple[Set[Request], Set[VehicleAvailability]]:
+    ) -> tuple[set[Request], set[VehicleAvailability]]:
         """
         Calls project_fleet_and_promises(t_now), then converts incoming MetaRequest ->
         Request (computing earliest_dropoff_time = request_time + τ(o,d)),

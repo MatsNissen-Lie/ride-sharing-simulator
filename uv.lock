@@ -536,6 +536,21 @@ wheels = [
 ]
 
 [[package]]
+name = "gurobipy"
+version = "13.0.0"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/71/70/ede0eb4a7c39fb41ef2b19051a1b6d36167d423043cf797095a66a5b7b39/gurobipy-13.0.0-cp312-cp312-macosx_10_13_universal2.whl", hash = "sha256:a9b74396c0071eb4438a3c8b81864c54a8e8ab104f10584d7fe647434428fb4f", size = 15953916, upload-time = "2025-11-11T00:29:48.187Z" },
+    { url = "https://files.pythonhosted.org/packages/29/45/8910b096b517abd328415c0aabb1bac315661d2e841ee07f777165ee7ddb/gurobipy-13.0.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:9d770daa4c3f0a19feb667116b519a4128d3827df07676946ec90b3b2392129a", size = 14841657, upload-time = "2025-11-11T00:29:51.735Z" },
+    { url = "https://files.pythonhosted.org/packages/9b/43/03bb573d75603b6996aee04622380dbb86d9a99407d2affcdf1ff3a614c1/gurobipy-13.0.0-cp312-cp312-manylinux_2_26_aarch64.whl", hash = "sha256:d5c7e8e8ade1d65ea1cdb1cd20ad87d18f6e7a38f215601895ccd44afc932ce1", size = 87197261, upload-time = "2025-11-11T00:30:07.215Z" },
+    { url = "https://files.pythonhosted.org/packages/2c/10/8b18d76ef909fb93db6071f7a9760bcb92993c3bf59ded6b185ad0f45346/gurobipy-13.0.0-cp312-cp312-win_amd64.whl", hash = "sha256:66347f37bcf7d9208815da87efa3189cf76d57859412aecbbf4aaa970acf2335", size = 11217491, upload-time = "2025-11-11T00:30:12.856Z" },
+    { url = "https://files.pythonhosted.org/packages/ee/2c/2d05d2cb9c9de8a3bbb5da21dfbfa608c13e9cff683ffb32a7a04cf5ced4/gurobipy-13.0.0-cp313-cp313-macosx_10_13_universal2.whl", hash = "sha256:f5a9d7b25aaff4a2317ff0edef1080a85ebfb50143956c0e324428a249970c11", size = 15943425, upload-time = "2025-11-11T00:30:20.922Z" },
+    { url = "https://files.pythonhosted.org/packages/63/db/0cb931ac18636ea48bd0bdae34168843b8739c4816ca3295713e0d2d802d/gurobipy-13.0.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:ad200cc39680a7e126cf65e5a36197adb56cbca470fc2731705e38d4dfc8b13c", size = 14843598, upload-time = "2025-11-11T00:30:24.733Z" },
+    { url = "https://files.pythonhosted.org/packages/56/e0/e6416d22716a79e8c122a04884a7c7c15a6441bcd0171258d73211067f2c/gurobipy-13.0.0-cp313-cp313-manylinux_2_26_aarch64.whl", hash = "sha256:d31e6038afa6d0bca0545ba1ea119f3726965dc94d75fb81a69aaaecfbb71682", size = 87198134, upload-time = "2025-11-11T00:30:43.233Z" },
+    { url = "https://files.pythonhosted.org/packages/52/1b/93d44f5b8f9960cf74e312d905ed1cf02783466c222b542d78493285cd79/gurobipy-13.0.0-cp313-cp313-win_amd64.whl", hash = "sha256:8e36c58e2c1fa0c0d77d369cce2ad4d228caf863b15b151ef886aec1c5e8cd1b", size = 11211650, upload-time = "2025-11-11T00:30:49.264Z" },
+]
+
+[[package]]
 name = "h11"
 version = "0.16.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1993,6 +2008,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "duckdb" },
     { name = "geopandas" },
+    { name = "gurobipy" },
     { name = "matplotlib" },
     { name = "networkx" },
     { name = "osmnx" },
@@ -2014,6 +2030,7 @@ dev = [
 requires-dist = [
     { name = "duckdb", specifier = ">=1.4.2" },
     { name = "geopandas", specifier = ">=1.1.1" },
+    { name = "gurobipy", specifier = ">=13.0.0" },
     { name = "matplotlib", specifier = ">=3.10.7" },
     { name = "networkx", specifier = ">=3.5" },
     { name = "osmnx", specifier = ">=2.0.6" },

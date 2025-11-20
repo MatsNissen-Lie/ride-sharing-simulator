@@ -8,6 +8,7 @@ from src.components.rv_graph_builder import RVGraphBuilder
 from src.components.network_service import NetworkXService
 from src.components.route_planner import RoutePlanner
 from src.components.simulation_data_provider import SimulationDataProvider
+from src.components.assignment_solver import GurobiAssignmentSolver
 from src.interfaces.batch_control import IBatchController
 from src.interfaces.services import (
     IAssignmentSolver,
@@ -48,10 +49,11 @@ def main(
 
     # State Management (Your new interface)
     controller = controller or BatchController(
-        network_service, list(provider.iter_vehicles(NUMBER_OF_VEHICLES))
+        network_service, provider.iter_vehicles(NUMBER_OF_VEHICLES)
     )
     rv_builder = RVGraphBuilder(planner)
     rtv_builder = RTVGraphBuilder(planner)
+    assignment_solver = GurobiAssignmentSolver()
 
     batch_count = 0
     for batch in controller.iter_batches(provider.iter_requests(), BATCH_DURATION):
@@ -104,6 +106,7 @@ def main(
             all_requests_in_pool,
             vehicle_avail_pool,
             solver_timeout=BATCH_DURATION * 1.2,  # Give 120% of batch time
+            current_time=t_now,  # Pass current time
         )
 
         # 6. Commit Assignment (Controller Step 2)

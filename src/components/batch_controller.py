@@ -10,7 +10,6 @@ from src.interfaces import (
     AssignmentResult,
     INetworkService,
     MetaRequest,
-    NetworkPath,
     Passenger,
     Request,
     Vehicle,
@@ -21,8 +20,9 @@ from src.interfaces.data_models import NetworkPathExtended, Route
 class BatchController(IBatchController):
     """Minimal batch controller focusing on MetaRequest conversion."""
 
-    def __init__(self, network: INetworkService, vehicles: list[Vehicle]) -> None:
+    def __init__(self, network: INetworkService, vehicles: Iterable[Vehicle]) -> None:
         super().__init__(network, vehicles)
+        self._id_to_vehicle: dict[str, Vehicle] = {v.id: v for v in self._fleet}
 
     def project_fleet_and_update_requests(
         self, t_now: float
@@ -381,16 +381,10 @@ class BatchController(IBatchController):
         """
         Apply the ILP solution to the controller-owned fleet.
 
-        For each (VehicleAvailability, assigned_requests, Route) triple in
-        result.assignments:
-
+        For each Assignment in result.assignments:
           - Find the corresponding Vehicle in self._fleet.
-          - Set its live state to match the VehicleAvailability snapshot:
-                * last_visited_node      = available_at_node
-                * last_visited_time      = available_from_time
-                * passengers_onboard     = va.passengers_onboard
           - Attach the new Route as current_route, with
-                * route_assignment_time  = available_from_time
+                * route_assignment_time  = vehicle.last_visited_time
 
         Vehicles that are NOT mentioned in result.assignments keep whatever
         route/state _project_fleet() left them with (e.g. a dropoff-only
@@ -401,26 +395,22 @@ class BatchController(IBatchController):
         _expire_stale_requests.
         """
         # Build a quick lookup from vehicle_id -> Vehicle
-        id_to_vehicle: dict[str, Vehicle] = {v.id: v for v in self._fleet}
+        # id_to_vehicle: dict[str, Vehicle] = {v.id: v for v in self._fleet}
 
-        for va, assigned_reqs, route in result.assignments:
-            vehicle = id_to_vehicle.get(va.vehicle_id)
+        for assignment in result.assignments:
+            vehicle = self._id_to_vehicle.get(assignment.vehicle_id)
             if vehicle is None:
                 raise RuntimeError(
-                    f"Assignment references unknown vehicle_id={va.vehicle_id!r}"
+                    f"Assignment references unknown vehicle_id={assignment.vehicle_id!r}"
                 )
 
-            # 1) Snap the vehicle's physical state to the availability snapshot
-            vehicle.last_visited_node = va.available_at_node
-            vehicle.last_visited_time = va.available_from_time
-            vehicle.passengers_onboard = set(va.passengers_onboard)
+            # 1) The vehicle's physical state is already snapped to the availability snapshot
+            #    by _project_fleet (called before optimization).
+            #    So vehicle.last_visited_time IS the available_from_time.
 
             # 2) Attach the new route starting from that availability time
-            vehicle.current_route = route
-            vehicle.route_assignment_time = va.available_from_time
-
-            # (Optional sanity: you could assert that all dropoffs for
-            #  vehicle.passengers_onboard are present in `route.stops`.)
+            vehicle.current_route = assignment.route
+            vehicle.route_assignment_time = t_now
 
         # NOTE:
         # - result.unassigned_requests are left in self._request_index.

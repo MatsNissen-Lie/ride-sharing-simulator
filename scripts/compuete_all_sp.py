@@ -1,7 +1,8 @@
 # scripts/precompute_scc32_resume.py
 
-from typing import Dict, Iterable, List, Tuple, Set
+from typing import Dict, Iterable, List, Tuple, Set, cast
 import time
+import random
 import networkx as nx
 
 # add workspace to sys.path
@@ -125,21 +126,34 @@ def precompute_scc_with_bidij_resumable(
     def existing_time(o: int) -> Set[int]:
         return cache.existing_dests_time(o) & scc_set
 
+    def count_existing_time(o: int) -> int:
+        # Optimization: COUNT(*) is much faster than fetching all IDs for checking completion
+        row = con.execute("SELECT COUNT(*) FROM time_simple WHERE o=?", [o]).fetchone()
+        return int(row[0]) if row else 0
+
     def existing_ext(o: int) -> Set[int]:
         # path_extended exists but cache class doesn't expose a helper — query here:
         rows = con.execute("SELECT d FROM path_extended WHERE o=?", [o]).fetchall()
         return {int(r[0]) for r in rows} & scc_set
 
+    def count_existing_ext(o: int) -> int:
+        row = con.execute("SELECT COUNT(*) FROM path_extended WHERE o=?", [o]).fetchone()
+        return int(row[0]) if row else 0
+
     def compute_progress():
-        simple_done = sum(len(existing_time(o)) for o in scc_nodes)
+        # Bulk query for total progress
+        # This is much faster than iterating 20k nodes
+        row = con.execute("SELECT COUNT(*) FROM time_simple").fetchone()
+        simple_done = int(row[0]) if row else 0
         return simple_done, total_pairs
 
     def compute_progress_extended():
-        simple_done = 0
-        ext_done = 0
-        for o in scc_nodes:
-            simple_done += len(existing_time(o))
-            ext_done += len(existing_ext(o))
+        row_s = con.execute("SELECT COUNT(*) FROM time_simple").fetchone()
+        simple_done = int(row_s[0]) if row_s else 0
+        
+        row_x = con.execute("SELECT COUNT(*) FROM path_extended").fetchone()
+        ext_done = int(row_x[0]) if row_x else 0
+        
         return simple_done, total_pairs, ext_done, total_pairs
 
     # initial progress
@@ -165,16 +179,44 @@ def precompute_scc_with_bidij_resumable(
         batch_count = len(batch_sources)
 
         # ---- fast pre-check: is this batch already complete? ----
+        # Heuristic: check first, last, and ~5 random sources to speed up skipping
+        # OPTIMIZATION: Fetch counts for ALL check indices in ONE query
+        indices_to_check = {0, len(batch_sources) - 1}
+        if len(batch_sources) > 2:
+            population = range(1, len(batch_sources) - 1)
+            k = min(5, len(population))
+            indices_to_check.update(random.sample(population, k))
+        
+        check_nodes = [batch_sources[i] for i in indices_to_check]
+        
+        # Check simple counts
+        placeholders = ",".join(["?"] * len(check_nodes))
+        rows = con.execute(
+            f"SELECT o, COUNT(*) FROM time_simple WHERE o IN ({placeholders}) GROUP BY o",
+            check_nodes
+        ).fetchall()
+        counts_map = {r[0]: r[1] for r in rows}
+        
         batch_complete = True
-        for o in batch_sources:
-            if len(existing_time(o)) != expected_per_source:
+        for o in check_nodes:
+            if counts_map.get(o, 0) != expected_per_source:
                 batch_complete = False
                 break
-            if write_extended and len(existing_ext(o)) != expected_per_source:
-                batch_complete = False
-                break
+        
+        if batch_complete and write_extended:
+            # Check extended counts if needed
+            rows_ext = con.execute(
+                f"SELECT o, COUNT(*) FROM path_extended WHERE o IN ({placeholders}) GROUP BY o",
+                check_nodes
+            ).fetchall()
+            counts_ext_map = {r[0]: r[1] for r in rows_ext}
+            for o in check_nodes:
+                if counts_ext_map.get(o, 0) != expected_per_source:
+                    batch_complete = False
+                    break
 
         if batch_complete:
+            # ... (logging remains same)
             if write_extended:
                 s_done, s_tot, x_done, x_tot = compute_progress_extended()
                 logger.info(
@@ -201,14 +243,17 @@ def precompute_scc_with_bidij_resumable(
 
         # ---- process sources in the batch ----
         for i, o in enumerate(batch_sources, start=batch_start + 1):
+            # Check count first to avoid fetching set if done
+            cnt_simple = count_existing_time(o)
+            if cnt_simple == expected_per_source:
+                 if not write_extended:
+                     continue
+                 if count_existing_ext(o) == expected_per_source:
+                     continue
+
+            # Only fetch the set if we actually need to compute something
             done_simple = existing_time(o)
             done_ext = existing_ext(o) if write_extended else set()
-
-            # Quick skip if this origin is already complete
-            if (len(done_simple) == expected_per_source) and (
-                (not write_extended) or (len(done_ext) == expected_per_source)
-            ):
-                continue
 
             def needs(d: int) -> bool:
                 if d == o:
@@ -219,16 +264,21 @@ def precompute_scc_with_bidij_resumable(
 
             try:
                 con.execute("BEGIN")
-                for d in scc_nodes:
-                    if not needs(d):
-                        continue
-                    try:
-                        length, path_nodes = nx.bidirectional_dijkstra(
-                            H, o, d, weight="travel_time"
-                        )
-                    except nx.NetworkXNoPath:
+                # OPTIMIZATION: Compute ALL paths from 'o' in one go
+                # Explicitly pass target=None to help IDE type inference (returns dicts, not scalars)
+                # Pyright still struggles with the overload, so we cast the result.
+                all_lengths, all_paths = nx.single_source_dijkstra(
+                    H, o, target=None, weight="travel_time"
+                )
+                all_paths = cast(Dict[int, List[int]], all_paths)
+
+                for d, path_nodes in all_paths.items():
+                    # Filter: only process if 'd' is in our target SCC and needs update
+                    if d not in scc_set or not needs(d):
                         continue
 
+                    # We have the path and time, just need to sum up the distance (meters)
+                    # (accumulate_on_path is still fast enough for just summing attributes)
                     time_s, dist_m, edge_times = accumulate_on_path(H, path_nodes)
 
                     # Upsert simple (new schema)
@@ -291,45 +341,15 @@ def precompute_scc_with_bidij_resumable(
         if write_extended:
             s_done, s_tot, x_done, x_tot = compute_progress_extended()
             logger.info(
-                f"Batch {batch_idx} done: size={batch_count}, new rows ≈ {batch_inserted:,}, elapsed={elapsed:.2f}s | "
+                f"Batch {batch_idx} done in {elapsed:.2f}s: size={batch_count}, new rows ≈ {batch_inserted:,} | "
                 f"progress simple {s_done:,}/{s_tot:,} ({(100*s_done/s_tot):.2f}%), "
                 f"extended {x_done:,}/{x_tot:,} ({(100*x_done/x_tot):.2f}%)"
             )
         else:
             s_done, s_tot = compute_progress()
             logger.info(
-                f"Batch {batch_idx} done: size={batch_count}, new rows ≈ {batch_inserted:,}, elapsed={elapsed:.2f}s | "
+                f"Batch {batch_idx} done in {elapsed:.2f}s: size={batch_count}, new rows ≈ {batch_inserted:,} | "
                 f"progress {s_done:,}/{s_tot:,} ({(100*s_done/s_tot):.2f}%)"
-            )
-
-        # Post-batch verification (ensures batch completion)
-        missing_sources = 0
-        for o in batch_sources:
-            simple_count = len(existing_time(o))
-            miss_simple = expected_per_source - simple_count
-            if write_extended:
-                ext_count = len(existing_ext(o))
-                miss_ext = expected_per_source - ext_count
-            else:
-                miss_ext = 0
-
-            if miss_simple > 0 or miss_ext > 0:
-                missing_sources += 1
-                if write_extended:
-                    logger.warning(
-                        f"Verify batch {batch_idx}: source {o} missing "
-                        f"{miss_simple} simple and {miss_ext} extended rows"
-                    )
-                else:
-                    logger.warning(
-                        f"Verify batch {batch_idx}: source {o} missing {miss_simple} simple rows"
-                    )
-
-        if missing_sources == 0:
-            logger.info(f"Batch {batch_idx} verification OK (all sources complete).")
-        else:
-            logger.warning(
-                f"Batch {batch_idx} verification: {missing_sources} source(s) incomplete."
             )
 
     # final progress

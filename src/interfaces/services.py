@@ -142,34 +142,61 @@ class IRTVGraphBuilder(ABC):
         pass
 
 
+from abc import ABC, abstractmethod
+from typing import Set
+
+# Assuming these imports exist based on your previous code context
+from src.interfaces import (
+    AssignmentResult,
+    Request,
+    VehicleAvailability,
+)
+from src.interfaces.graphs import RTVGraph
+
+
 class IAssignmentSolver(ABC):
+    """
+    Interface for the optimization module that assigns vehicles to trips.
+    """
 
     @abstractmethod
     def solve(
         self,
         rtv_graph: RTVGraph,
-        requests: set[Request],
-        vehicles: set[VehicleAvailability],
+        requests: Set[Request],
+        vehicles: Set[VehicleAvailability],
         solver_timeout: float,
+        current_time: float,  # <-- Added as requested
     ) -> AssignmentResult:
         """
-        Formulates and solves the ILP from Algorithm 1:
+        Formulates and solves the ILP described in Section 4.4 (Optimal Assignment).
 
-        - Variables:
-          - epsilon_ij (binary) for each edge e(Trip_i, Vehicle_j) in RTVGraph.
-          - chi_k (binary) for each Request_k in 'requests'.
+        This method maps the RTVGraph data to the following mathematical model:
 
-        - Objective:
-          - min sum(c_ij * epsilon_ij) + sum(c_ko * chi_k)
-          - (c_ij is the 'cost' stored on the RTVGraph edge)
+        Sets and Parameters:
+        - R_t: Set of open requests (from `requests`).
+        - V: Set of available vehicles (from `vehicles`).
+        - E_{TV}: Feasible edges e(T, v) (from `rtv_graph`).
+        - c_{T,v}: Cost of assigning vehicle v to trip T (from `rtv_graph`).
+        - chi_r: Penalty for not serving request r (dynamic).
 
-        - Constraints:
-          - sum_i(epsilon_ij) <= 1  (Vehicle j assigned to at most one trip)
-          - sum_i_j(epsilon_ij) + chi_k = 1 (Request k is in one assigned trip OR
-                                           is unassigned, 'ignored')
+        Decision Variables:
+        - x_{T,v} (binary): 1 if vehicle v is assigned to trip T, 0 otherwise.
+        - y_r (binary): 1 if request r is NOT served in this batch, 0 otherwise.
 
-        - Must provide a 'warm start' (greedy assignment) and adhere
-          to the 'solver_timeout' to ensure 'anytime' performance.
+        Objective Function:
+        - min sum(c_{T,v} * x_{T,v}) + sum(chi_r * y_r)
+
+        Constraints:
+        1. Assign each request at most once:
+           sum(x_{T,v} | r in T) + y_r = 1    for all r in R_t
+
+        2. Assign each vehicle at most once:
+           sum(x_{T,v}) <= 1                  for all v in V
+
+        Requirements:
+        - Must provide a 'warm start' (typically a greedy assignment).
+        - Must adhere to `solver_timeout` to ensure 'anytime' performance constraints.
         """
         pass
 
