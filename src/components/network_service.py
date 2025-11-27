@@ -1,6 +1,7 @@
 from functools import lru_cache
 
 import networkx as nx
+import numpy as np
 
 from config import get_logger
 from src.database.simple_db import DuckDBPathCache
@@ -40,6 +41,9 @@ class NetworkXService(INetworkService):
                 return None
             return NetworkPath(travel_time=time_s, travel_distance=dist_m)
         else:
+            if origin_node == destination_node:
+                return NetworkPath(travel_time=0.0, travel_distance=0.0)
+            print("Cache miss in L2 DuckDB for nodes", origin_node, destination_node)
             raise RuntimeError("I think we have compueted all pairs already")
 
         # Compute on miss
@@ -151,3 +155,18 @@ class NetworkXService(INetworkService):
             travel_time=total_time,
             travel_distance=total_dist,
         )
+
+    def get_travel_time_matrix(
+        self, origins: list[int], destinations: list[int]
+    ) -> np.ndarray:
+        # L2: Fetch from DuckDB
+        matrix = self._cache.get_travel_time_matrix(origins, destinations)
+
+        # OPTIONAL: Handle cache misses (where matrix value is inf)
+        # If you want to compute missing paths on the fly and update the DB,
+        # you would identify indices where matrix[i,j] == inf, compute them using NetworkX,
+        # update the DB, and update the matrix.
+        # For high-performance pruning, it is often better to assume
+        # "inf" means "too far/unknown" and skip, OR compute strictly needed ones later.
+
+        return matrix

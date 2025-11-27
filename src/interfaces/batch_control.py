@@ -34,6 +34,7 @@ class IBatchController(ABC):
         self,
         meta_stream: Iterable[MetaRequest],
         batch_window: float,
+        min_start_time: float = 0.0,
     ) -> Iterator[tuple[float, set[Request], set[VehicleAvailability]]]:
         """
         Yields successive batches of (t_window_end, Requests, VehicleAvailability)

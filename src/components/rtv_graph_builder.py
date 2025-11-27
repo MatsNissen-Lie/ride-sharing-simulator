@@ -138,6 +138,12 @@ class RTVGraphBuilder(IRTVGraphBuilder):
         if limit_k == 2 or not T_by_size[2]:
             return
 
+        # TODO: THINK I HAVE BEEN THINKING ABOUT HOW WE BUILD TRIPS.
+        # Right now we build trips per vehicle, but we could build trips globally
+        # and then assign them to vehicles that can serve them.
+        # Do we reuse the information from smaller trips across vehicles?
+        # DO WE reuse the TRIPS OF SIZE n-1 when building trips of size n
+
         # --- [Step 3] Trips of size k >= 3 ---
         for k in range(3, limit_k + 1):
             prev_trips = T_by_size[k - 1]

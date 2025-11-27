@@ -176,6 +176,17 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
         find_best_route: bool,  # <-- NEW PARAM
     ) -> FeasibilityResult:
 
+        LB_pickup_time = availability.available_from_time + getattr(
+            self._network.get_shortest_path(
+                availability.available_at_node, request_to_add.origin_node
+            ),
+            "travel_time",
+            float("inf"),
+        )
+
+        if LB_pickup_time - request_to_add.request_time > OMEGA:
+            return Infeasible(reason="Fails lower-bound wait time")
+
         passengers_onboard = availability.passengers_onboard
         m = len(passengers_onboard)
 
@@ -227,14 +238,6 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
             p.original_request.id: p.original_request for p in passengers_onboard
         }
         all_requests_map[request_to_add.id] = request_to_add
-
-        # 3. YOUR CHECK: Lower-bound pickup time
-        LB_pickup_time = (
-            availability.available_from_time
-            + travel_time_cache[(availability.available_at_node, p_new.node)]
-        )
-        if LB_pickup_time - request_to_add.request_time > OMEGA:
-            return Infeasible(reason="Fails lower-bound wait time")
 
         # 4. Iterate all valid PERMUTATIONS of existing stops
         #    and all valid INSERTIONS of new stops
@@ -309,10 +312,6 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
         # Identify all necessary stops
         # IDs: use integers 0..N-1 for speed in recursion
         stops: list[Stop] = []
-
-        # Existing passengers (Drop-off only)
-        # We map their original request ID to a "satisfied" boolean logic
-        req_id_to_idx = {}
 
         # 1. Add existing drop-offs
         for p in availability.passengers_onboard:

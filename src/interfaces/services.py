@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
 from functools import lru_cache
 
+import numpy as np
+
 from src.interfaces.data_models import (
     AssignmentResult,
     FeasibilityResult,
@@ -36,6 +38,15 @@ class INetworkService(ABC):
         along with travel times between each consecutive node.
         """
         pass
+
+    @abstractmethod
+    def get_travel_time_matrix(
+        self, origins: list[int], destinations: list[int]
+    ) -> np.ndarray:
+        """
+        Returns a matrix of travel times between all origin-destination pairs.
+        """
+        raise NotImplementedError("get_travel_matrix not implemented in base class")
 
 
 # ---------------------------------------------------------------------------

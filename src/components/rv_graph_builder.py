@@ -25,8 +25,10 @@ pairings. The resulting graph is returned as an instance of
 
 from collections.abc import Iterable
 from typing import cast
+import numpy as np
 
 from config import get_logger
+from config.config import OMEGA
 from src.interfaces import (
     ISingleVehicleRoutePlanner,
     VehicleAvailability,
@@ -36,6 +38,7 @@ from src.interfaces import (
     Request,
 )
 from src.interfaces.graphs import RVGraph
+from src.interfaces.services import INetworkService
 
 
 logger = get_logger(__name__)
@@ -52,60 +55,114 @@ class RVGraphBuilder(IRVGraphBuilder):
     def __init__(
         self,
         route_planner: ISingleVehicleRoutePlanner,
+        network: INetworkService,
     ) -> None:
         super().__init__(route_planner)
+        self._network = network
 
     def build_graph(
         self,
         requests: set[Request],
         vehicles: set[VehicleAvailability],
     ) -> RVGraph:
-        """Construct the request-vehicle graph for the given requests and vehicles.
-        (Docstring unchanged)
-        """
         graph = RVGraph()
 
-        # Pre-populate the adjacency lists with empty sets for all requests
-        # This ensures get_all_request_nodes() is accurate even if a request
-        # has no feasible edges.
-        for req in requests:
-            graph.request_request.setdefault(req.id, set())
-            graph.request_vehicle.setdefault(req.id, set())
-
+        # Convert sets to stable lists for indexing
         req_list = list(requests)
+        veh_list = list(vehicles)
 
-        # --- Build R-R Edges ---
-        for i in range(len(req_list)):
-            for j in range(i + 1, len(req_list)):
-                r1 = req_list[i]
-                r2 = req_list[j]
+        n_req = len(req_list)
+        n_veh = len(veh_list)
 
-                result = self._route_planner.check_feasibility(
-                    {r1, r2}
-                )  # Vehicle capacity is assumed to be at least 2
+        if n_req == 0:
+            return graph
 
-                if result.is_feasible:
-                    feasible = cast(FeasibleRoute, result)
-                    # Simplified: Just pass the route object
-                    graph.add_rr_edge(r1.id, r2.id, feasible)
+        # --- 1. DATA PREPARATION ---
 
-        # --- Build R-V Edges ---
-        for req in requests:
-            for vehicle in vehicles:
+        # Extract scalar arrays for broadcasting
+        # Shape: (N_req,)
+        req_times = np.array([r.request_time for r in req_list])
+        req_origins = [r.origin_node for r in req_list]
+
+        # Shape: (N_veh,)
+        veh_times = np.array([v.available_from_time for v in veh_list])
+        veh_locs = [v.available_at_node for v in veh_list]
+
+        # --- 2. FETCH MATRICES ---
+
+        # RR Matrix (N_req x N_req)
+        # Row i, Col j = Travel time from Req[i] -> Req[j]
+        rr_matrix = self._network.get_travel_time_matrix(req_origins, req_origins)
+
+        # RV Matrix (N_veh x N_req)
+        # Row i, Col j = Travel time from Veh[i] -> Req[j]
+        rv_matrix = self._network.get_travel_time_matrix(veh_locs, req_origins)
+
+        # --- 3. VECTORIZED R-R PRUNING ---
+
+        # We need to check pairs (i, j) where i < j.
+        # Condition: Valid if (Time_i_j <= Omega) OR (Time_j_i <= Omega)
+
+        # Create boolean masks
+        forward_ok = rr_matrix <= OMEGA
+        backward_ok = rr_matrix.T <= OMEGA  # Transpose checks j -> i
+
+        # Combine: Either direction fits?
+        # We only care about the upper triangle (k=1) to avoid duplicates and self-loops
+        rr_mask = np.triu(forward_ok | backward_ok, k=1)
+
+        # Get indices where mask is True
+        # valid_rr_indices is a tuple of arrays: (row_indices, col_indices)
+        rr_idx_i, rr_idx_j = np.where(rr_mask)
+
+        # Iterate ONLY the feasible candidates
+        for i, j in zip(rr_idx_i, rr_idx_j):
+            r1, r2 = req_list[i], req_list[j]
+
+            # The matrix check above guarantees we pass the spatial filter.
+            # Now we run the full constraints (capacity, exact delays).
+            result = self._route_planner.check_feasibility({r1, r2})
+
+            if result.is_feasible:
+                graph.add_rr_edge(r1.id, r2.id, cast(FeasibleRoute, result))
+
+        # --- 4. VECTORIZED R-V PRUNING ---
+
+        if n_veh > 0:
+            # We want to check: (VehTime + TravelTime - ReqTime) <= OMEGA
+
+            # Broadcasting shapes:
+            # veh_times[:, None]  -> (N_veh, 1)
+            # rv_matrix           -> (N_veh, N_req)
+            # req_times[None, :]  -> (1, N_req)
+
+            # Resulting 'arrival_times' is (N_veh, N_req)
+            arrival_times = veh_times[:, None] + rv_matrix
+
+            # Wait times: arrival - request_time
+            wait_times = arrival_times - req_times[None, :]
+
+            # Boolean Mask
+            rv_mask = wait_times <= OMEGA
+
+            # Get indices
+            rv_idx_v, rv_idx_r = np.where(rv_mask)
+
+            for v_idx, r_idx in zip(rv_idx_v, rv_idx_r):
+                vehicle = veh_list[v_idx]
+                req = req_list[r_idx]
+
+                # Check if request is already onboard (kept for safety)
                 if self._request_already_onboard(req, vehicle.passengers_onboard):
-                    # This should not happen if request pool is correct
-                    # TODO REMOVE THIS AFTER TESTING FOR PERFORMANCE
-                    raise ValueError(
-                        f"Request {req.id} is already onboard vehicle {vehicle.vehicle_id}"
-                    )
+                    continue
 
+                # Run expensive check
                 result = self._route_planner.check_feasibility({req}, vehicle)
 
                 if result.is_feasible:
-                    feasible = cast(FeasibleRoute, result)
-                    vehicle_id = self._vehicle_identifier(vehicle)
-                    # Simplified: Just pass the route object
-                    graph.add_rv_edge(req.id, vehicle_id, feasible)
+                    graph.add_rv_edge(
+                        req.id, vehicle.vehicle_id, cast(FeasibleRoute, result)
+                    )
 
         return graph
 

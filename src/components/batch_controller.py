@@ -344,6 +344,7 @@ class BatchController(IBatchController):
         self,
         meta_stream: Iterable[MetaRequest],
         batch_window: float,
+        min_start_time: float = 0.0,
     ) -> Iterator[Tuple[float, Set[Request], Set[VehicleAvailability]]]:
         """
         Stream MetaRequests into fixed-size time windows without materializing them.
@@ -372,6 +373,75 @@ class BatchController(IBatchController):
             return
 
         t_start = current.request_time
+
+        # Fast-forward if needed
+        if t_start < min_start_time:
+            # Align t_start to be just before min_start_time if we want to snap to grid,
+            # but here we just advance t_start to min_start_time or the first request after it?
+            # Actually, we should probably just consume requests until we hit min_start_time.
+            # But we need to respect batch windows if we want consistent batch alignment.
+            # For simplicity, let's just start processing batches from min_start_time,
+            # but we must consume any requests that happened BEFORE min_start_time
+            # so they are available (if we wanted to simulate them) or ignored.
+            # The requirement is to SKIP processing. So we just drop them?
+            # "Found X new requests in this batch" -> if we skip, we don't process them.
+            # But wait, if we skip requests, they are never added to the system.
+            # If they were supposed to be "pending", they are lost.
+            # Assuming "skipping" means we assume the system starts fresh at 6 AM
+            # or that previous requests are irrelevant/lost.
+            # Given the user's "skip" logic in main.py:
+            # if batch_datetime.hour < 6: continue
+            # This implies those requests are processed (added to pool) but no optimization runs.
+            # However, `controller.iter_batches` yields (t_now, all_requests_in_pool, ...).
+            # If we skip inside iter_batches, we must decide if we add them to pool or not.
+            # If we don't add them, `all_requests_in_pool` will be empty at 6 AM.
+            # If the user wants to "skip batches faster", avoiding `project_fleet` is key.
+            # But maybe we should still ingest requests?
+            # The user said "skip batches faster".
+            # If I just drop requests before 6 AM, then at 6 AM the pool is empty.
+            # In the original code:
+            #   for batch in controller.iter_batches(...):
+            #       ...
+            #       if batch_datetime.hour < 6: continue
+            #
+            # `iter_batches` does:
+            #   batch_requests, snapshots = self.prepare_batch(...)
+            #       -> project_fleet...
+            #       -> convert_meta_requests...
+            #       -> add to index...
+            #
+            # So requests ARE added.
+            # If we want to skip FAST, we should probably just ingest requests but NOT project fleet?
+            # But `iter_batches` interface yields `vehicle_avail_pool`.
+            # If we fast forward, we can just consume the stream until min_start_time,
+            # adding requests to the index, but skipping fleet projection?
+            # BUT, if we skip fleet projection, vehicles don't move.
+            # If vehicles don't move, they are all at initial positions at 6 AM.
+            # This seems acceptable for a "start at 6 AM" simulation.
+            # So:
+            # 1. Advance t_start to min_start_time.
+            # 2. Consume all requests < min_start_time and add to index (or drop them?).
+            #    If we drop them, we simulate "starting fresh at 6 AM".
+            #    If we keep them, they are "stale" waiting since midnight.
+            #    The original code `continue` means they ARE added to `_request_index` and accumulate.
+            #    And `expire_stale_requests` removes them if > OMEGA.
+            #    If OMEGA is small (e.g. 15 mins), requests from 4 AM are gone by 6 AM anyway.
+            #    So dropping them is likely fine and much faster.
+            #    Let's assume dropping them is the goal for "fast skipping".
+            #    Wait, if I drop them, I don't even need to parse them?
+            #    I just need to read until request_time >= min_start_time.
+
+            while current is not None and current.request_time < min_start_time:
+                try:
+                    current = next(meta_iter)
+                except StopIteration:
+                    current = None
+                    return
+
+            # Now current.request_time >= min_start_time.
+            # We set t_start to min_start_time (or current.request_time?)
+            # To maintain batch alignment, we might want to start exactly at min_start_time.
+            t_start = min_start_time
 
         while True:
             t_window_end = t_start + batch_window

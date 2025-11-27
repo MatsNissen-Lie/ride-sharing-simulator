@@ -52,12 +52,62 @@ def main(
     controller = controller or BatchController(
         network_service, provider.iter_vehicles(NUMBER_OF_VEHICLES)
     )
-    rv_builder = RVGraphBuilder(planner)
+    rv_builder = RVGraphBuilder(planner, network=network_service)
     rtv_builder = RTVGraphBuilder(planner)
     assignment_solver = GurobiAssignmentSolver()
 
     batch_count = 0
-    for batch in controller.iter_batches(provider.iter_requests(), BATCH_DURATION):
+    batch_count = 0
+
+    req_iter = provider.iter_requests()
+
+    import itertools
+
+    # Peek first element to initialize clock
+    try:
+        first_req = next(req_iter)
+    except StopIteration:
+        logger.warning("No requests found.")
+        return
+
+    # Now clock is initialized
+    clock = provider.get_simulation_clock()
+
+    start_dt = clock.from_relative_seconds(0)  # This is the time of first request?
+
+    if start_dt.hour >= 12:
+        # jump to next day 6 AM
+        logger.info("First request after noon, starting simulation next day 6 AM.")
+        start_dt = (
+            start_dt.replace(
+                day=start_dt.day + 1, hour=6, minute=0, second=0, microsecond=0
+            )
+            if start_dt.day < 28
+            else start_dt.replace(
+                year=start_dt.year + (start_dt.month // 12),
+                month=(start_dt.month % 12) + 1,
+                day=1,
+                hour=6,
+                minute=0,
+                second=0,
+                microsecond=0,
+            )
+        )
+
+    six_am = start_dt.replace(hour=6, minute=0, second=0, microsecond=0)
+
+    min_start_time = clock.to_relative_seconds(six_am)
+    print(
+        f"Simulation starting at {provider.get_simulation_clock().from_relative_seconds(min_start_time).isoformat()[:-6]}",
+        min_start_time,
+    )
+
+    # Reconstruct iterator
+    full_req_iter = itertools.chain([first_req], req_iter)
+
+    for batch in controller.iter_batches(
+        full_req_iter, BATCH_DURATION, min_start_time=min_start_time
+    ):
         batch_start = time.perf_counter()
         batch_count += 1
         t_now, all_requests_in_pool, vehicle_avail_pool = batch
@@ -73,6 +123,11 @@ def main(
 
         # 3. Build RV Graph (Algorithm Step 1)
         rv_graph = rv_builder.build_graph(all_requests_in_pool, vehicle_avail_pool)
+        batch_rv_end = time.perf_counter()
+        logger.info(
+            "RV graph built in %.4f seconds.",
+            batch_rv_end - batch_start,
+        )
 
         # 4. Build RTV Graph (Algorithm Step 2)
         rtv_graph = rtv_builder.build_graph(
@@ -81,7 +136,7 @@ def main(
         batch_rtv_end = time.perf_counter()
         logger.info(
             "RTV graph built in %.4f seconds.",
-            batch_rtv_end - batch_start,
+            batch_rtv_end - batch_rv_end,
         )
         # logg number of trips and num
         if PLOT_RTV_GRAPH:

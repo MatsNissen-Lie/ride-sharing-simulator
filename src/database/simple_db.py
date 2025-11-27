@@ -1,5 +1,6 @@
 from __future__ import annotations
 from typing import Optional, Sequence, Set
+import numpy as np
 import duckdb
 from config.paths import DATA_DIR
 
@@ -135,6 +136,75 @@ class DuckDBPathCache:
             list(nodes) if nodes is not None else None,
             list(edge_times) if edge_times is not None else None,
         )
+
+    def get_travel_time_matrix(
+        self, sources: list[int], targets: list[int], fill_value: float = float("inf")
+    ) -> np.ndarray:
+        """
+        Returns a (len(sources) x len(targets)) 2D numpy array.
+        Row i, Col j corresponds to travel time from sources[i] to targets[j].
+        """
+        if not sources or not targets:
+            return np.array([[]])
+
+        n_rows = len(sources)
+        n_cols = len(targets)
+
+        # 1. Create temporary view for Sources with explicit ordering indices
+        # We use explicit indices to ensure the matrix rows match the input list order
+        self.con.execute(
+            """
+            CREATE OR REPLACE TEMPORARY TABLE v_sources AS 
+            SELECT unnest(?) AS node_id, generate_subscripts(?, 1) as idx
+            """,
+            [sources, sources],
+        )
+
+        # 2. Create temporary view for Targets
+        self.con.execute(
+            """
+            CREATE OR REPLACE TEMPORARY TABLE v_targets AS 
+            SELECT unnest(?) AS node_id, generate_subscripts(?, 1) as idx
+            """,
+            [targets, targets],
+        )
+
+        # 3. Cross Join to generate the grid, Left Join to fill data
+        # If path is missing, time_s is NULL.
+        # If path exists but is 'no path' (-1.0), we preserve it (or handle in numpy)
+        query = """
+            SELECT 
+                s.idx AS row_idx,
+                t.idx AS col_idx,
+                ts.time_s
+            FROM v_sources s
+            CROSS JOIN v_targets t
+            LEFT JOIN time_simple ts 
+                ON s.node_id = ts.o AND t.node_id = ts.d
+            ORDER BY s.idx, t.idx
+        """
+
+        result = self.con.execute(query).fetchall()
+
+        # 4. Convert to NumPy
+        # result is a list of tuples: [(row_idx, col_idx, time), ...]
+        # We extract just the 3rd column (time)
+        data = [r[2] for r in result]
+
+        # Reshape to Matrix
+        matrix = np.array(data, dtype=np.float64).reshape(n_rows, n_cols)
+
+        # 5. Handle Missing / No-Path
+        # DuckDB returns None for missing rows (cache miss) -> convert to fill_value (inf)
+        # We use np.nan_to_num to handle the Nones that became np.nan during conversion
+        # Note: Depending on duckdb version, None might need manual handling before array creation
+        # Faster approach:
+
+        # Explicit fill for Nones (Cache Misses) and -1.0 (Known No-Path)
+        matrix[np.isnan(matrix)] = fill_value
+        matrix[matrix < 0] = fill_value
+
+        return matrix
 
     # ---------- helpers ----------
     def existing_dests_time(self, o: int) -> Set[int]:

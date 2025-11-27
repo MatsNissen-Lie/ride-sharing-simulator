@@ -9,7 +9,7 @@ DELTA = 5 * 60  # 5 minutes in seconds
 # SIM
 BATCH_DURATION = 30  # 30 seconds
 # data
-NUMBER_OF_VEHICLES = 20
+NUMBER_OF_VEHICLES = 3000
 
 # max passengers to consider in route planning
 MAX_PASSENGERS = 4
