@@ -1,31 +1,70 @@
-from __future__ import annotations
 from typing import Optional, Sequence, Set
 import numpy as np
 import duckdb
+from pathlib import Path
 from config.paths import DATA_DIR
+from config import get_logger
+
+logger = get_logger(__name__)
 
 
 class DuckDBPathCache:
     """
     Minimal DuckDB cache for shortest paths.
-
-    Tables:
-      - time_simple(o BIGINT, d BIGINT, time_s DOUBLE, dist_m DOUBLE)
-        * tiny hot path table
-        * time_s = -1.0, dist_m = -1.0 indicates NO PATH exists
-      - path_extended(o BIGINT, d BIGINT, nodes BIGINT[], edge_times DOUBLE[])
-        * optional, only populated when extended results are requested
+    Supports Read-Write (Main) and Read-Only (Worker) modes.
     """
 
-    def __init__(self):
-        db_path = DATA_DIR / "duckDB" / "route_db.duckdb"
-        (db_path.parent).mkdir(parents=True, exist_ok=True)
-        self._db_path = str(db_path)
-        self.con = duckdb.connect(self._db_path)
-        # small point lookups; threads mostly help on index builds
-        self.con.execute("PRAGMA threads=8")
+    def __init__(self, read_only: bool = False):
+        self.read_only = read_only
 
-        # Hot, minimal table for 20M+ pairs
+        db_path = DATA_DIR / "duckDB" / "route_db.duckdb"
+        self._db_path = str(db_path)
+
+        # Only the writer should try to create directories
+        if not self.read_only:
+            (db_path.parent).mkdir(parents=True, exist_ok=True)
+
+        self.connect()
+
+    # ---------- connection mgmt ----------
+    def connect(self) -> None:
+        """Establishes connection based on mode."""
+        config: dict[str, str | bool | int | float | list[str]] = {}
+        if self.read_only:
+            # CRITICAL: This allows multiple workers to open the file simultaneously
+            config = {"access_mode": "READ_ONLY"}
+
+        try:
+            self.con = duckdb.connect(self._db_path, config=config)
+
+            # Threads help with index builds/sorts, but less relevant for point lookups.
+            # Keep low for workers to avoid over-subscribing CPU.
+            self.con.execute("PRAGMA threads=2")
+
+            # Only Writer creates schema. Readers assume it exists.
+            if not self.read_only:
+                self._init_schema()
+
+        except duckdb.IOException as e:
+            if self.read_only:
+                logger.error(
+                    f"Worker failed to open DB. Is the Main process holding the lock? {e}"
+                )
+            raise e
+
+    def close(self) -> None:
+        """Manually close connection to release the file lock."""
+        try:
+            self.con.close()
+        except Exception:
+            pass
+
+    def reconnect(self) -> None:
+        self.close()
+        self.connect()
+
+    def _init_schema(self):
+        """Idempotent schema creation."""
         self.con.execute(
             """
             CREATE TABLE IF NOT EXISTS time_simple(
@@ -34,16 +73,14 @@ class DuckDBPathCache:
               time_s DOUBLE,
               dist_m DOUBLE
             );
-        """
+            """
         )
         self.con.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_time_simple_od
             ON time_simple(o, d);
-        """
+            """
         )
-
-        # Extended: only for pairs where you explicitly need nodes/edge_times
         self.con.execute(
             """
             CREATE TABLE IF NOT EXISTS path_extended(
@@ -52,38 +89,36 @@ class DuckDBPathCache:
               nodes BIGINT[],
               edge_times DOUBLE[]
             );
-        """
+            """
         )
         self.con.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_path_extended_od
             ON path_extended(o, d);
-        """
+            """
         )
-
-    # ---------- connection mgmt ----------
-    def reconnect(self) -> None:
-        try:
-            self.con.close()
-        except Exception:
-            pass
-        self.con = duckdb.connect(self._db_path)
 
     # ---------- simple (hot) ----------
     def get_simple(self, o: int, d: int) -> Optional[tuple[float, float]]:
+        # Works in RO mode
         row = self.con.execute(
             "SELECT time_s, dist_m FROM time_simple WHERE o=? AND d=?", [o, d]
         ).fetchone()
         return (float(row[0]), float(row[1])) if row else None
 
     def put_simple(self, o: int, d: int, time_s: float, dist_m: float) -> None:
+        # GUARD: Workers cannot write to the shared file
+        if self.read_only:
+            return
+
         self.con.execute(
             "INSERT OR REPLACE INTO time_simple(o,d,time_s,dist_m) VALUES (?,?,?,?)",
             [int(o), int(d), float(time_s), float(dist_m)],
         )
 
     def put_no_path(self, o: int, d: int) -> None:
-        """Explicitly store that there is NO path between o and d (using -1.0)."""
+        if self.read_only:
+            return
         self.put_simple(o, d, -1.0, -1.0)
 
     # ---------- extended (optional) ----------
@@ -105,6 +140,9 @@ class DuckDBPathCache:
         nodes: Sequence[int],
         edge_times: Sequence[float],
     ) -> None:
+        if self.read_only:
+            return
+
         self.con.execute(
             "INSERT OR REPLACE INTO path_extended(o,d,nodes,edge_times) VALUES (?,?,?,?)",
             [int(o), int(d), list(nodes), list(edge_times)],
@@ -113,10 +151,7 @@ class DuckDBPathCache:
     def get_both(
         self, o: int, d: int
     ) -> tuple[float | None, float | None, list[int] | None, list[float] | None]:
-        """
-        Single round-trip: returns (time_s, dist_m, nodes, edge_times).
-        Any field may be None if not present.
-        """
+        # Works in RO mode
         row = self.con.execute(
             """
             SELECT t.time_s, t.dist_m, x.nodes, x.edge_times
@@ -140,18 +175,13 @@ class DuckDBPathCache:
     def get_travel_time_matrix(
         self, sources: list[int], targets: list[int], fill_value: float = float("inf")
     ) -> np.ndarray:
-        """
-        Returns a (len(sources) x len(targets)) 2D numpy array.
-        Row i, Col j corresponds to travel time from sources[i] to targets[j].
-        """
+        # Works in RO mode because TEMPORARY tables are process-local (in RAM)
         if not sources or not targets:
             return np.array([[]])
 
         n_rows = len(sources)
         n_cols = len(targets)
 
-        # 1. Create temporary view for Sources with explicit ordering indices
-        # We use explicit indices to ensure the matrix rows match the input list order
         self.con.execute(
             """
             CREATE OR REPLACE TEMPORARY TABLE v_sources AS 
@@ -160,7 +190,6 @@ class DuckDBPathCache:
             [sources, sources],
         )
 
-        # 2. Create temporary view for Targets
         self.con.execute(
             """
             CREATE OR REPLACE TEMPORARY TABLE v_targets AS 
@@ -169,9 +198,6 @@ class DuckDBPathCache:
             [targets, targets],
         )
 
-        # 3. Cross Join to generate the grid, Left Join to fill data
-        # If path is missing, time_s is NULL.
-        # If path exists but is 'no path' (-1.0), we preserve it (or handle in numpy)
         query = """
             SELECT 
                 s.idx AS row_idx,
@@ -185,22 +211,9 @@ class DuckDBPathCache:
         """
 
         result = self.con.execute(query).fetchall()
-
-        # 4. Convert to NumPy
-        # result is a list of tuples: [(row_idx, col_idx, time), ...]
-        # We extract just the 3rd column (time)
         data = [r[2] for r in result]
-
-        # Reshape to Matrix
         matrix = np.array(data, dtype=np.float64).reshape(n_rows, n_cols)
 
-        # 5. Handle Missing / No-Path
-        # DuckDB returns None for missing rows (cache miss) -> convert to fill_value (inf)
-        # We use np.nan_to_num to handle the Nones that became np.nan during conversion
-        # Note: Depending on duckdb version, None might need manual handling before array creation
-        # Faster approach:
-
-        # Explicit fill for Nones (Cache Misses) and -1.0 (Known No-Path)
         matrix[np.isnan(matrix)] = fill_value
         matrix[matrix < 0] = fill_value
 

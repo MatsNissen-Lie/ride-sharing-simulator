@@ -162,7 +162,7 @@ def main():
     rows = con.execute("SELECT o, COUNT(*) FROM time_simple GROUP BY o").fetchall()
     existing_counts = {r[0]: r[1] for r in rows}
 
-    expected = len(scc_nodes) - 1  # Rough check
+    expected = len(scc_nodes)  # - 1  # Rough check
 
     sources_to_process = []
     for n in scc_nodes:

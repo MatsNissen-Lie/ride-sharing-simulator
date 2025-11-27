@@ -5,7 +5,10 @@ from config.config import PLOT_RTV_GRAPH
 from config.paths import PLOT_DIR
 from src.components.batch_controller import BatchController
 from src.components.rtv_graph_builder import RTVGraphBuilder
-from src.components.rv_graph_builder import RVGraphBuilder
+
+# from src.components.rv_graph_builder import RVGraphBuilder
+from src.components.graph_builder.rv_builder import RVGraphBuilder
+
 from src.components.network_service import NetworkXService
 from src.components.route_planner import RoutePlanner
 from src.components.simulation_data_provider import SimulationDataProvider
