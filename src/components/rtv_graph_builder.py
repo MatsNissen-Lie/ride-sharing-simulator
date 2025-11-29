@@ -49,17 +49,45 @@ class RTVGraphBuilder(IRTVGraphBuilder):
 
         requests_by_id: dict[str, Request] = {r.id: r for r in requests}
 
-        # For each vehicle, we build trips incrementally (Algorithm 1)
-        for v_id, v_avail in vehicles_by_id.items():
+        # --- STEP 0: PREFETCH / CACHE WARMING ---
+        # Identify all unique nodes involved in this batch
+        unique_nodes = set()
 
-            self._build_trips_for_vehicle(
-                v_id=v_id,
-                v_avail=v_avail,
-                rv_graph=rv_graph,
-                requests_by_id=requests_by_id,
-                max_trip_size=max_trip_size,
-                rtv_graph=rtv_graph,
-            )
+        # 1. Request Origins and Destinations
+        for req in requests:
+            unique_nodes.add(req.origin_node)
+            unique_nodes.add(req.destination_node)
+
+        # 2. Vehicle Locations
+        for veh in vehicles:
+            unique_nodes.add(veh.available_at_node)
+
+        # 3. Trigger the Big Fetch
+        # This will populate the RoutePlanner's internal cache
+        node_list = list(unique_nodes)
+        if hasattr(self._route_planner._network, "prefetch_all_pairs"):
+            self._route_planner._network.prefetch_all_pairs(node_list)
+
+        logger.info(
+            f"Prefetched routes for {len(node_list)} unique nodes ({len(node_list)**2} pairs)"
+        )
+
+        try:
+            # For each vehicle, we build trips incrementally (Algorithm 1)
+            for v_id, v_avail in vehicles_by_id.items():
+
+                self._build_trips_for_vehicle(
+                    v_id=v_id,
+                    v_avail=v_avail,
+                    rv_graph=rv_graph,
+                    requests_by_id=requests_by_id,
+                    max_trip_size=max_trip_size,
+                    rtv_graph=rtv_graph,
+                )
+        finally:
+            # --- STEP X: CLEANUP ---
+            if hasattr(self._route_planner._network, "clear_manual_cache"):
+                self._route_planner._network.clear_manual_cache()
 
         return rtv_graph
 

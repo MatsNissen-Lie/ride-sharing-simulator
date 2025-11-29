@@ -48,6 +48,20 @@ class INetworkService(ABC):
         """
         raise NotImplementedError("get_travel_matrix not implemented in base class")
 
+    @abstractmethod
+    def prefetch_all_pairs(self, nodes: list[int]) -> None:
+        """
+        Eagerly prefetches all-pairs shortest paths for the given nodes.
+        """
+        raise NotImplementedError("prefetch_all_pairs not implemented in base class")
+
+    @abstractmethod
+    def clear_manual_cache(self) -> None:
+        """
+        Clears the manual cache of pre-fetched paths, if any.
+        """
+        pass
+
 
 # ---------------------------------------------------------------------------
 #  II. The Core "Engine": Single-Vehicle Routing (DARP)

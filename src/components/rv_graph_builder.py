@@ -41,7 +41,7 @@ from src.interfaces.graphs import RVGraph
 from src.interfaces.services import INetworkService
 
 
-logger = get_logger(__name__)
+logger = get_logger("old rv builder")
 
 
 # --- The Builder class is now simpler ---
@@ -115,6 +115,10 @@ class RVGraphBuilder(IRVGraphBuilder):
         # valid_rr_indices is a tuple of arrays: (row_indices, col_indices)
         rr_idx_i, rr_idx_j = np.where(rr_mask)
 
+        logger.info(
+            f"RR Pruning: Found {len(rr_idx_i)} candidate pairs out of {n_req * (n_req - 1) // 2} possible."
+        )
+
         # Iterate ONLY the feasible candidates
         for i, j in zip(rr_idx_i, rr_idx_j):
             r1, r2 = req_list[i], req_list[j]
@@ -147,6 +151,10 @@ class RVGraphBuilder(IRVGraphBuilder):
 
             # Get indices
             rv_idx_v, rv_idx_r = np.where(rv_mask)
+
+            logger.info(
+                f"RV Pruning: Found {len(rv_idx_v)} candidate pairs out of {n_veh * n_req} possible."
+            )
 
             for v_idx, r_idx in zip(rv_idx_v, rv_idx_r):
                 vehicle = veh_list[v_idx]

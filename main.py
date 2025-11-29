@@ -7,7 +7,9 @@ from src.components.batch_controller import BatchController
 from src.components.rtv_graph_builder import RTVGraphBuilder
 
 # from src.components.rv_graph_builder import RVGraphBuilder
+
 from src.components.graph_builder.rv_builder import RVGraphBuilder
+
 
 from src.components.network_service import NetworkXService
 from src.components.route_planner import RoutePlanner
@@ -45,7 +47,12 @@ def main(
     logger.info("Initializing components...")
     provider = SimulationDataProvider()
 
-    network_service = NetworkXService(provider.graph)
+    # Shared DB cache (Dependency Injection)
+    from src.database.simple_db import DuckDBPathCache
+
+    db_cache = DuckDBPathCache()
+
+    network_service = NetworkXService(provider.graph, cache=db_cache)
     planner = RoutePlanner(network_service=network_service)
 
     # --- 3. Initialize Algorithm Pipeline ---
@@ -55,7 +62,7 @@ def main(
     controller = controller or BatchController(
         network_service, provider.iter_vehicles(NUMBER_OF_VEHICLES)
     )
-    rv_builder = RVGraphBuilder(planner, network=network_service)
+    rv_builder = RVGraphBuilder(planner, network_service)
     rtv_builder = RTVGraphBuilder(planner)
     assignment_solver = GurobiAssignmentSolver()
 
@@ -124,6 +131,12 @@ def main(
         logger.info(f"--------- {batch_datetime.isoformat()[:-6]} ---------")
         logger.info("Found %s new requests in this batch.", len(all_requests_in_pool))
 
+        # --- SESSION MANAGEMENT: READ-ONLY ---
+        # Close any existing RW session and switch to RO for graph building
+        # This releases the lock so parallel workers (if any) can read.
+        db_cache.close()
+        db_cache.connect(read_only=True)
+
         # 3. Build RV Graph (Algorithm Step 1)
         rv_graph = rv_builder.build_graph(all_requests_in_pool, vehicle_avail_pool)
         batch_rv_end = time.perf_counter()
@@ -160,6 +173,16 @@ def main(
                 output_dir=PLOT_DIR,
                 datetime=batch_datetime,
             )
+
+        # --- SESSION MANAGEMENT: READ-WRITE ---
+        # Switch back to RW for assignment (if it needs to write) or just to be ready for next batch
+        # Note: If assignment solver writes to DB, we need RW.
+        # If not, we could stay in RO until next batch preparation?
+        # But NetworkXService might write-through cache misses during assignment cost lookups?
+        # Safest to switch back to RW here.
+        db_cache.close()
+        db_cache.connect(read_only=False)
+
         # 5. Solve Assignment (Algorithm Step 3)
         if assignment_solver is None:
             raise RuntimeError("Assignment solver must be provided.")

@@ -46,6 +46,7 @@ from src.components.graph_builder.workers import (
     process_rv_chunk,
     RRTask,
     RVTask,
+    init_worker,
 )
 
 logger = get_logger("rv_graph_builder")
@@ -103,7 +104,7 @@ class RVGraphBuilder(IRVGraphBuilder):
 
         # Using 'spawn' context is default/safer on Mac, but ProcessPoolExecutor handles it.
         # Max workers = 12 (leave 2 cores for OS/UI)
-        with ProcessPoolExecutor(max_workers=12) as executor:
+        with ProcessPoolExecutor(max_workers=12, initializer=init_worker) as executor:
             future_to_chunk = {
                 executor.submit(process_rr_chunk, chunk): chunk for chunk in rr_chunks
             }
@@ -142,7 +143,7 @@ class RVGraphBuilder(IRVGraphBuilder):
             rv_tasks[i : i + chunk_size] for i in range(0, len(rv_tasks), chunk_size)
         ]
 
-        with ProcessPoolExecutor(max_workers=12) as executor:
+        with ProcessPoolExecutor(max_workers=12, initializer=init_worker) as executor:
             future_to_chunk = {
                 executor.submit(process_rv_chunk, chunk): chunk for chunk in rv_chunks
             }

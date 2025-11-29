@@ -27,8 +27,12 @@ class DuckDBPathCache:
         self.connect()
 
     # ---------- connection mgmt ----------
-    def connect(self) -> None:
+    def connect(self, read_only: bool | None = None) -> None:
         """Establishes connection based on mode."""
+        # Update internal state if provided
+        if read_only is not None:
+            self.read_only = read_only
+
         config: dict[str, str | bool | int | float | list[str]] = {}
         if self.read_only:
             # CRITICAL: This allows multiple workers to open the file simultaneously

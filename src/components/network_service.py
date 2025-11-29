@@ -20,17 +20,27 @@ class NetworkXService(INetworkService):
       - Fallback: compute with NetworkX, write-through to DuckDB
     """
 
-    def __init__(self, graph: nx.MultiDiGraph):
-        if not isinstance(graph, nx.MultiDiGraph):
+    def __init__(
+        self,
+        graph: nx.MultiDiGraph | None,
+        cache: DuckDBPathCache | None = None,
+    ):
+        if graph is not None and not isinstance(graph, nx.MultiDiGraph):
             raise TypeError("NetworkXService requires an nx.MultiDiGraph")
         self.G = graph
-        self._nodeset = set(graph.nodes)
-        self._cache = DuckDBPathCache()
+        self._nodeset = set(graph.nodes) if graph is not None else set()
+        self._cache = cache if cache is not None else DuckDBPathCache()
+        # L1 Manual Cache for Eager Prefetching
+        self._manual_cache: dict[tuple[int, int], NetworkPath] = {}
 
     @lru_cache(maxsize=200_000)  # lean L1; rely on DuckDB for persistence
     def get_shortest_path(
         self, origin_node: int, destination_node: int
     ) -> NetworkPath | None:
+        # L1: Manual Cache (Eager Prefetch)
+        if (origin_node, destination_node) in self._manual_cache:
+            return self._manual_cache[(origin_node, destination_node)]
+
         # L2: DuckDB hot table
 
         hit = self._cache.get_simple(origin_node, destination_node)
@@ -97,6 +107,8 @@ class NetworkXService(INetworkService):
                 travel_time=float(time_s),
                 travel_distance=float(dist_m),
             )
+        if self.G is None:
+            raise RuntimeError("Underlying graph is not initialized.")
 
         # 2) If we have nodes+edge_times but missing totals, derive what we can
         if nodes is not None and edge_times is not None:
@@ -126,6 +138,8 @@ class NetworkXService(INetworkService):
 
         # 3) Cache miss: compute fresh
         try:
+            if self.G is None:
+                raise RuntimeError("Underlying graph is not initialized.")
             nodes = nx.shortest_path(
                 self.G, origin_node, destination_node, weight="travel_time"
             )
@@ -170,3 +184,35 @@ class NetworkXService(INetworkService):
         # "inf" means "too far/unknown" and skip, OR compute strictly needed ones later.
 
         return matrix
+
+    def prefetch_all_pairs(self, nodes: list[int]) -> None:
+        """
+        Eagerly fetches the travel time matrix for all combinations of the provided nodes
+        and populates the internal manual cache.
+        """
+        if not nodes:
+            return
+
+        # 1. Fetch the raw matrix (N x N) from DuckDB
+        # This is extremely fast even for 500x500
+        matrix = self.get_travel_time_matrix(nodes, nodes)
+
+        # 2. Bulk insert into manual_cache
+        n = len(nodes)
+        for i in range(n):
+            u = nodes[i]
+            for j in range(n):
+                v = nodes[j]
+                time_s = matrix[i, j]
+
+                # Check for infinity (unreachable) or validity
+                if time_s < 1e9:  # Assuming inf is high
+                    # We store distance=0.0 because the matrix usually only gives time.
+                    # If exact distance is needed for cost, the matrix query needs to return it too.
+                    self._manual_cache[(u, v)] = NetworkPath(
+                        travel_time=time_s, travel_distance=0.0
+                    )
+
+    def clear_manual_cache(self) -> None:
+        """Clears the manual cache to free memory."""
+        self._manual_cache.clear()
