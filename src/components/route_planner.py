@@ -1,7 +1,9 @@
 """Minimal single-vehicle route planner used during prototyping."""
 
 import itertools
-from typing import Iterable, cast
+from typing import Iterable, Iterator, cast
+
+import numpy as np
 
 from config import BATCH_DURATION, DELTA, OMEGA, get_logger
 from config.config import MAX_REQUESTS
@@ -290,7 +292,7 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
             else Infeasible(reason="No R-V route satisfied constraints")
         )
 
-    def _handle_rtv_check(
+    def _handle_rtv_check_new(
         self,
         availability: VehicleAvailability,
         requests_to_add: set[Request],
@@ -499,7 +501,7 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
         # Note: To fully implement return, add `path` arg to solve or reconstruct.
         return Infeasible(reason="Placeholder until reconstruction added")
 
-    def _handle_rtv_check_old(
+    def _handle_rtv_check(
         self,
         availability: VehicleAvailability,
         requests_to_add: set[Request],
@@ -786,6 +788,7 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
 
     def _build_travel_time_cache(self, nodes: set[int]) -> dict[tuple[int, int], float]:
         """Pre-calculates all-pairs travel times for a small set of nodes."""
+        # assume all nodes pares are primed in the cache
         cache = {}
         for u, v in itertools.product(nodes, repeat=2):
             if (u, v) not in cache:

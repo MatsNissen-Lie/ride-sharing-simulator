@@ -1,10 +1,10 @@
 import time
 
 from config import BATCH_DURATION, get_logger, NUMBER_OF_VEHICLES
-from config.config import PLOT_RTV_GRAPH
+from config.config import MIN_REQUESTS_TO_PROCESS, MIN_START_TIME, PLOT_RTV_GRAPH
 from config.paths import PLOT_DIR
 from src.components.batch_controller import BatchController
-from src.components.rtv_graph_builder import RTVGraphBuilder
+from old_code.rtv_graph_builder import RTVGraphBuilder
 
 # from src.components.rv_graph_builder import RVGraphBuilder
 
@@ -47,12 +47,18 @@ def main(
     logger.info("Initializing components...")
     provider = SimulationDataProvider()
 
+    # check the node ids in the graph
+    node_ids = list(provider.graph.nodes)
+    logger.info(
+        f"Graph has {len(node_ids)} nodes, ranging from {min(node_ids)} to {max(node_ids)}"
+    )
+
     # Shared DB cache (Dependency Injection)
     from src.database.simple_db import DuckDBPathCache
 
     db_cache = DuckDBPathCache()
 
-    network_service = NetworkXService(provider.graph, cache=db_cache)
+    network_service = NetworkXService(provider.graph, db=db_cache)
     planner = RoutePlanner(network_service=network_service)
 
     # --- 3. Initialize Algorithm Pipeline ---
@@ -107,6 +113,7 @@ def main(
     six_am = start_dt.replace(hour=6, minute=0, second=0, microsecond=0)
 
     min_start_time = clock.to_relative_seconds(six_am)
+    min_start_time = MIN_START_TIME
     print(
         f"Simulation starting at {provider.get_simulation_clock().from_relative_seconds(min_start_time).isoformat()[:-6]}",
         min_start_time,
@@ -123,7 +130,7 @@ def main(
         t_now, all_requests_in_pool, vehicle_avail_pool = batch
         batch_datetime = provider.get_simulation_clock().from_relative_seconds(t_now)
 
-        if len(all_requests_in_pool) < 100:
+        if len(all_requests_in_pool) < MIN_REQUESTS_TO_PROCESS:
             continue
 
         start_loop_time = time.perf_counter()
@@ -141,8 +148,7 @@ def main(
         rv_graph = rv_builder.build_graph(all_requests_in_pool, vehicle_avail_pool)
         batch_rv_end = time.perf_counter()
         logger.info(
-            "RV graph built in %.4f seconds.",
-            batch_rv_end - batch_start,
+            f"RV graph built in {batch_rv_end - batch_start:.4f} seconds with {len(rv_graph.request_vehicle)} rv-edges and {len(rv_graph.request_request)} rr-edges.",
         )
 
         # 4. Build RTV Graph (Algorithm Step 2)
@@ -153,6 +159,11 @@ def main(
         logger.info(
             "RTV graph built in %.4f seconds.",
             batch_rtv_end - batch_rv_end,
+        )
+        # log the number of trips. I want to know how many trips of each lenghth
+        trip_stats = rtv_graph.get_trip_stats()
+        logger.info(
+            f"RTV graph trip stats: {', '.join(f'size {k}: {v}' for k, v in trip_stats.items())}"
         )
         # logg number of trips and num
         if PLOT_RTV_GRAPH:

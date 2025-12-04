@@ -1,6 +1,5 @@
 from abc import ABC, abstractmethod
-from functools import lru_cache
-
+from typing import Iterable
 import numpy as np
 
 from src.interfaces.data_models import (
@@ -18,8 +17,9 @@ from src.interfaces.graphs import RTVGraph, RVGraph
 class INetworkService(ABC):
     """Abstract interface for all road network and travel time queries."""
 
+    _l1_cache: dict[tuple[int, int], tuple[float, float]] = {}
+
     @abstractmethod
-    @lru_cache(maxsize=200_000)
     def get_shortest_path(
         self, origin_node: int, destination_node: int
     ) -> NetworkPath | None:
@@ -56,11 +56,27 @@ class INetworkService(ABC):
         raise NotImplementedError("prefetch_all_pairs not implemented in base class")
 
     @abstractmethod
-    def clear_manual_cache(self) -> None:
+    def clear_l1_cache(self) -> None:
         """
         Clears the manual cache of pre-fetched paths, if any.
         """
         pass
+
+    @abstractmethod
+    def get_travel_times_l1_cache_subset(
+        self, nodes: Iterable[int]
+    ) -> dict[tuple[int, int], float]:
+        """
+        Returns a dense dictionary of travel times for the given subset of nodes.
+        Raises KeyError if any pair is missing from the L1 cache.
+        """
+        pass
+
+    def get_l1_cache(self) -> dict[tuple[int, int], tuple[float, float]]:
+        """
+        Returns the current L1 cache.
+        """
+        return self._l1_cache
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +184,7 @@ class IRTVGraphBuilder(ABC):
 
 
 from abc import ABC, abstractmethod
-from typing import Set
+from typing import Set, Iterable
 
 # Assuming these imports exist based on your previous code context
 from src.interfaces import (

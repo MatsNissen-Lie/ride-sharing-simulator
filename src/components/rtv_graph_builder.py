@@ -1,4 +1,4 @@
-from config.config import MAX_REQUESTS, MAX_REQUESTS_ABOVE_CAPACITY
+from config.config import MAX_REQUESTS
 from src.components.rv_graph_builder import RVGraph
 from src.interfaces import FeasibleRoute
 from collections import defaultdict

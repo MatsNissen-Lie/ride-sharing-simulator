@@ -192,3 +192,18 @@ class RTVGraph:
     def get_cost(self, trip: TripId, vehicle_id: str) -> float:
         route = self.get_route(trip, vehicle_id)
         return route.cost if route else float("inf")
+
+    def get_trip_stats(self) -> dict[int, int]:
+        """
+        Returns a dictionary mapping trip lengths to the number of trips of that length.
+        """
+        # I want to know how many trips of each lenght
+        stats: dict[int, int] = {}
+        for trip in self.trip_to_vehicles.keys():
+            length = len(trip)
+            stats[length] = stats.get(length, 0) + 1
+
+        return stats
+
+
+#
