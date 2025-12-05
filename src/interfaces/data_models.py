@@ -48,6 +48,12 @@ class Request(MetaRequest):
         None  # Assigned pickup time (t_r^p), but not committed (aka not picked up yet)
     )
 
+    def __hash__(self):
+        return hash(self.id)
+
+    def __eq__(self, other):
+        return isinstance(other, Request) and self.id == other.id
+
 
 @dataclass(frozen=True)
 class Passenger:

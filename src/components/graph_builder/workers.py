@@ -42,23 +42,23 @@ def init_worker(shared_cache: np.ndarray | None = None):
         _network_service.is_nuclear = True
 
 
-def process_rr_chunk(tasks: list[RRTask]) -> list[tuple[str, str, FeasibleRoute]]:
-    """
-    Worker function: Uses pre-initialized resources.
-    """
-    global _network_service
-    if _network_service is None:
-        raise RuntimeError("Worker not initialized")
+# def process_rr_chunk(tasks: list[RRTask]) -> list[tuple[str, str, FeasibleRoute]]:
+#     """
+#     Worker function: Uses pre-initialized resources.
+#     """
+#     global _network_service
+#     if _network_service is None:
+#         raise RuntimeError("Worker not initialized")
 
-    planner = RoutePlanner(_network_service)
+#     planner = RoutePlanner(_network_service)
 
-    results = []
-    for task in tasks:
-        # Check feasibility
-        res = planner.check_feasibility({task.r1, task.r2}, find_best_route=False)
-        if res.is_feasible:
-            results.append((task.r1.id, task.r2.id, res))
-    return results
+#     results = []
+#     for task in tasks:
+#         # Check feasibility
+#         res = planner.check_feasibility({task.r1, task.r2}, find_best_route=False)
+#         if res.is_feasible:
+#             results.append((task.r1.id, task.r2.id, res))
+#     return results
 
 
 def process_rv_chunk(tasks: list[RVTask]) -> list[tuple[str, str, FeasibleRoute]]:

@@ -12,6 +12,7 @@ from src.components.graph_builder.rv_builder import RVGraphBuilder
 
 
 from src.components.network_service import NetworkXService
+from src.components.rebalance_solver import RebalancingSolver
 from src.components.route_planner import RoutePlanner
 from src.components.simulation_data_provider import SimulationDataProvider
 from src.components.assignment_solver import GurobiAssignmentSolver
@@ -65,12 +66,13 @@ def main(
     # (Using the stubs, replace with your real ones)
 
     # State Management (Your new interface)
-    controller = controller or BatchController(
+    controller = BatchController(
         network_service, provider.iter_vehicles(NUMBER_OF_VEHICLES)
     )
     rv_builder = RVGraphBuilder(planner, network_service)
     rtv_builder = RTVGraphBuilder(planner)
     assignment_solver = GurobiAssignmentSolver()
+    rebalancing_solver = RebalancingSolver(network_service)
 
     batch_count = 0
     batch_count = 0
@@ -148,7 +150,7 @@ def main(
         rv_graph = rv_builder.build_graph(all_requests_in_pool, vehicle_avail_pool)
         batch_rv_end = time.perf_counter()
         logger.info(
-            f"RV graph built in {batch_rv_end - batch_start:.4f} seconds with {len(rv_graph.request_vehicle)} rv-edges and {len(rv_graph.request_request)} rr-edges.",
+            f"RV graph built in {batch_rv_end - batch_start:.4f} seconds with {len(rv_graph.rv_details)} rv-edges and {len(rv_graph.rr_details) // 2} rr-edges.",
         )
 
         # 4. Build RTV Graph (Algorithm Step 2)
@@ -195,8 +197,6 @@ def main(
         db_cache.connect(read_only=False)
 
         # 5. Solve Assignment (Algorithm Step 3)
-        if assignment_solver is None:
-            raise RuntimeError("Assignment solver must be provided.")
         assignment_result = assignment_solver.solve(
             rtv_graph,
             all_requests_in_pool,
@@ -204,18 +204,54 @@ def main(
             solver_timeout=BATCH_DURATION * 1.2,  # Give 120% of batch time
             current_time=t_now,  # Pass current time
         )
-
+        assignment_result_end = time.perf_counter()
         logger.info(
             "Assignment solved in %.4f seconds.",
-            time.perf_counter() - batch_rtv_end,
+            assignment_result_end - batch_rtv_end,
         )
 
         # 6. Commit Assignment (Controller Step 2)
         #    - Applies the 'assignment_result' to the internal fleet state
         #    - Updates/creates promises for assigned requests
         controller.commit_assignment(t_now, assignment_result)
+        commit_end = time.perf_counter()
+        # controller.apply_rebalancing(rebalancing_assignments, t_now)
+        # 7. Rebalancing (Controller Step 3) - Optional
 
-        # 7. Advance time
+        idle_vehicles, unassigned_requests = controller.get_rebalancing_candidates(
+            assignment_result, vehicle_avail_pool
+        )
+        rebal_candidates_end = time.perf_counter()
+        logger.info(
+            f"Rebalancing candidates identified in {rebal_candidates_end - commit_end:.4f} seconds: {len(idle_vehicles)} idle vehicles, {len(unassigned_requests)} unassigned requests."
+        )
+        # Only run if we have both idle vehicles and unassigned requests
+        if idle_vehicles and unassigned_requests:
+            logger.info(
+                f"Rebalancing: {len(idle_vehicles)} idle vehicles, "
+                f"{len(unassigned_requests)} unassigned requests."
+            )
+
+            # 2. Solve Rebalancing (LP)
+            rebalancing_routes = rebalancing_solver.solve(
+                idle_vehicles=idle_vehicles,
+                unassigned_requests=unassigned_requests,
+            )
+            rebalancing_end = time.perf_counter()
+            logger.info(
+                "Rebalancing solved in %.4f seconds.",
+                rebalancing_end - rebal_candidates_end,
+            )
+
+            # 3. Apply Rebalancing Routes to Fleet
+            #    This moves vehicles to the request origins without 'picking' them up.
+            if rebalancing_routes:
+                controller.apply_rebalancing(rebalancing_routes, t_now)
+                logger.info(
+                    f"Rebalancing committed: {len(rebalancing_routes)} vehicles relocated."
+                )
+
+        # 8. Advance time
         loop_duration = time.perf_counter() - start_loop_time
         logger.info("Batch completed in %.4f seconds.", loop_duration)
         t_now += BATCH_DURATION

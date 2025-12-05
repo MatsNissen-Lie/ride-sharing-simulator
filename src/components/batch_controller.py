@@ -490,6 +490,72 @@ class BatchController(IBatchController):
         # - Vehicles not mentioned in result.assignments keep whatever
         #   current_route / route_assignment_time projection gave them.
 
+    def get_rebalancing_candidates(
+        self, assignment_result: AssignmentResult, snapshots: Set[VehicleAvailability]
+    ) -> Tuple[list[VehicleAvailability], list[Request]]:
+        """
+        Identifies the inputs for the Rebalancing LP (Algorithm 4).
+
+        According to the paper, rebalancing targets:
+        1. V_idle: Vehicles that are "empty, stopped and unassigned".
+        2. R_ko: The set of "unassigned requests".
+
+        Args:
+            assignment_result: The result from the main assignment solver.
+            snapshots: The vehicle states used during the assignment.
+
+        Returns:
+            A tuple containing (idle_vehicles, unassigned_requests).
+        """
+        # 1. Identify Unassigned Requests (R_ko)
+        # Directly from the assignment result[cite: 128].
+        unassigned_requests = list(assignment_result.unassigned_requests)
+
+        # 2. Identify Idle Vehicles (V_idle)
+        # We need vehicles that:
+        #   a) Are physically empty and have no remaining stops (stopped/idle state).
+        #   b) Were NOT assigned a new trip in the main optimization batch.
+
+        assigned_vehicle_ids = {a.vehicle_id for a in assignment_result.assignments}
+
+        idle_vehicles = []
+        for v in snapshots:
+            # Check a: Empty and Stopped
+            is_physically_idle = (
+                len(v.passengers_onboard) == 0 and len(v.remaining_stops_to_serve) == 0
+            )
+
+            # Check b: Unassigned in this batch
+            is_unassigned = v.vehicle_id not in assigned_vehicle_ids
+
+            if is_physically_idle and is_unassigned:
+                idle_vehicles.append(v)
+
+        return idle_vehicles, unassigned_requests
+
+    def apply_rebalancing(
+        self, rebalancing_routes: dict[str, Route], t_now: float
+    ) -> None:
+        """
+        Applies rebalancing routes (Algorithm 4) to idle vehicles.
+
+        These routes move empty vehicles to high-demand areas (or specific request origins)
+        but do NOT technically 'pickup' the request yet.
+        """
+        for v_id, route in rebalancing_routes.items():
+            vehicle = self._id_to_vehicle.get(v_id)
+
+            # Safety check: ensure vehicle exists and we aren't overwriting a busy vehicle
+            # (Though get_rebalancing_candidates filters for idle ones, double-check safe state)
+            if vehicle and vehicle.is_idle:
+                vehicle.current_route = route
+                vehicle.route_assignment_time = t_now
+                # Note: We do NOT remove requests from _request_index.
+                # Rebalancing targets are "ghosts"; the actual requests remain in R_ko[cite: 194].
+
+    #################################################################
+    # Helper Methods
+    #################################################################
     def _create_promised_request(
         self, request: Request, promised_pickup_time: float
     ) -> Request:

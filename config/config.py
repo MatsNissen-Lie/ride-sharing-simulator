@@ -9,7 +9,7 @@ DELTA = 4 * 60  # 5 minutes in seconds
 # SIM
 BATCH_DURATION = 30  # 30 seconds
 # data
-NUMBER_OF_VEHICLES = 100
+NUMBER_OF_VEHICLES = 3000
 VEHICLE_CAPACITY = 4  # vehicle capacity
 
 # max passengers to consider in route planning
@@ -22,8 +22,8 @@ MAX_REQUESTS_ABOVE_CAPACITY = 2
 PLOT_RV_GRAPH = False
 PLOT_RTV_GRAPH = False
 
-MIN_START_TIME = 8 * 3600  # after 8 hours
-MIN_REQUESTS_TO_PROCESS = 100
+MIN_START_TIME = 3 * 24 * 3600  # after 3 days
+MIN_REQUESTS_TO_PROCESS = 200
 
 
 __all__ = [
