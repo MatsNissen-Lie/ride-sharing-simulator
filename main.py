@@ -163,10 +163,15 @@ def main(
             batch_rtv_end - batch_rv_end,
         )
         # log the number of trips. I want to know how many trips of each lenghth
-        trip_stats = rtv_graph.get_trip_stats()
+        trip_stats, unique_trips = rtv_graph.get_trip_stats()
+
         logger.info(
-            f"RTV graph trip stats: {', '.join(f'size {k}: {v}' for k, v in trip_stats.items())}"
+            f"RTV graph trip stats: {', '.join(f'size {k}: {v}' for k, v in trip_stats.items())} "
         )
+        logger.info(
+            f"Unique trips by size: {', '.join(f'size {k}: {len(v)}' for k, v in unique_trips.items())} "
+        )
+
         # logg number of trips and num
         if PLOT_RTV_GRAPH:
             plot_rv_graph(

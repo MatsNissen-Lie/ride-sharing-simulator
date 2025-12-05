@@ -24,6 +24,7 @@ pairings. The resulting graph is returned as an instance of
 """
 
 import numpy as np
+from typing import cast
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from config import get_logger
@@ -181,15 +182,15 @@ class RVGraphBuilder(IRVGraphBuilder):
 
     def _solve_rr_matrix_fast(
         self,
-        idx_i,
-        idx_j,
-        req_list,
-        req_times,
-        req_origins,
-        req_dests,
-        t_o1_o2,
-        t_o2_o1,  # Pre-calculated
-        graph,
+        idx_i: np.ndarray,
+        idx_j: np.ndarray,
+        req_list: list[Request],
+        req_times: np.ndarray,
+        req_origins: np.ndarray,
+        req_dests: np.ndarray,
+        t_o1_o2: np.ndarray,
+        t_o2_o1: np.ndarray,  # Pre-calculated
+        graph: RVGraph,
     ):
         """
         Solved RR matrix using pre-fetched O-O times.
@@ -293,7 +294,13 @@ class RVGraphBuilder(IRVGraphBuilder):
                 graph.add_rr_edge(r1.id, r2.id, route)
 
     def _solve_rv_matrix_empty(
-        self, v_idxs, r_idxs, veh_list, req_list, delay_vals, graph
+        self,
+        v_idxs: np.ndarray,
+        r_idxs: np.ndarray,
+        veh_list: list[VehicleAvailability],
+        req_list: list[Request],
+        delay_vals: np.ndarray,
+        graph: RVGraph,
     ):
         """
         Builds edges for empty vehicles immediately without workers.
@@ -334,7 +341,14 @@ class RVGraphBuilder(IRVGraphBuilder):
             )
             graph.add_rv_edge(r.id, v.vehicle_id, route)
 
-    def _process_rv_occupied_parallel(self, v_idxs, r_idxs, veh_list, req_list, graph):
+    def _process_rv_occupied_parallel(
+        self,
+        v_idxs: np.ndarray,
+        r_idxs: np.ndarray,
+        veh_list: list[VehicleAvailability],
+        req_list: list[Request],
+        graph: RVGraph,
+    ):
         if len(v_idxs) == 0:
             return
 
@@ -365,7 +379,7 @@ class RVGraphBuilder(IRVGraphBuilder):
             # Filter and insert
             for req_id, veh_id, result in results:
                 if result.is_feasible:
-                    graph.add_rv_edge(req_id, veh_id, result)
+                    graph.add_rv_edge(req_id, veh_id, cast(FeasibleRoute, result))
             return
 
         # --- PATH B: PARALLEL (High Volume) ---
@@ -393,7 +407,14 @@ class RVGraphBuilder(IRVGraphBuilder):
                     logger.error(f"RV Worker exception: {exc}")
                     raise exc
 
-    def _solve_rv_matrix_m1(self, v_idxs, r_idxs, veh_list, req_list, graph):
+    def _solve_rv_matrix_m1(
+        self,
+        v_idxs: np.ndarray,
+        r_idxs: np.ndarray,
+        veh_list: list[VehicleAvailability],
+        req_list: list[Request],
+        graph: RVGraph,
+    ):
         """Vectorized solver for Vehicles with 1 existing passenger (3 Permutations)."""
         logger.info(f"RV Matrix (m=1): Processing {len(v_idxs)} edges.")
         
@@ -465,9 +486,18 @@ class RVGraphBuilder(IRVGraphBuilder):
         valid_idx = np.where(valid)[0]
         
         for k in valid_idx:
-            self._add_m1_edge(graph, v_idxs[k], r_idxs[k], veh_list, req_list, best_perms[k], best_costs[k])
+            self._add_m1_edge(graph, int(v_idxs[k]), int(r_idxs[k]), veh_list, req_list, int(best_perms[k]), float(best_costs[k]))
 
-    def _add_m1_edge(self, graph, v_idx, r_idx, v_list, r_list, perm, cost):
+    def _add_m1_edge(
+        self,
+        graph: RVGraph,
+        v_idx: int,
+        r_idx: int,
+        v_list: list[VehicleAvailability],
+        r_list: list[Request],
+        perm: int,
+        cost: float,
+    ):
         v = v_list[v_idx]
         r = r_list[r_idx]
         # Vehicle has 1 passenger (set->list->[0])
@@ -487,7 +517,9 @@ class RVGraphBuilder(IRVGraphBuilder):
         )
         graph.add_rv_edge(r.id, v.vehicle_id, route)
 
-    def _build_route_from_perm(self, perm_id, r1, r2, cost):
+    def _build_route_from_perm(
+        self, perm_id: int, r1: Request, r2: Request, cost: float
+    ) -> FeasibleRoute:
         """Helper to reconstruct the Stop sequence for the chosen best permutation."""
         # Sequence definitions matching the matrix logic above
         # 0: o1 -> o2 -> d1 -> d2

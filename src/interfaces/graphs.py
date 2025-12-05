@@ -100,27 +100,6 @@ class RVGraph:
         route = self.get_rv_route(r_id, v_id)
         return route.cost if route else float("inf")
 
-    # def requests_by_id(self) -> dict[str, Request]:
-    #     """Reconstructs a mapping of request IDs to Request objects
-    #     from the stored edges.
-
-    #     Note: This assumes that the FeasibleRoute objects stored in
-    #     rr_details and rv_details contain the original Request objects.
-    #     """
-    #     requests: dict[str, Request] = {}
-
-    #     # From R-R edges
-    #     for (r1_id, r2_id), route in self.rr_details.items():
-    #         for req in route.requests:
-    #             requests[req.id] = req
-
-    #     # From R-V edges
-    #     for (r_id, v_id), route in self.rv_details.items():
-    #         for req in route.requests:
-    #             requests[req.id] = req
-
-    #     return requests
-
 
 @dataclass
 class RTVGraph:
@@ -193,7 +172,7 @@ class RTVGraph:
         route = self.get_route(trip, vehicle_id)
         return route.cost if route else float("inf")
 
-    def get_trip_stats(self) -> dict[int, int]:
+    def get_trip_stats(self) -> tuple[dict[int, int], dict[int, set[TripId]]]:
         """
         Returns a dictionary mapping trip lengths to the number of trips of that length.
         """
@@ -203,7 +182,9 @@ class RTVGraph:
             length = len(trip)
             stats[length] = stats.get(length, 0) + 1
 
-        return stats
+        unique_trips = {}
+        for trip in self.trip_to_vehicles.keys():
+            size = len(trip)
+            unique_trips.setdefault(size, set()).add(trip)
 
-
-#
+        return stats, unique_trips
