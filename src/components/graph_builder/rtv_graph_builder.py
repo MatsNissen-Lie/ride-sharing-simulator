@@ -1,5 +1,5 @@
 from config.config import MAX_REQUESTS
-from src.components.rv_graph_builder import RVGraph
+from old_code.rv_graph_builder import RVGraph
 from src.interfaces import FeasibleRoute
 from collections import defaultdict
 from typing import Set, Dict, cast

@@ -4,12 +4,8 @@ from config import BATCH_DURATION, get_logger, NUMBER_OF_VEHICLES
 from config.config import MIN_REQUESTS_TO_PROCESS, MIN_START_TIME, PLOT_RTV_GRAPH
 from config.paths import PLOT_DIR
 from src.components.batch_controller import BatchController
-from old_code.rtv_graph_builder import RTVGraphBuilder
-
-# from src.components.rv_graph_builder import RVGraphBuilder
-
+from src.components.graph_builder.rtv_graph_builder import RTVGraphBuilder
 from src.components.graph_builder.rv_builder import RVGraphBuilder
-
 
 from src.components.network_service import NetworkXService
 from src.components.rebalance_solver import RebalancingSolver
