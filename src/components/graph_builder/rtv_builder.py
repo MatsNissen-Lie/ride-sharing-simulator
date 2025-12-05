@@ -49,23 +49,22 @@ class RTVGraphBuilder(IRTVGraphBuilder):
 
         requests_by_id: dict[str, Request] = {r.id: r for r in requests}
 
-        # --- STEP 0: PREFETCH / CACHE WARMING ---
-        # Identify all unique nodes involved in this batch
-        unique_nodes = set()
-
-        # 1. Request Origins and Destinations
-        for req in requests:
-            unique_nodes.add(req.origin_node)
-            unique_nodes.add(req.destination_node)
-
-        # 2. Vehicle Locations
-        for veh in vehicles:
-            unique_nodes.add(veh.available_at_node)
-
-        # 3. Trigger the Big Fetch
-        # This will populate the RoutePlanner's internal cache
         if not self._route_planner._network.is_nuclear:
+            # --- STEP 0: PREFETCH / CACHE WARMING ---
+            # Identify all unique nodes involved in this batch
+            unique_nodes = set()
+
+            # 1. Request Origins and Destinations
+            for req in requests:
+                unique_nodes.add(req.origin_node)
+                unique_nodes.add(req.destination_node)
+
+            # 2. Vehicle Locations
+            for veh in vehicles:
+                unique_nodes.add(veh.available_at_node)
             node_list = list(unique_nodes)
+            # 3. Trigger the Big Fetch
+            # This will populate the RoutePlanner's internal cache
             if hasattr(self._route_planner._network, "prefetch_all_pairs"):
                 self._route_planner._network.prefetch_all_pairs(node_list)
             logger.info(
