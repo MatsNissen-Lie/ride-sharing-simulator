@@ -64,13 +64,13 @@ class RTVGraphBuilder(IRTVGraphBuilder):
 
         # 3. Trigger the Big Fetch
         # This will populate the RoutePlanner's internal cache
-        node_list = list(unique_nodes)
-        if hasattr(self._route_planner._network, "prefetch_all_pairs"):
-            self._route_planner._network.prefetch_all_pairs(node_list)
-
-        logger.info(
-            f"Prefetched routes for {len(node_list)} unique nodes ({len(node_list)**2} pairs)"
-        )
+        if not self._route_planner._network.is_nuclear:
+            node_list = list(unique_nodes)
+            if hasattr(self._route_planner._network, "prefetch_all_pairs"):
+                self._route_planner._network.prefetch_all_pairs(node_list)
+            logger.info(
+                f"Prefetched routes for {len(node_list)} unique nodes ({len(node_list)**2} pairs)"
+            )
 
         try:
             # For each vehicle, we build trips incrementally (Algorithm 1)
@@ -84,9 +84,9 @@ class RTVGraphBuilder(IRTVGraphBuilder):
                     max_trip_size=max_trip_size,
                     rtv_graph=rtv_graph,
                 )
-        finally:
-            # --- STEP X: CLEANUP ---
-            self._route_planner._network.clear_l1_cache()
+        except Exception as e:
+            logger.error(f"Error building RTV graph: {e}")
+            raise e
 
         return rtv_graph
 

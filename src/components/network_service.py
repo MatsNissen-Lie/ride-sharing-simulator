@@ -1,7 +1,6 @@
 import itertools
-import itertools
-from typing import Iterator, cast, Iterable
-
+from typing import Iterable
+import time
 import networkx as nx
 import numpy as np
 
@@ -17,105 +16,177 @@ logger = get_logger(__name__)
 class NetworkXService(INetworkService):
     """
     Minimal MultiDiGraph wrapper with:
-      - L1: @lru_cache
+      - L1: Nuclear Cache (NumPy dense arrays)
       - L2: DuckDBPathCache (time_simple hot table; optional path_extended)
-      - Fallback: compute with NetworkX, write-through to DuckDB
     """
 
     def __init__(
         self,
         graph: nx.MultiDiGraph | None,
         db: DuckDBPathCache | None = None,
+        max_node_id: int | None = None,
+        prefetch: bool = True,
     ):
         if graph is not None and not isinstance(graph, nx.MultiDiGraph):
             raise TypeError("NetworkXService requires an nx.MultiDiGraph")
         self.G = graph
+
+        if max_node_id is not None:
+            self.N = max_node_id
+        elif graph is not None:
+            self.N = max(graph.nodes) + 1
+        else:
+            self.N = 0
+
         # L2: Persistent Storage
         self._db = db if db is not None else DuckDBPathCache()
 
-        # L1: Fast RAM Cache.
-        # Structure: {(origin, dest): (time_s, dist_m)}
-        # We store tuples, not Objects, to save RAM and instantiation time.
-        self._l1_cache: dict[tuple[int, int], tuple[float, float]] = {}
+        # --- NUCLEAR CACHE SETUP ---
+        # 4600^2 * 4 bytes = ~85 MB. Cheap!
+        # We use NaN as the "Not Found / Not Calculated" sentinel.
+
+        # check that n is not too large
+        # 20k^2 * 4 bytes = ~1.6 GB
+        if self.N > 20_000:
+            raise ValueError(
+                f"NetworkXService: Node count {self.N} is too large for nuclear cache."
+            )
+
+        # 1. Time Matrix (Float32 for speed/size)
+        self._time_matrix = np.full((self.N, self.N), np.nan, dtype=np.float32)
+
+        # 2. Distance Matrix (Optional, if you need it for costs)
+        self._dist_matrix = np.full((self.N, self.N), np.nan, dtype=np.float32)
+
+        # Lets make it nuclear by default
+        if not prefetch:
+            self.is_nuclear = False
+            return
+        logger.info("NetworkXService: Initializing Nuclear Cache...")
+        start_time = time.time()
+        self.prefetch_all_pairs(list(range(self.N)))
+        logger.info(
+            f"NetworkXService: Nuclear Cache initialized in {time.time() - start_time:.2f} seconds."
+        )
+        self.is_nuclear = True
 
     def get_shortest_path(
         self, origin_node: int, destination_node: int
     ) -> NetworkPath | None:
+        # 1. Direct Array Access (Fastest possible single-item lookup)
+        # Note: We check bounds only if you suspect invalid IDs
+        t = float(self._time_matrix[origin_node, destination_node])
 
-        # 1. Fast L1 Lookup (O(1))
-        # We catch the KeyError explicitly; it is faster than .get() for high-hit-rate caches
-        try:
-            time_s, dist_m = self._l1_cache[(origin_node, destination_node)]
-            if time_s < 0:
-                return None  # Handle "No Path" marker
-            return NetworkPath(travel_time=time_s, travel_distance=dist_m)
-        except KeyError:
-            pass
+        # 2. Check for Cache Miss (NaN)
+        if np.isnan(t):
+            if self.is_nuclear:
+                raise RuntimeError(
+                    f"Nuclear cache miss detected. This should not happen. Nodes {origin_node} -> {destination_node}"
+                )
 
-        # 2. L2 DuckDB Lookup
-        hit = self._db.get_simple(origin_node, destination_node)
-        if hit:
-            time_s, dist_m = hit
-            # Update L1 immediately for next time
-            self._l1_cache[(origin_node, destination_node)] = (time_s, dist_m)
+            # L2 DuckDB Lookup (Fallback)
+            hit = self._db.get_simple(origin_node, destination_node)
+            if hit:
+                time_s, dist_m = hit
+                # Update L1 immediately for next time
+                self._time_matrix[origin_node, destination_node] = time_s
+                self._dist_matrix[origin_node, destination_node] = dist_m
 
-            if time_s < 0:
-                return None
-            return NetworkPath(travel_time=time_s, travel_distance=dist_m)
+                if time_s < 0:
+                    return None
+                return NetworkPath(travel_time=time_s, travel_distance=dist_m)
 
-        # 3. Fallback: Calculation (Same as your original logic, simplified)
-        if origin_node == destination_node:
-            return NetworkPath(travel_time=0.0, travel_distance=0.0)
+            # If not in DB either, return None (or raise error if strict)
+            # User said "The db has all pairs already loaded", so this should imply
+            # if it's not in DB, it doesn't exist or is unreachable.
+            return None
 
-        # ... (Insert your path computation logic here) ...
-        # log the nodes not found
-        logger.warning(f"No path found between {origin_node} and {destination_node}")
-        raise RuntimeError("Computed paths logic should not be needed here.")
-        return None
+        # 3. Check for No Path (inf)
+        # We assume the DB returns inf for unreachable nodes, which we store in the matrix.
+        # Also check for -1.0 which might be stored as "no path" sentinel in DB/matrix
+        if t == float("inf") or t > 1e9 or t < 0:
+            return None
+
+        # 4. Return Path
+        # We also need distance.
+        d = float(self._dist_matrix[origin_node, destination_node])
+        return NetworkPath(travel_time=t, travel_distance=d)
 
     def prefetch_all_pairs(self, nodes: list[int]) -> None:
         """
-        Populates the cache from the DB matrix WITHOUT python loops.
+        Populates the NumPy Cache using advanced indexing (Vectorized).
         """
         if not nodes:
             return
 
-        # 1. Fetch Matrix (C-speed fetch)
-        # Returns shape (N, N) floats
-        matrix_time = self._db.get_travel_time_matrix(nodes, nodes)
+        # 1. Fetch from DB (returns NxN matrix)
+        # Ensure DB returns data in the exact order of 'nodes' list
+        # This returns a matrix of travel times.
+        db_matrix_time = self._db.get_travel_time_matrix(nodes, nodes)
 
-        # 2. Flatten data for bulk insert
-        # We need a flat list of values to match the flat list of keys
-        flat_times = matrix_time.ravel(order="C")  # O(1) view if contiguous
+        # 2. NUCLEAR UPDATE (No Loops)
+        # We use NumPy "Fancy Indexing" to update the specific sub-grid instantly.
+        # This operates at C-speed.
 
-        # 3. Create Keys Iterator (C-speed generation)
-        # itertools.product creates the (u, v) pairs without storing them all in RAM at once
-        keys_iterator = cast(
-            Iterator[tuple[int, int]], itertools.product(nodes, repeat=2)
-        )
+        # Create the grid of indices (ix_ handles the cross-product broadcasting)
+        # This says: Update rows [nodes] and columns [nodes]
+        grid_indices = np.ix_(nodes, nodes)
 
-        # 4. Handle Distances
-        # If your matrix only gives time, we assume dist=0 or handle it.
-        # If you have a distance matrix too, flatten it similarly.
-        # For this example, we'll zip time with a default distance of 0.0
-        # If you strictly need distance, fetch a distance matrix too.
+        # Bulk write
+        self._time_matrix[grid_indices] = db_matrix_time
 
-        # Create generator of values: ((time, dist), (time, dist)...)
-        # We use a generator expression so we don't allocate a massive list
-        values_iterator: Iterator[tuple[float, float]] = (
-            (float(t), 0.0) for t in flat_times
-        )
+        # Note: We are not populating _dist_matrix here because get_travel_time_matrix
+        # only returns times. Distances will be fetched on-demand via L2 fallback
+        # if get_shortest_path is called.
 
-        # 5. BULK UPDATE (The "Magic" Step)
-        # dict.update consumes the zipped iterators in C.
-        # No Python loop overhead. Fastest possible insertion.
-        self._l1_cache.update(zip(keys_iterator, values_iterator))
+        logger.info(f"Nuclear Cache: Updated {len(nodes)**2} entries.")
 
-        logger.info(f"Prefetched {len(nodes)**2} pairs into L1 cache.")
+    def get_travel_times_l1_cache_subset(
+        self, nodes: Iterable[int]
+    ) -> dict[tuple[int, int], float]:
+        """
+        Extracts a subset of the matrix for the Route Planner.
+        Blazing fast because it extracts a contiguous block (or indexed block)
+        and zips it, skipping single-item lookups.
+        """
+        node_list = list(nodes)
+
+        # 1. Extract Sub-Matrix (Vectorized)
+        # This creates a small temporary copy, e.g., 6x6 floats
+        sub_matrix = self._time_matrix[np.ix_(node_list, node_list)]
+
+        # # Enforce 0.0 for diagonals (self-loops)
+        # np.fill_diagonal(sub_matrix, 0.0) #TODO: Check if needed
+
+        # 2. Flatten
+        flat_values = sub_matrix.ravel()
+
+        # 3. Create Dict
+        # itertools.product matches the 'ravel' order (Row-Major)
+        # We use dict(zip(...)) which is highly optimized in Python
+        return dict(zip(itertools.product(node_list, repeat=2), flat_values))  # type: ignore
 
     def get_travel_time_matrix(
         self, origins: list[int], destinations: list[int]
     ) -> np.ndarray:
+        if self.is_nuclear:
+            # 1. Extract Sub-Matrix (Vectorized)
+            # We copy to avoid modifying the cache when we replace NaNs
+            sub_matrix = self._time_matrix[np.ix_(origins, destinations)].copy()
+
+            # 2. Convert NaN (Nuclear "No Path") to inf (Standard "No Path")
+            # This ensures consistency with DuckDBPathCache behavior
+            sub_matrix[np.isnan(sub_matrix)] = float("inf")
+
+            # 3. Enforce 0.0 for diagonals if origins and destinations overlap
+            # This is a bit tricky with rectangular matrices, but if row_idx == col_idx (meaning same node), it should be 0.0
+            # However, np.ix_ returns a copy, so we can modify it safely.
+            # But we need to know WHICH elements correspond to self-loops.
+            # A simple way is to iterate, but that defeats vectorization.
+            # Actually, if the user asks for (u, u), it should already be 0.0 in _time_matrix.
+            # So we just return the sub_matrix after NaN conversion.
+            return sub_matrix
+
         # Check if we have these in L1 first?
         # Usually for matrices, it's faster to go straight to DuckDB
         # OR build a numpy array from L1 if you are sure L1 is full.
@@ -214,28 +285,21 @@ class NetworkXService(INetworkService):
 
     def clear_l1_cache(self) -> None:
         """Clears the manual cache to free memory."""
-        self._l1_cache.clear()
+        # Reset to NaN
+        self._time_matrix.fill(np.nan)
+        self._dist_matrix.fill(np.nan)
+        # Restore diagonals
+        np.fill_diagonal(self._time_matrix, 0.0)
+        np.fill_diagonal(self._dist_matrix, 0.0)
 
-    def get_travel_times_l1_cache_subset(
-        self, nodes: Iterable[int]
-    ) -> dict[tuple[int, int], float]:
-        """
-        Returns a dense dictionary of travel times.
-        Raises KeyError if any pair is missing from the L1 cache.
-        """
-        # 1. Local variable optimization (avoids 'self.' lookup in the loop)
-        main_cache = self._l1_cache
+    def update_cache(self, time_matrix: np.ndarray) -> None:
+        """Updates the L1 cache with a given time matrix."""
+        if time_matrix.shape != (self.N, self.N):
+            raise ValueError(
+                f"Input time_matrix shape {time_matrix.shape} does not match expected {(self.N, self.N)}"
+            )
+        self._time_matrix = time_matrix
 
-        # 2. Dictionary Comprehension
-        # This executes the loop in C. It creates the tuple key, hashes it,
-        # and looks up the value. If a key is missing, it raises KeyError immediately.
-        subset = {
-            (u, v): main_cache[(u, v)][0] for u, v in itertools.permutations(nodes, 2)
-        }
-
-        # 3. Handle Diagonals (Self-loops)
-        # Permutations skips (u, u), but the solver might need to know that cost is 0.0
-        # Doing this here is faster than doing "if u == v" inside the hot simulation loop.
-        subset.update({(n, n): 0.0 for n in nodes})
-
-        return subset
+    def get_l1_cache(self):
+        """Returns the current L1 cache."""
+        return self._time_matrix

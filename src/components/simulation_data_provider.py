@@ -10,6 +10,7 @@ import networkx as nx
 import polars as pl
 
 from config import NUMBER_OF_VEHICLES, get_logger, RIDER_DIR, RIDER_PATTERN
+from config.config import VEHICLE_CAPACITY
 from src.interfaces.data_models import MetaRequest, Passenger, Vehicle
 from src.utils.sim_clock import SimulationClock
 from src.state_representation.manhatten_fast import load_graph
@@ -128,7 +129,7 @@ class SimulationDataProvider:
         node_id = int(row.get("current_node", row["node_id"]))
         return Vehicle(
             id=str(row["vehicle_id"]),
-            capacity=int(row.get("capacity", 4)),
+            capacity=VEHICLE_CAPACITY,
             passengers_onboard=passengers,
             last_visited_node=node_id,
             last_visited_time=0.0,

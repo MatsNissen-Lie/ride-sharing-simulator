@@ -1,5 +1,6 @@
 # src/graph_builder/workers.py
 
+import numpy as np
 from src.components.network_service import NetworkXService
 from src.database.simple_db import DuckDBPathCache
 from src.components.route_planner import RoutePlanner
@@ -24,7 +25,7 @@ _db_cache: DuckDBPathCache | None = None
 _network_service: NetworkXService | None = None
 
 
-def init_worker(shared_cache: dict[tuple[int, int], tuple[float, float]] | None = None):
+def init_worker(shared_cache: np.ndarray | None = None):
     """
     Initializer for worker processes.
     Opens the DB connection once per process.
@@ -33,10 +34,12 @@ def init_worker(shared_cache: dict[tuple[int, int], tuple[float, float]] | None 
     _db_cache = DuckDBPathCache(read_only=True)
     # We cheat: we don't pass the NX graph. The planner usually only needs get_shortest_path
     # which hits the DB cache first.
-    _network_service = NetworkXService(graph=None, db=_db_cache)  # type: ignore
+    max_node_id = shared_cache.shape[0] if shared_cache is not None else None
+    _network_service = NetworkXService(graph=None, db=_db_cache, max_node_id=max_node_id, prefetch=False)  # type: ignore
 
-    if shared_cache:
-        _network_service._l1_cache.update(shared_cache)
+    if shared_cache is not None:
+        _network_service.update_cache(shared_cache)
+        _network_service.is_nuclear = True
 
 
 def process_rr_chunk(tasks: list[RRTask]) -> list[tuple[str, str, FeasibleRoute]]:

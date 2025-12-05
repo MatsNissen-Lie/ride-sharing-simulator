@@ -17,7 +17,8 @@ from src.interfaces.graphs import RTVGraph, RVGraph
 class INetworkService(ABC):
     """Abstract interface for all road network and travel time queries."""
 
-    _l1_cache: dict[tuple[int, int], tuple[float, float]] = {}
+    is_nuclear: bool = False
+    """Indicates if the cache is 'nuclear' (i.e., all-pairs precomputed)."""
 
     @abstractmethod
     def get_shortest_path(
@@ -72,11 +73,17 @@ class INetworkService(ABC):
         """
         pass
 
-    def get_l1_cache(self) -> dict[tuple[int, int], tuple[float, float]]:
+    def update_cache(self, time_matrix: np.ndarray) -> None:
+        """
+        Updates the L1 cache with a given time matrix.
+        """
+        raise NotImplementedError("update_cache not implemented in base class")
+
+    def get_l1_cache(self):
         """
         Returns the current L1 cache.
         """
-        return self._l1_cache
+        raise NotImplementedError("get_l1_cache not implemented in base class")
 
 
 # ---------------------------------------------------------------------------
