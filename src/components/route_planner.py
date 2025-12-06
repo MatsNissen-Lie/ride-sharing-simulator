@@ -110,6 +110,10 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
                 limit = getattr(
                     r, "earliest_dropoff_time", None
                 )  # pre-calculated direct arrival
+                if limit is None:
+                    raise ValueError(
+                        f"Earliest dropoff time not set for request {r.id}"
+                    )
                 t_latest.append((limit + DELTA) if limit else float("inf"))
 
         # Precedence: Pickup index for every dropoff index (if applicable)
