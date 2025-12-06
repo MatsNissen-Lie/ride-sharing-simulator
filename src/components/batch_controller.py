@@ -565,7 +565,7 @@ class BatchController(IBatchController):
             origin_node=request.origin_node,
             destination_node=request.destination_node,
             request_time=request.request_time,
-            earliest_dropoff_time=request.earliest_dropoff_time,
+            earliest_dropoff_time=promised_pickup_time,  # request.earliest_dropoff_time,
             promised_pickup_time=promised_pickup_time,
         )
 

@@ -97,3 +97,24 @@ class IBatchController(ABC):
             promised[id] = min(old_promise, scheduled_pickup_time).
         """
         ...
+    @abstractmethod
+    def get_rebalancing_candidates(
+        self,
+        assignment_result: AssignmentResult,
+        vehicle_avail_pool: set[VehicleAvailability],
+    ) -> tuple[set[VehicleAvailability], set[Request]]:
+        """
+        Identify idle vehicles and unassigned requests for rebalancing.
+        """
+        ...
+
+    @abstractmethod
+    def apply_rebalancing(
+        self,
+        rebalancing_routes: list[tuple[VehicleAvailability, int]],
+        t_now: float,
+    ) -> None:
+        """
+        Apply rebalancing outcomes to the fleet.
+        """
+        ...
