@@ -1,27 +1,17 @@
 """Minimal single-vehicle route planner used during prototyping."""
 
-import itertools
-from typing import Iterable, Iterator, cast
-
-import numpy as np
-
-from config import BATCH_DURATION, DELTA, OMEGA, get_logger
-from config.config import MAX_REQUESTS
-from src.components.utils import validate_route_stops
+from config import DELTA, OMEGA, get_logger
+from config.config import VEHICLE_CAPACITY, MAX_REQUESTS_ABOVE_CAPACITY
 
 from src.interfaces import (
     FeasibilityResult,
-    FeasibleRoute,
     Infeasible,
     Request,
     Stop,
-    Route,
-    Passenger,
     INetworkService,
     VehicleAvailability,
     ISingleVehicleRoutePlanner,
 )
-from src.interfaces.data_models import NetworkPath
 
 
 logger = get_logger(__name__)

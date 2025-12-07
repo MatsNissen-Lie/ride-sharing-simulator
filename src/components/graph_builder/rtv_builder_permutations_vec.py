@@ -1,4 +1,5 @@
 import numpy as np
+import itertools
 from typing import List, Set, Dict, Optional, Tuple, FrozenSet, cast
 
 from dataclasses import dataclass
@@ -128,6 +129,12 @@ class VectorizedInserter:
 
     def __init__(self, network: INetworkService):
         self.network = network
+        # Cache the matrix for direct access
+        # We assume node_id corresponds directly to matrix index
+        try:
+             self.matrix = self.network.get_l1_cache()
+        except NotImplementedError:
+             self.matrix = None
 
     def find_best_request_insertions(
         self, base_perm: TripPermutation, pickup: Stop, dropoff: Stop
@@ -222,17 +229,287 @@ class VectorizedInserter:
 
         return list(zip(*np.where(final_mask)))
 
+    def find_optimal_vehicle_integration(
+        self, 
+        base_perm: TripPermutation, 
+        v_stops: List[Stop]
+    ) -> Optional[Tuple[float, List[Stop], List[int]]]:
+        """
+        1. Fixes v_stops[0] (Start).
+        2. Permutes v_stops[1:] (Drops).
+        3. Finds the best weave cost across all permutations.
+        Returns: (cost, ordered_v_stops, insertion_indices)
+        """
+        if not v_stops:
+            return 0.0, [], []
+
+        # Need the matrix for this
+        if self.matrix is None:
+             # Fallback: cannot optimize without matrix
+             return None
+
+        # Optimization: If only Start + 1 Drop, no need to permute
+        if len(v_stops) <= 2:
+            res = self._solve_ordered_weave(base_perm, v_stops)
+            if res:
+                return res[0], v_stops, res[1]
+            return None
+
+        best_cost = INF
+        best_res = None
+        best_perm = None
+
+        start_node = v_stops[0]
+        drop_nodes = v_stops[1:]
+
+        # Iterate all valid orderings of the passengers on board
+        for p_drops in itertools.permutations(drop_nodes):
+            # Construct candidate chain: [Start, Drop_A, Drop_B...]
+            candidate_chain = [start_node] + list(p_drops)
+            
+            # Use the fast matrix weaver for this specific order
+            res = self._solve_ordered_weave(base_perm, candidate_chain)
+            
+            if res:
+                cost, indices = res
+                if cost < best_cost:
+                    best_cost = cost
+                    best_res = (cost, candidate_chain, indices)
+                    best_perm = candidate_chain
+
+        return best_res
+
+    def _solve_ordered_weave(
+        self, 
+        base_perm: TripPermutation, 
+        ordered_v_stops: List[Stop]
+    ) -> Optional[Tuple[float, List[int]]]:
+        if self.matrix is None:
+             return None
+
+        """
+        Weaves a FIXED chain of Vehicle stops into the Base Permutation.
+        Returns (final_cost, list_of_insertion_indices).
+        Index j means "Before T[j]".
+        """
+        N = len(base_perm.stops)
+        K = len(ordered_v_stops)
+        
+        # Node indices
+        # We assume node_id is the index.
+        t_indices = [s.node_id for s in base_perm.stops]
+        v_indices = [s.node_id for s in ordered_v_stops]
+        
+        # --- 0. Pre-computation ---
+        if N > 0:
+            limit_vector = np.minimum.accumulate(base_perm.slacks[::-1])[::-1]
+            limit_vector = np.append(limit_vector, INF) # Pad for end
+            base_arrivals = base_perm.earliest_arrivals 
+        else:
+            limit_vector = np.full(1, INF)
+            base_arrivals = np.array([]) 
+
+        # --- 1. DP State Initialization ---
+        v0 = ordered_v_stops[0]
+        v0_idx = v_indices[0]
+        start_time = v0.hard_earliest
+        
+        current_delay = np.full(N + 1, INF)
+        
+        # Backtracking pointers: parents[k, j] stores the index i (prev_j)
+        # We need to store parents for k=1..K-1. 
+        # k=0 is fixed at 0.
+        parents = np.zeros((K, N + 1), dtype=int)
+        
+        # Calculate transition V0 -> T0 (If N > 0)
+        if N > 0:
+            t0_idx = t_indices[0]
+            travel = self.network.get_travel_time(v0_idx, t0_idx)
+
+            assert travel is not None
+            # assert self.matrix is not None (Checked in caller or via implicit)
+            # Pyright complains optional. We handle via cast or assert.
+            # Ideally we asserted at top of _solve_ordered_weave.
+ 
+            
+            if np.isnan(travel): return None
+                
+            arr_t0 = start_time + travel
+            
+            if arr_t0 > base_perm.stops[0].hard_latest:
+                return None
+                
+            delay = max(0.0, arr_t0 - base_arrivals[0])
+            
+            if delay <= limit_vector[0]:
+                current_delay[0] = delay # V0 inserted at 0
+        else:
+            current_delay[0] = 0.0
+
+        # --- 2. DP Loop for V1...VK ---
+        for k in range(1, K):
+            v_curr = ordered_v_stops[k]
+            v_idx = v_indices[k]
+            v_prev_idx = v_indices[k-1]
+            
+            # Matrix of valid (i, j) pairs
+            I, J = np.indices((N + 1, N + 1))
+            mask_order = I <= J
+            mask_prev_valid = current_delay[I] != INF
+            valid_transitions = mask_order & mask_prev_valid
+            
+            if not np.any(valid_transitions):
+                return None
+                
+            std_detours = self._calc_standard_detours(t_indices, v_idx, N)
+            cost_separated = current_delay[I] + std_detours[J]
+            
+            chained_detours = self._calc_chained_detours(t_indices, v_prev_idx, v_idx, N)
+            cost_chained = current_delay[I] + chained_detours[I]
+            
+            total_delay_grid = np.where(I < J, cost_separated, INF)
+            np.fill_diagonal(total_delay_grid, cost_chained)
+            
+            total_delay_grid = np.where(valid_transitions, total_delay_grid, INF)
+            
+            feasible_limit = total_delay_grid <= limit_vector[J]
+            valid_grid = np.where(feasible_limit, total_delay_grid, INF)
+            
+            # Reduce
+            next_delay = np.min(valid_grid, axis=0) # min over I
+            best_prevs = np.argmin(valid_grid, axis=0) # Index I that gave min
+            
+            if np.all(next_delay == INF):
+                return None
+            
+            current_delay = next_delay
+            parents[k] = best_prevs
+
+        # End of Loop
+        min_final_cost = np.min(current_delay)
+        if min_final_cost == INF:
+            return None
+            
+        # Backtrack
+        final_j = np.argmin(current_delay)
+        indices = [int(final_j)]
+        curr = final_j
+        
+        for k in range(K - 1, 0, -1):
+            prev = parents[k, curr]
+            indices.append(int(prev))
+            curr = prev
+            
+        indices.append(0) # V0 is always at 0
+        indices.reverse()
+        
+        return min_final_cost, indices
+
+    def _calc_standard_detours(self, t_indices: List[int], v_idx: int, N: int) -> np.ndarray:
+        """Calc detour of inserting V into T at every pos j (assuming prev is T_{j-1})"""
+        assert self.matrix is not None
+        # Detour at j: Dist(T_{j-1}, V) + Dist(V, T_j) - Dist(T_{j-1}, T_j)
+        # Detour at j: Dist(T_{j-1}, V) + Dist(V, T_j) - Dist(T_{j-1}, T_j)
+        # Boundary j=0: Dist(Start?, V) + Dist(V, T0) - ... undefined.
+        # But for std_detours we assume i < j, so j must be >= 1 usually if we start at 0.
+        # If j=0, it means we insert at start. But we start at Start.
+        # Actually i < j implies we visited at least one Trip Node if j > 0.
+        
+        # We need numpy arrays for T indices.
+        # To avoid re-creating arrays every time, we could cache them on TripPermutation?
+        # For now, create on fly.
+        
+        detours = np.full(N + 1, INF)
+        
+        if N == 0:
+            return detours
+        
+        # Array of T nodes
+        T = np.array(t_indices)
+        
+        # Dist(V, T_j) for j=0..N-1
+        # dist_v_t = self.matrix[v_idx, T] 
+        # But we need Dist(V, T_j) for j being the insertion index.
+        # Insertion at j means before T[j].
+        # So Next Node is T[j].
+        # Valid for j=0..N-1. For j=N, Next is End (Virtual).
+        
+        # Dist(T_{j-1}, V)
+        # Prev Node is T[j-1].
+        # Valid for j=1..N.
+        
+        # We process range 1..N-1 (Inner)
+        # j range [1, N-1] indices of detours
+        # Prev: T[0..N-2]
+        # Next: T[1..N-1]
+        
+        if N > 1:
+            prev_nodes = T[:-1] # 0..N-2
+            next_nodes = T[1:]  # 1..N-1
+            
+            d_prev_v = np.array([self.network.get_travel_time(n, v_idx) for n in prev_nodes])
+            d_v_next = np.array([self.network.get_travel_time(v_idx, n) for n in next_nodes])
+            d_prev_next = np.array([self.network.get_travel_time(p, n) for p, n in zip(prev_nodes, next_nodes)])
+            
+            detours[1:N] = d_prev_v + d_v_next - d_prev_next
+            
+        # Boundary j=N (End)
+        # Prev: T[N-1]
+        # Next: None?
+        # Detour is just Dist(T_{N-1}, V)? 
+        # No, "Detour" implies change in path info.
+        # If we append V at end, the "Trip" ends at V instead of T_{N-1}.
+        # Cost added to delay? 
+        # If we consider the trip finishes at T_{N-1}, adding V adds Dist(T_{N-1}, V).
+        # Yes.
+        d_last_v = self.network.get_travel_time(T[-1], v_idx)
+        detours[N] = d_last_v
+        
+        # Boundary j=0 (Start)
+        # Only valid if i < j is impossible index-wise? 
+        # If i=0, j=0 is chain.
+        # If i=-1? No.
+        # So for standard detour (gap), j must be >= 1 really.
+        # We verify this in logic: I < J. If I >= 0, then J >= 1.
+        
+        return detours
+
+    def _calc_chained_detours(self, t_indices: List[int], v_prev_idx: int, v_curr_idx: int, N: int) -> np.ndarray:
+        """Calc detour of inserting V_curr immediately after V_prev at pos i"""
+        assert self.matrix is not None
+        # Cost = Dist(V_prev, V_curr) + Dist(V_curr, Next) - Dist(V_prev, Next)
+        # Insertion at i. Next node is T[i] (if i < N).   
+        
+        detours = np.full(N + 1, INF)
+        
+        if N == 0:
+            detours[0] = self.network.get_travel_time(v_prev_idx, v_curr_idx)
+            return detours
+            
+        T = np.array(t_indices)
+        
+        # Constant Term
+        d_vv = self.network.get_travel_time(v_prev_idx, v_curr_idx)
+        
+        # Terms dependent on Next Node (T[i]) for i=0..N-1
+        d_curr_next = np.array([self.network.get_travel_time(v_curr_idx, n) for n in T])
+        d_prev_next = np.array([self.network.get_travel_time(v_prev_idx, n) for n in T])
+        
+        detours[:N] = d_vv + d_curr_next - d_prev_next
+        
+        # Boundary i=N (End)
+        # Next is None.
+        # We act as if we just append V_curr after V_prev.
+        # Cost is Dist(V_prev, V_curr).
+        detours[N] = d_vv
+        
+        return detours
+
     def find_vehicle_chain_insertion(
         self, base_perm: TripPermutation, vehicle_stops: List[Stop]
     ) -> List[Tuple[int, ...]]:
-        """
-        Optimized 'Weave' for vehicle stops.
-        Treats vehicle stops as a rigid chain or semi-rigid chain.
-        """
-        # Logic is similar to above, but enforcing
-        # idx_stop1 <= idx_stop2 <= ...
-        # For MVP, we can just use the validator since K is usually 1 or 2.
-        return []
+         return [] # Deprecated/Unused in new logic
+
 
 
 @dataclass
@@ -466,59 +743,82 @@ class PermutationRTVGraphBuilder(IRTVGraphBuilder):
                     )
                 )
 
-            # Check Feasibility: Can we weave this chain into ANY of the permutations?
+            # Check Feasibility using Vectorized Weaver
             best_route = None
             best_cost = INF
 
             for perm in permutations:
-                # We try to insert the vehicle stops into the request permutation.
-                # Since vehicle stops usually must happen ASAP or in fixed order,
-                # we treat this as prepending/weaving.
-
-                # Simple Logic: Prepend V_Start, Weave Drops
-                # For high performance, we would use _inserter logic here too.
-                # MVP: Just concat and validate.
-
-                full_sequence = v_stops + list(perm.stops)
-
-                # Check with validator
-                final_perm = self._validator.validate(full_sequence)
-
-                if final_perm:
-                    # Logic: If validator passes, it is feasible.
-                    # We create the Route object.
-                    cost = final_perm.total_travel_time
-                    if cost < best_cost:
+                # Returns (cost, ordered_v_stops, insertion_indices) or None
+                res = self._inserter.find_optimal_vehicle_integration(perm, v_stops)
+                
+                if res is not None:
+                     cost, best_v_stops, indices = res
+                     # The cost returned is MINIMUM ADDITIONAL DELAY.
+                     # We might want total travel time as metric?
+                     # TripPermutation stores 'total_travel_time'.
+                     # New Time ~= Old Time + Delay? 
+                     # Not exactly, but close enough for greedy.
+                     # Better: use the delay as the criterion.
+                     
+                     if cost < best_cost:
                         best_cost = cost
-                        # Construct FeasibleRoute object
-                        # (Mapping stops back to original requests handled by logic layer)
-
-                        interface_stops = []
-                        for s in final_perm.stops:
-                            is_pickup = s.type in ("pickup", "vehicle_start")
-                            interface_stops.append(
-                                InterfaceStop(
-                                    node=s.node_id, is_pickup=is_pickup, request_id=s.id
+                        
+                        # Reconstruct the merged sequence
+                        merged_stops = []
+                        
+                        # Pointer to the trip permutation
+                        t_ptr = 0
+                        
+                        # Pointer to the vehicle stops
+                        v_ptr = 0
+                        K = len(best_v_stops)
+                        
+                        # N trip stops. Indices 0..N.
+                        # Index j means "Insert BEFORE T[j]".
+                        
+                        for j in range(len(perm.stops) + 1):
+                            # Append all vehicle stops destined for this slot
+                            while v_ptr < K and indices[v_ptr] == j:
+                                merged_stops.append(best_v_stops[v_ptr])
+                                v_ptr += 1
+                                
+                            # Append the trip stop if valid
+                            if j < len(perm.stops):
+                                merged_stops.append(perm.stops[j])
+                                
+                        # FINAL CHECK VALIDATOR (To get precise timings/cost)
+                        full_perm = self._validator.validate(merged_stops)
+                        
+                        if full_perm:
+                            final_cost = full_perm.total_travel_time
+                            
+                            interface_stops = []
+                            for s in full_perm.stops:
+                                is_pickup = s.type in ("pickup", "vehicle_start")
+                                interface_stops.append(
+                                    InterfaceStop(
+                                        node=s.node_id, is_pickup=is_pickup, request_id=s.id
+                                    )
                                 )
+
+                            route_obj = InterfaceRoute(
+                                stops=tuple(interface_stops),
+                                total_travel_time=final_cost,
+                                total_travel_distance=0.0,
+                                total_delay_cost=final_cost, # Or slack?
                             )
 
-                        route_obj = InterfaceRoute(
-                            stops=tuple(interface_stops),
-                            total_travel_time=final_perm.total_travel_time,
-                            total_travel_distance=0.0,  # Not calculated in vector mode
-                            total_delay_cost=cost,
-                        )
-
-                        best_route = FeasibleRoute(
-                            route=route_obj,
-                            cost=cost,
-                        )
-
+                            best_route = FeasibleRoute(
+                                route=route_obj,
+                                cost=final_cost,
+                            )
+            
             if best_route:
                 rtv_graph.add_trip_for_vehicle(trip_id, vid, best_route)
                 valid_vehs.add(vid)
 
         return valid_vehs
+
 
     def _check_subtrip_lemma(
         self, new_ids: FrozenSet[str], prev_level: Dict, base_ids: FrozenSet[str]
