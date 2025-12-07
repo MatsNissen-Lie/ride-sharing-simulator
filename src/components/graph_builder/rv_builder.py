@@ -51,6 +51,10 @@ from src.components.graph_builder.workers import (
 
 logger = get_logger("rv_graph_builder")
 
+# silence the logger if this is not the main process
+if __name__ != "__main__":
+    logger.setLevel("WARNING")
+
 
 class RVGraphBuilder(IRVGraphBuilder):
     def __init__(
@@ -146,36 +150,36 @@ class RVGraphBuilder(IRVGraphBuilder):
 
             if len(v_idx) > 0:
                 # B. Split Execution based on Occupancy
-                
+
                 # 1. Compute Occupancy for ALL candidates once
-                occupancy = np.array([len(veh_list[i].passengers_onboard) for i in v_idx])
-                
+                occupancy = np.array(
+                    [len(veh_list[i].passengers_onboard) for i in v_idx]
+                )
+
                 # --- CASE 0: EMPTY (m=0) ---
-                mask_0 = (occupancy == 0)
+                mask_0 = occupancy == 0
                 if np.any(mask_0):
                     self._solve_rv_matrix_empty(
-                        v_idx[mask_0], r_idx[mask_0],
-                        veh_list, req_list,
-                        raw_diff[v_idx[mask_0], r_idx[mask_0]], # delay_vals
-                        graph
+                        v_idx[mask_0],
+                        r_idx[mask_0],
+                        veh_list,
+                        req_list,
+                        raw_diff[v_idx[mask_0], r_idx[mask_0]],  # delay_vals
+                        graph,
                     )
 
                 # --- CASE 1: 1 PASSENGER (m=1) ---
-                mask_1 = (occupancy == 1)
+                mask_1 = occupancy == 1
                 if np.any(mask_1):
                     self._solve_rv_matrix_m1(
-                        v_idx[mask_1], r_idx[mask_1], 
-                        veh_list, req_list, 
-                        graph
+                        v_idx[mask_1], r_idx[mask_1], veh_list, req_list, graph
                     )
 
                 # --- CASE 2+: COMPLEX (m >= 2) ---
-                mask_high = (occupancy >= 2)
+                mask_high = occupancy >= 2
                 if np.any(mask_high):
                     self._process_rv_occupied_parallel(
-                        v_idx[mask_high], r_idx[mask_high], 
-                        veh_list, req_list, 
-                        graph
+                        v_idx[mask_high], r_idx[mask_high], veh_list, req_list, graph
                     )
 
         return graph
@@ -232,8 +236,8 @@ class RVGraphBuilder(IRVGraphBuilder):
             p_del2 = p2 - t2
 
             mask = (
-                (del1 <= OMEGA)
-                & (del2 <= OMEGA)
+                (del1 <= DELTA)
+                & (del2 <= DELTA)
                 & (p_del1 <= OMEGA)
                 & (p_del2 <= OMEGA)
             )
@@ -417,42 +421,51 @@ class RVGraphBuilder(IRVGraphBuilder):
     ):
         """Vectorized solver for Vehicles with 1 existing passenger (3 Permutations)."""
         logger.info(f"RV Matrix (m=1): Processing {len(v_idxs)} edges.")
-        
+
         # 1. GATHER DATA
         v_data = []
         for i in v_idxs:
             v = veh_list[i]
-            pax = list(v.passengers_onboard)[0] # The only passenger (set -> list)
+            pax = list(v.passengers_onboard)[0]  # The only passenger (set -> list)
             limit = getattr(pax.original_request, "earliest_dropoff_time", None)
             d1_dead = (limit + DELTA) if limit else 1e9
-            v_data.append((v.available_at_node, v.available_from_time, pax.original_request.destination_node, d1_dead))
-            
+            v_data.append(
+                (
+                    v.available_at_node,
+                    v.available_from_time,
+                    pax.original_request.destination_node,
+                    d1_dead,
+                )
+            )
+
         v_arr = np.array(v_data)
-        v_loc  = v_arr[:, 0].astype(int)
+        v_loc = v_arr[:, 0].astype(int)
         v_time = v_arr[:, 1]
         d1_loc = v_arr[:, 2].astype(int)
         d1_dead = v_arr[:, 3]
 
         # Pull request data
         r_origins = np.array([req_list[i].origin_node for i in r_idxs])
-        r_dests   = np.array([req_list[i].destination_node for i in r_idxs])
-        r_times   = np.array([req_list[i].request_time for i in r_idxs])
-        
+        r_dests = np.array([req_list[i].destination_node for i in r_idxs])
+        r_times = np.array([req_list[i].request_time for i in r_idxs])
+
         # 2. FETCH TRAVEL TIMES
         mat = self._network.get_l1_cache()
-        def get_v(u, v): return mat[u, v]
-        
+
+        def get_v(u, v):
+            return mat[u, v]
+
         # Edges
         t_v_p = get_v(v_loc, r_origins)
         t_v_d1 = get_v(v_loc, d1_loc)
-        
+
         t_p_d = get_v(r_origins, r_dests)
         t_p_d1 = get_v(r_origins, d1_loc)
-        
+
         t_d1_p = get_v(d1_loc, r_origins)
         t_d1_d = get_v(d1_loc, r_dests)
         t_d_d1 = get_v(r_dests, d1_loc)
-        
+
         # 3. PERMUTATIONS (3 Valid)
         costs = np.full((3, len(v_idxs)), np.inf)
 
@@ -480,13 +493,21 @@ class RVGraphBuilder(IRVGraphBuilder):
         # 4. REDUCE
         best_costs = np.min(costs, axis=0)
         best_perms = np.argmin(costs, axis=0)
-        
+
         # 5. BUILD
         valid = np.isfinite(best_costs)
         valid_idx = np.where(valid)[0]
-        
+
         for k in valid_idx:
-            self._add_m1_edge(graph, int(v_idxs[k]), int(r_idxs[k]), veh_list, req_list, int(best_perms[k]), float(best_costs[k]))
+            self._add_m1_edge(
+                graph,
+                int(v_idxs[k]),
+                int(r_idxs[k]),
+                veh_list,
+                req_list,
+                int(best_perms[k]),
+                float(best_costs[k]),
+            )
 
     def _add_m1_edge(
         self,
@@ -502,18 +523,26 @@ class RVGraphBuilder(IRVGraphBuilder):
         r = r_list[r_idx]
         # Vehicle has 1 passenger (set->list->[0])
         d1_req = list(v.passengers_onboard)[0].original_request
-        
+
         s_p = Stop(r.origin_node, True, r.id)
         s_d = Stop(r.destination_node, False, r.id)
         s_d1 = Stop(d1_req.destination_node, False, d1_req.id)
-        
-        if perm == 0: stops = (s_p, s_d, s_d1)
-        elif perm == 1: stops = (s_p, s_d1, s_d)
-        else: stops = (s_d1, s_p, s_d)
-        
+
+        if perm == 0:
+            stops = (s_p, s_d, s_d1)
+        elif perm == 1:
+            stops = (s_p, s_d1, s_d)
+        else:
+            stops = (s_d1, s_p, s_d)
+
         route = FeasibleRoute(
-            route=Route(stops=stops, total_travel_time=0.0, total_travel_distance=0.0, total_delay_cost=float(cost)),
-            cost=float(cost)
+            route=Route(
+                stops=stops,
+                total_travel_time=0.0,
+                total_travel_distance=0.0,
+                total_delay_cost=float(cost),
+            ),
+            cost=float(cost),
         )
         graph.add_rv_edge(r.id, v.vehicle_id, route)
 

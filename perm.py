@@ -1,7 +1,11 @@
 from config import BATCH_DURATION, get_logger, NUMBER_OF_VEHICLES
 from config.config import MIN_START_TIME
 from src.components.batch_controller import BatchController
-from src.components.graph_builder.rtv_builder_permutations import (
+
+# from src.components.graph_builder.rtv_builder_permutations import (
+#     PermutationRTVGraphBuilder,
+# )
+from src.components.graph_builder.rtv_builder_permutations_vec import (
     PermutationRTVGraphBuilder,
 )
 from src.components.graph_builder.rv_builder import RVGraphBuilder
@@ -20,7 +24,19 @@ def main():
     """
     Main simulation entrypoint.
     """
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Run the ride-sharing simulation.")
+    parser.add_argument(
+        "--read-only",
+        action="store_true",
+        help="Run in read-only mode (do not write to the database).",
+    )
+    args = parser.parse_args()
+
     logger.info("🚀 Simulation starting...")
+    if args.read_only:
+        logger.info("🔒 Running in READ-ONLY mode.")
 
     # --- 1. Initialize Core Components ---
     logger.info("Initializing components...")
@@ -32,7 +48,7 @@ def main():
         f"Graph has {len(node_ids)} nodes, ranging from {min(node_ids)} to {max(node_ids)}"
     )
 
-    db_cache = DuckDBPathCache()
+    db_cache = DuckDBPathCache(read_only=args.read_only)
     network_service = NetworkXService(provider.graph, db=db_cache)
     planner = RoutePlanner(network_service=network_service)
 

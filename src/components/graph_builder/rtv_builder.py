@@ -1,4 +1,4 @@
-from config.config import MAX_REQUESTS
+from config.config import MAX_REQUESTS, OMEGA, DELTA
 from old_code.rv_graph_builder import RVGraph
 from src.interfaces import FeasibleRoute
 from collections import defaultdict
@@ -137,56 +137,82 @@ class RTVGraphBuilder(IRTVGraphBuilder):
         # We can unify Step 2 and 3 because the intersection logic works for size 1 too.
 
         for k in range(2, limit_k + 1):
-            prev_trips_set = T_by_size[k - 1]
-            if not prev_trips_set:
+            if not T_by_size[k - 1]:
                 break
 
-            for base_trip in prev_trips_set:
-                max_req_in_base = max(base_trip)
+            # Convert previous trips to sorted lists for consistent indexing
+            # (Assuming T_by_size[k-1] contains frozensets or tuples)
+            prev_trips_list = sorted([sorted(list(t)) for t in T_by_size[k - 1]])
 
-                # 1. CLIQUE OPTIMIZATION (The "Not Dumb" Part)
-                # A new request must be a neighbor of EVERY request in the current base_trip.
-                # We start the intersection with 'valid_singles' to ensure we only pick
-                # requests this vehicle can actually serve.
+            n = len(prev_trips_list)
 
-                common_neighbors = valid_singles.copy()
+            for i in range(n):
+                trip_a = prev_trips_list[i]
 
-                # Intersect with neighbors of each request in the trip
-                for r_existing in base_trip:
-                    r_neighbors = rv_graph.request_request.get(r_existing, set())
-                    common_neighbors.intersection_update(r_neighbors)
+                for j in range(i + 1, n):
+                    trip_b = prev_trips_list[j]
 
-                    # Optimization: Fail fast if intersection becomes empty
-                    if not common_neighbors:
+                    # OPTIMIZATION:
+                    # Two trips of size k-1 are candidates to merge ONLY if
+                    # their first k-2 elements are identical.
+                    # Since the list is sorted, if the prefix doesn't match,
+                    # we can break the inner loop immediately (for this block).
+
+                    # Check prefix (all elements except the last one)
+                    if trip_a[:-1] != trip_b[:-1]:
                         break
 
-                if not common_neighbors:
-                    continue
+                    # 2. Identify the new elements being combined
+                    # For k=2: trip_a=[r_x], trip_b=[r_y]. We are combining r_x and r_y.
+                    r_x = trip_a[-1]
+                    r_y = trip_b[-1]
 
-                # 2. Iterate over the valid clique candidates
-                for r_new in common_neighbors:
+                    # --- FIX START ---
+                    # 3. RV-Graph Connectivity Check (The Missing Link)
+                    # For k=2, we MUST verify that r_x and r_y are actually neighbors in the RV graph.
+                    # For k>2, this is implicitly guaranteed by the sub-trip existence check below.
+                    if k == 2:
+                        # Check if r_y is in r_x's neighbor list (or vice versa)
+                        # Note: rv_graph.request_request should be a dict of sets
+                        neighbors_of_x = rv_graph.request_request.get(r_x, set())
+                        if r_y not in neighbors_of_x:
+                            continue
+                    # --- FIX END ---
 
-                    # Enforce Ordering (prevents duplicates like {A,B}+{C} vs {A,C}+{B})
-                    if r_new <= max_req_in_base:
-                        continue
+                    # If we are here, trip_a and trip_b differ only by their last element.
+                    # trip_a = [r1, r2, ..., r_{k-2}, r_x]
+                    # trip_b = [r1, r2, ..., r_{k-2}, r_y]
+                    # Union  = [r1, r2, ..., r_{k-2}, r_x, r_y]
 
-                    # 3. Sub-trip Lemma (Lemma 2)
-                    # We know 'base_trip' exists. We verify other sub-trips.
+                    # Create the candidate trip of size k
+                    # (trip_b[-1] is guaranteed to be > trip_a[-1] because of sorting)
+                    candidate_trip = frozenset(trip_a + [trip_b[-1]])
+
+                    # 3. Sub-trip Lemma (Lemma 2 from Paper)
+                    # We constructed this candidate from two existing sub-trips (trip_a and trip_b).
+                    # Now we must ensure ALL other (k-2) sub-trips of size k-1 exist in T_{k-1}.
+
                     is_valid_structure = True
 
-                    # Only check if k > 2. For k=2, base_trip is size 1.
-                    # If we form {A, B}, the sub-trips are {A} and {B}.
-                    # We know {A} exists (it's base_trip).
-                    # We know {B} exists (it's in valid_singles).
-                    # So structural check is implicitly passed for k=2!
+                    # We only need to check combinations we haven't already implicitly verified.
+                    # We know sub-trip excluding r_y exists (it's trip_a).
+                    # We know sub-trip excluding r_x exists (it's trip_b).
+                    # We must check the removal of any of the "prefix" elements.
 
                     if k > 2:
-                        for r_old in base_trip:
-                            # Construct the check_trip: (base_trip \ {r_old}) U {r_new}
-                            # We check if this specific combination was found in the previous step
-                            check_trip = frozenset((base_trip - {r_old}) | {r_new})
+                        # The prefix is trip_a[:-1]
+                        prefix = trip_a[:-1]
+                        last_a = trip_a[-1]
+                        last_b = trip_b[-1]
 
-                            if check_trip not in prev_trips_set:
+                        # Iterate through removing each element of the prefix
+                        for idx in range(len(prefix)):
+                            # Construct a sub-trip by removing prefix[idx]
+                            # New sub-trip: prefix without idx + {last_a, last_b}
+                            sub_prefix = prefix[:idx] + prefix[idx + 1 :]
+                            check_subtrip = frozenset(sub_prefix + [last_a, last_b])
+
+                            if check_subtrip not in T_by_size[k - 1]:
                                 is_valid_structure = False
                                 break
 
@@ -194,16 +220,74 @@ class RTVGraphBuilder(IRTVGraphBuilder):
                         continue
 
                     # 4. Feasibility Check (Constraint Satisfaction)
-                    new_trip = base_trip | {r_new}
-                    reqs = {requests_by_id[r] for r in new_trip}
+                    # This is the heavy calculation - only performed if structural integrity passes
+                    reqs = {requests_by_id[r] for r in candidate_trip}
 
-                    # This is the heavy calculation
                     result = self._route_planner.check_feasibility(
                         reqs, vehicle=v_avail
                     )
 
                     if result.is_feasible:
-                        T_by_size[k].add(new_trip)
+                        # DEBUG: Check if it works as a clique (Pairwise RV-graph connectivity)
+                        # If it is feasible, they SHOULD be neighbors in the RV graph.
+                        # If not, we have a bug in RV graph construction or an inconsistency.
+                        # all_neighbors = True
+                        # missing_pair = ("", "")
+
+                        # trip_list = list(candidate_trip)
+                        # for idx_1 in range(len(trip_list)):
+                        #     for idx_2 in range(idx_1 + 1, len(trip_list)):
+                        #         r1 = trip_list[idx_1]
+                        #         r2 = trip_list[idx_2]
+                        #         if r2 not in rv_graph.request_request.get(r1, set()):
+                        #             all_neighbors = False
+                        #             missing_pair = (r1, r2)
+                        #             break
+                        #     if not all_neighbors:
+                        #         break
+
+                        # if not all_neighbors:
+                        #     r1, r2 = missing_pair
+                        #     logger.critical(f"Feasible trip found but missing RV-graph edge between {r1} and {r2}!")
+
+                        #     # Log neighbors
+                        #     logger.error(f"Neighbors of r1 ({r1}): {rv_graph.request_request.get(r1, set())}")
+                        #     logger.error(f"Neighbors of r2 ({r2}): {rv_graph.request_request.get(r2, set())}")
+
+                        #     req1 = requests_by_id[r1]
+                        #     req2 = requests_by_id[r2]
+
+                        #     # Direct travel times between critical points
+                        #     try:
+                        #         path_o1_o2 = self._route_planner._network.get_shortest_path(req1.origin_node, req2.origin_node)
+                        #         tt_o1_o2 = path_o1_o2.travel_time if path_o1_o2 else -1.0
+
+                        #         path_d1_o2 = self._route_planner._network.get_shortest_path(req1.destination_node, req2.origin_node)
+                        #         tt_d1_o2 = path_d1_o2.travel_time if path_d1_o2 else -1.0
+
+                        #         logger.error("Travel Times:")
+                        #         logger.error(f"  {req1.origin_node} (O1) -> {req2.origin_node} (O2): {tt_o1_o2}")
+                        #         logger.error(f"  {req1.destination_node} (D1) -> {req2.origin_node} (O2): {tt_d1_o2}")
+                        #     except Exception as e:
+                        #         logger.error(f"Could not fetch travel times: {e}")
+
+                        #     # Log Temporal Details
+                        #     logger.error("Temporal Details:")
+                        #     logger.error(f"  Config OMEGA (Max Wait): {OMEGA}")
+                        #     logger.error(f"  Config DELTA (Max Delay): {DELTA}")
+                        #     logger.error(f"  r1 Time: {req1.request_time}")
+                        #     logger.error(f"  r2 Time: {req2.request_time}")
+
+                        #     logger.error("Vehicle Details:")
+                        #     logger.error(f"  ID: {v_id}")
+                        #     logger.error(f"  Available At Node: {v_avail.available_at_node}")
+                        #     logger.error(f"  Available From Time: {v_avail.available_from_time}")
+
+                        #     logger.error(f"Candidate trip: {candidate_trip}")
+                        #     logger.error(f"Resulting route: {result}")
+                        #     raise Exception("Found feasible trip that violates RV clique property. RV Graph incomplete?")
+
+                        T_by_size[k].add(candidate_trip)
                         rtv_graph.add_trip_for_vehicle(
-                            new_trip, v_id, cast(FeasibleRoute, result)
+                            candidate_trip, v_id, cast(FeasibleRoute, result)
                         )

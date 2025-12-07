@@ -5,6 +5,7 @@ from typing import Set, Tuple
 import bisect
 
 from config.config import OMEGA, BATCH_DURATION
+from config.logging import get_logger
 from src.interfaces.batch_control import IBatchController
 from src.interfaces import (
     VehicleAvailability,
@@ -16,6 +17,8 @@ from src.interfaces import (
     Vehicle,
 )
 from src.interfaces.data_models import NetworkPathExtended, Route
+
+logger = get_logger(__name__)
 
 
 class BatchController(IBatchController):
@@ -97,6 +100,15 @@ class BatchController(IBatchController):
 
             # --- Case 2: no usable route metadata → treat as idle-ish ---
             if v.current_route is None or v.route_assignment_time is None:
+                has_route = v.current_route is not None
+                has_assignment = v.route_assignment_time is not None
+                logger.warning(
+                    f"Vehicle {v.id} has incomplete route metadata "
+                    f"(has_route={has_route}, has_assignment={has_assignment}); "
+                    f"treating as idle at last_visited_node. "
+                    f"Passengers: {len(v.passengers_onboard)} {[p.original_request.id for p in v.passengers_onboard]} "
+                    f"Route Stops: {len(v.current_route.stops) if v.current_route else 'None'}"
+                )
                 raise RuntimeError(
                     f"Vehicle {v.id} has no route metadata but is not idle."
                 )
@@ -491,7 +503,7 @@ class BatchController(IBatchController):
         #   current_route / route_assignment_time projection gave them.
 
     def get_rebalancing_candidates(
-        self, assignment_result: AssignmentResult, snapshots: Set[VehicleAvailability]
+        self, assignment_result: AssignmentResult, vehicle_avail_pool: Set[VehicleAvailability]
     ) -> Tuple[list[VehicleAvailability], list[Request]]:
         """
         Identifies the inputs for the Rebalancing LP (Algorithm 4).
@@ -519,7 +531,7 @@ class BatchController(IBatchController):
         assigned_vehicle_ids = {a.vehicle_id for a in assignment_result.assignments}
 
         idle_vehicles = []
-        for v in snapshots:
+        for v in vehicle_avail_pool:
             # Check a: Empty and Stopped
             is_physically_idle = (
                 len(v.passengers_onboard) == 0 and len(v.remaining_stops_to_serve) == 0

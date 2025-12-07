@@ -9,6 +9,7 @@ from src.interfaces import (
     Vehicle,
     VehicleAvailability,
 )
+from src.interfaces.data_models import Route
 from src.interfaces.services import INetworkService
 
 
@@ -102,7 +103,7 @@ class IBatchController(ABC):
         self,
         assignment_result: AssignmentResult,
         vehicle_avail_pool: set[VehicleAvailability],
-    ) -> tuple[set[VehicleAvailability], set[Request]]:
+    ) -> tuple[list[VehicleAvailability], list[Request]]:
         """
         Identify idle vehicles and unassigned requests for rebalancing.
         """
@@ -111,7 +112,7 @@ class IBatchController(ABC):
     @abstractmethod
     def apply_rebalancing(
         self,
-        rebalancing_routes: list[tuple[VehicleAvailability, int]],
+        rebalancing_routes: dict[str, Route],
         t_now: float,
     ) -> None:
         """

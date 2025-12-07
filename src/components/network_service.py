@@ -273,8 +273,9 @@ class NetworkXService(INetworkService):
             edge_times_list.append(t)
 
         # 4) Write-through both layers
-        self._db.put_simple(origin_node, destination_node, total_time, total_dist)
-        self._db.put_extended(origin_node, destination_node, nodes, edge_times_list)
+        if not self._db.read_only:
+            self._db.put_simple(origin_node, destination_node, total_time, total_dist)
+            self._db.put_extended(origin_node, destination_node, nodes, edge_times_list)
 
         return NetworkPathExtended(
             nodes=tuple(nodes),
@@ -282,6 +283,42 @@ class NetworkXService(INetworkService):
             travel_time=total_time,
             travel_distance=total_dist,
         )
+
+    def get_travel_time(self, origin: int, destination: int) -> float:
+        """
+        Returns the travel time between two nodes.
+        Returns float('inf') if no path exists.
+        """
+        # 1. Direct Array Access
+        t = float(self._time_matrix[origin, destination])
+
+        # 2. Check for Cache Miss (NaN)
+        if np.isnan(t):
+            if self.is_nuclear:
+                raise RuntimeError(
+                    f"Nuclear cache miss detected. This should not happen. Nodes {origin} -> {destination}"
+                )
+
+            # L2 DuckDB Lookup (Fallback)
+            hit = self._db.get_simple(origin, destination)
+            if hit:
+                time_s, dist_m = hit
+                # Update L1 immediately for next time
+                self._time_matrix[origin, destination] = time_s
+                self._dist_matrix[origin, destination] = dist_m
+
+                if time_s < 0:
+                    return float("inf")
+                return float(time_s)
+
+            # If not in DB, assume no path
+            return float("inf")
+
+        # 3. Check for No Path (inf or negative sentinel)
+        if t == float("inf") or t > 1e9 or t < 0:
+            return float("inf")
+
+        return t
 
     def clear_l1_cache(self) -> None:
         """Clears the manual cache to free memory."""

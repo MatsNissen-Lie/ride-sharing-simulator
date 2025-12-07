@@ -41,6 +41,14 @@ class INetworkService(ABC):
         pass
 
     @abstractmethod
+    def get_travel_time(self, origin: int, destination: int) -> float:
+        """
+        Returns the travel time between two nodes. 
+        Returns float('inf') if no path exists.
+        """
+        pass
+
+    @abstractmethod
     def get_travel_time_matrix(
         self, origins: list[int], destinations: list[int]
     ) -> np.ndarray:
