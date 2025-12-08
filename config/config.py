@@ -13,7 +13,7 @@ NUMBER_OF_VEHICLES = 3000
 VEHICLE_CAPACITY = 4  # vehicle capacity
 
 # max passengers to consider in route planning
-VEHICLE_CAPACITY = 4
+VEHICLE_CAPACITY = 6
 
 MAX_REQUESTS_ABOVE_CAPACITY = 4
 
@@ -23,7 +23,7 @@ PLOT_RV_GRAPH = False
 PLOT_RTV_GRAPH = False
 
 MIN_START_TIME = 3 * 24 * 3600  # after 3 days
-MIN_REQUESTS_TO_PROCESS = 200
+MIN_REQUESTS_TO_PROCESS = 400
 
 
 MAX_BATCHES = 1

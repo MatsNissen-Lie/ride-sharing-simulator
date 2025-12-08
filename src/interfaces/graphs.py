@@ -100,6 +100,11 @@ class RVGraph:
         route = self.get_rv_route(r_id, v_id)
         return route.cost if route else float("inf")
 
+    def get_all_unique_shareable_pairs(self) -> list[tuple[str, str]]:
+        """Returns a list of unique shareable request pairs (r1, r2) where r1 < r2."""
+        # We filter keys so we only get one representation of the undirected edge
+        return [(r1, r2) for (r1, r2) in self.rr_details.keys() if r1 < r2]
+
 
 @dataclass
 class RTVGraph:

@@ -1,6 +1,6 @@
 from config.config import MAX_REQUESTS_ABOVE_CAPACITY
 from old_code.rv_graph_builder import RVGraph
-from src.components.graph_builder.trip_graph_no_memo import TripGraph
+from src.components.graph_builder.trip_graph_no_memo import TripSolver
 from src.interfaces import FeasibleRoute
 from collections import defaultdict
 from typing import Set, Dict, cast
@@ -151,9 +151,12 @@ class RTVGraphBuilder(IRTVGraphBuilder):
 
                 reqs = {requests_by_id[r] for r in candidate_trip}
                 # result = self._route_planner.check_feasibility(reqs, vehicle=v_avail)
-                result = TripGraph.from_requests(
-                    reqs, self._route_planner._network
-                ).solve(v_avail, self._route_planner._network)
+                # result = TripSolver.solve(
+                #     reqs, v_avail, self._route_planner._network
+                # )
+                result = TripSolver.solve(
+                    reqs, v_avail, self._route_planner._network.get_l1_cache()
+                )
 
                 if result.is_feasible:
                     T_by_size[2].add(candidate_trip)
@@ -222,12 +225,10 @@ class RTVGraphBuilder(IRTVGraphBuilder):
                     # 4. Feasibility Check (Constraint Satisfaction)
                     # This is the heavy calculation - only performed if structural integrity passes
                     reqs = {requests_by_id[r] for r in candidate_trip}
-                    # result = self._route_planner.check_feasibility(
-                    #     reqs, vehicle=v_avail
-                    # )
-                    result = TripGraph.from_requests(
-                        reqs, self._route_planner._network
-                    ).solve(v_avail, self._route_planner._network)
+
+                    result = TripSolver.solve(
+                        reqs, v_avail, self._route_planner._network.get_l1_cache()
+                    )
 
                     if result.is_feasible:
                         T_by_size[k].add(candidate_trip)

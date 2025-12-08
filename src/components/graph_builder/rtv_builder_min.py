@@ -1,13 +1,13 @@
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import FrozenSet
+from typing import FrozenSet, Set
 
 from config import get_logger
 from config.config import (
     MAX_REQUESTS_ABOVE_CAPACITY,
     VEHICLE_CAPACITY,
 )
-from src.components.graph_builder.trip_graph import TripGraph
+from src.components.graph_builder.trip_graph import TripSolver
 from src.interfaces import (
     ISingleVehicleRoutePlanner,
     VehicleAvailability,
@@ -29,6 +29,7 @@ class GlobalTrip:
 
     id: TripId
     candidate_vehicle_ids: FrozenSet[str]
+    # No graph needed!
 
     def __hash__(self) -> int:
         return hash(self.id)
@@ -64,6 +65,9 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
         req_map: dict[str, Request] = {r.id: r for r in requests}
         veh_map: dict[str, VehicleAvailability] = {v.vehicle_id: v for v in vehicles}
 
+        # Global Matrix Access (Zero-Copy)
+        global_matrix, _ = self._network.get_matrix_and_mapping()
+
         # Global Trips: Size -> { TripID -> GlobalTrip }
         # This stores only VALID trips that survived feasibility checks
 
@@ -90,43 +94,44 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
             )
 
         sorted_singles = sorted(list(valid_singles))
-
         for r1 in sorted_singles:
             # Get all neighbors of r1 from the RV-graph
             neighbors = rv_graph.request_request.get(r1, set())
             potential_r2 = [r2 for r2 in neighbors if r2 in valid_singles and r1 < r2]
             for r2 in potential_r2:
-                candidate_trip = frozenset({r1, r2})
+                candidate_trip = frozenset((r1, r2))
                 # We need to look at the intersection of vehicles that served r1 and r2
                 common_vehs = global_trips[
                     frozenset([r1])
                 ].candidate_vehicle_ids.intersection(
                     global_trips[frozenset([r2])].candidate_vehicle_ids
                 )
+                if not common_vehs:
+                    continue
                 valid_vehs = set()
 
-                request_graph = TripGraph.from_requests(
-                    {req_map[r] for r in candidate_trip}, self._network
-                )
+                req_objs = [req_map[r] for r in candidate_trip]
+
                 for vid in common_vehs:
-                    vehicle: VehicleAvailability = veh_map.get(vid)  # type: ignore // safe because of RV check
+                    vehicle: VehicleAvailability = veh_map.get(vid)  # type: ignore
 
                     available_seats = vehicle.capacity - len(vehicle.passengers_onboard)
-                    limit_k = max(available_seats, MAX_REQUESTS_ABOVE_CAPACITY)
-                    if len(candidate_trip) > limit_k:
+                    this_limit_k = max(available_seats, MAX_REQUESTS_ABOVE_CAPACITY)
+                    if len(candidate_trip) > this_limit_k:
                         continue
 
-                    result = request_graph.solve(vehicle, self._network)
+                    result = TripSolver.solve(req_objs, vehicle, global_matrix)
 
-                    if result.is_feasible:
+                    if result and result.is_feasible:
                         T_by_size[2].add(candidate_trip)
                         rtv_graph.add_trip_for_vehicle(candidate_trip, vid, result)  # type: ignore
                         valid_vehs.add(vid)
 
-                global_trips[candidate_trip] = GlobalTrip(
-                    id=candidate_trip,
-                    candidate_vehicle_ids=frozenset(valid_vehs),
-                )
+                if valid_vehs:
+                    global_trips[candidate_trip] = GlobalTrip(
+                        id=candidate_trip,
+                        candidate_vehicle_ids=frozenset(valid_vehs),
+                    )
 
         # --- 3. EXPANSION LOOP (k=2 to Limit) ---
         for k in range(3, limit_k + 1):
@@ -135,10 +140,8 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
 
             # We iterate over existing valid trips and try to extend them
             # Optimization: Use a sorted list of trips to avoid duplicate pairs {A,B} vs {B,A}
-            # (Similar to the "Old Code" lexicographic check)
 
-            prev_trips_list = sorted([sorted(list(t)) for t in T_by_size[k - 1]])
-
+            prev_trips_list = sorted([list(t) for t in T_by_size[k - 1]])
             n = len(prev_trips_list)
 
             for i in range(n):
@@ -153,19 +156,17 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
 
                     # Create candidate trip by merging
                     new_req_id = trip_b[-1]
-                    candidate_trip = frozenset(trip_a + [new_req_id])
+                    candidate_trip_list = trip_a + [new_req_id]
+                    candidate_trip = frozenset(candidate_trip_list)
 
                     # Determine common vehicles that served both trips
-                    candidate_vehs = set(
-                        global_trips[
-                            frozenset(trip_a)
-                        ].candidate_vehicle_ids.intersection(
-                            global_trips[frozenset(trip_b)].candidate_vehicle_ids
-                        )
-                    )
+                    gt_a = global_trips.get(frozenset(trip_a)).candidate_vehicle_ids  # type: ignore
+                    gt_b = global_trips.get(frozenset(trip_b)).candidate_vehicle_ids  # type: ignore
+                    candidate_vehs = set(gt_a.intersection(gt_b))
                     if not candidate_vehs:
                         continue
 
+                    # Sub-trip check
                     is_structure_valid = True
                     prefix = trip_a[:-1]
                     for idx in range(len(prefix)):
@@ -173,17 +174,17 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
                         sub_prefix = prefix[:idx] + prefix[idx + 1 :]
 
                         # The sub-trip is: Modified Prefix + {x, y}
-                        # We must sort it or use set to match the key format
                         sub_trip_id = frozenset(sub_prefix + [trip_a[-1], trip_b[-1]])
+
+                        gt_sub = global_trips.get(sub_trip_id)
+
                         # A. Does this sub-trip exist globally?
-                        if sub_trip_id not in global_trips:
+                        if not gt_sub:
                             is_structure_valid = False
                             break
 
                         # B. PER VEHICLE CHECK
-                        candidate_vehs &= global_trips[
-                            sub_trip_id
-                        ].candidate_vehicle_ids
+                        candidate_vehs &= gt_sub.candidate_vehicle_ids
 
                         if not candidate_vehs:
                             is_structure_valid = False
@@ -192,30 +193,30 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
                         continue
 
                     valid_vehs = set()
-                    request_graph = TripGraph.from_requests(
-                        {req_map[r] for r in candidate_trip}, self._network
-                    )
+
+                    req_objs = [req_map[r] for r in candidate_trip_list]
+
                     for vid in candidate_vehs:
-                        vehicle: VehicleAvailability = veh_map.get(vid)  # type: ignore // safe because of RV check
+                        vehicle: VehicleAvailability = veh_map.get(vid)  # type: ignore
 
                         available_seats = vehicle.capacity - len(
                             vehicle.passengers_onboard
                         )
-                        limit_k = max(available_seats, MAX_REQUESTS_ABOVE_CAPACITY)
-                        if len(candidate_trip) > limit_k:
+                        this_limit_k = max(available_seats, MAX_REQUESTS_ABOVE_CAPACITY)
+                        if len(candidate_trip) > this_limit_k:
                             continue
 
-                        result = request_graph.solve(vehicle, self._network)
+                        result = TripSolver.solve(req_objs, vehicle, global_matrix)
 
-                        if result.is_feasible:
+                        if result and result.is_feasible:
                             T_by_size[k].add(candidate_trip)
-                            rtv_graph.add_trip_for_vehicle(
-                                candidate_trip, vid, result  # type: ignore
-                            )  # type: ignore
+                            rtv_graph.add_trip_for_vehicle(candidate_trip, vid, result)  # type: ignore
                             valid_vehs.add(vid)
-                    global_trips[candidate_trip] = GlobalTrip(
-                        id=candidate_trip,
-                        candidate_vehicle_ids=frozenset(valid_vehs),
-                    )
+
+                    if valid_vehs:
+                        global_trips[candidate_trip] = GlobalTrip(
+                            id=candidate_trip,
+                            candidate_vehicle_ids=frozenset(valid_vehs),
+                        )
 
         return rtv_graph
