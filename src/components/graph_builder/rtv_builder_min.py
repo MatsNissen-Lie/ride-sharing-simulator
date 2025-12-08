@@ -1,6 +1,6 @@
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import FrozenSet, Set
+from typing import FrozenSet
 
 from config import get_logger
 from config.config import (
