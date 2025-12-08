@@ -3,7 +3,7 @@ from typing import Iterator, Any
 import logging
 
 from config import get_logger
-from config.config import MIN_REQUESTS_TO_PROCESS, PLOT_RTV_GRAPH
+from config.config import MIN_REQUESTS_TO_PROCESS, PLOT_RTV_GRAPH, MAX_BATCHES
 from config.paths import PLOT_DIR
 from src.interfaces.batch_control import IBatchController
 from src.interfaces.services import (
@@ -240,6 +240,10 @@ class Simulator:
                     seen_requests.add(req.id)
 
                 self.stats_logger.log_batch(stats_payload)
+
+                if batch_count >= MAX_BATCHES:
+                    logger.info(f"🛑 Reached max batches limit ({MAX_BATCHES}). Stopping simulation.")
+                    break
 
             logger.info("🏁 Simulation complete.")
 

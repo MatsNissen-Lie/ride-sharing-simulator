@@ -26,9 +26,12 @@ MIN_START_TIME = 3 * 24 * 3600  # after 3 days
 MIN_REQUESTS_TO_PROCESS = 200
 
 
+MAX_BATCHES = 1
+
 __all__ = [
     "OMEGA",
     "DELTA",
     "BATCH_DURATION",
     "NUMBER_OF_VEHICLES",
+    "MAX_BATCHES",
 ]

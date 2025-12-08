@@ -1,11 +1,11 @@
 import numpy as np
 import itertools
-from typing import List, Set, Dict, Optional, Tuple, FrozenSet, cast
+from typing import List, Set, Dict, Optional, Tuple, FrozenSet
 
 from dataclasses import dataclass
 
 from config import get_logger
-from config.config import DELTA, OMEGA
+from config.config import DELTA, OMEGA, VEHICLE_CAPACITY
 from src.interfaces import (
     ISingleVehicleRoutePlanner,
     VehicleAvailability,
@@ -211,7 +211,7 @@ class VectorizedInserter:
         """
         N = len(base_perm.stops)
         route_ids = [s.node_id for s in base_perm.stops]
-        
+
         # 1. Pre-calculate "Downstream Slack"
         # min_slack_from[k] = min(slacks[k:])
         # This represents the bottleneck for any delay introduced at k
@@ -288,28 +288,32 @@ class VectorizedInserter:
         # Cost of inserting P -> D at the same slot i.
         # Path: prev -> P -> D -> curr
         # Cost = Dist(prev, P) + Dist(P, D) + Dist(D, curr) - Dist(prev, curr)
-        
+
         dist_p_d = self.network.get_travel_time(pickup.node_id, dropoff.node_id)
         chain_detours = np.zeros(N + 1)
-        
+
         # Loop for now (N is small)
         for i in range(1, N):
-             prev_n, curr_n = route_ids[i-1], route_ids[i]
-             base_edge = self.network.get_travel_time(prev_n, curr_n)
-             chain_detours[i] = t_nodes_to_p[i-1] + dist_p_d + t_d_to_nodes[i] - base_edge
-             
+            prev_n, curr_n = route_ids[i - 1], route_ids[i]
+            base_edge = self.network.get_travel_time(prev_n, curr_n)
+            chain_detours[i] = (
+                t_nodes_to_p[i - 1] + dist_p_d + t_d_to_nodes[i] - base_edge
+            )
+
         # Ends
-        # i=0: P -> D -> Start0. 
+        # i=0: P -> D -> Start0.
         # Delay = max(0, P.earliest + Dist(P, D) + Dist(D, S0) - S0.earliest)
         # Note: p_detours[0] logic was: max(0, P.arr_S0 - S0.earl)
         # Here P.arr_S0 = P.earliest + P->D + D->S0
         if N > 0:
-             d_d_s0 = self.network.get_travel_time(dropoff.node_id, route_ids[0])
-             arrival_chain_s0 = pickup.hard_earliest + dist_p_d + d_d_s0
-             chain_detours[0] = max(0.0, arrival_chain_s0 - base_perm.earliest_arrivals[0])
+            d_d_s0 = self.network.get_travel_time(dropoff.node_id, route_ids[0])
+            arrival_chain_s0 = pickup.hard_earliest + dist_p_d + d_d_s0
+            chain_detours[0] = max(
+                0.0, arrival_chain_s0 - base_perm.earliest_arrivals[0]
+            )
         else:
-             chain_detours[0] = 0.0
-             
+            chain_detours[0] = 0.0
+
         # i=N: Last -> P -> D.
         # Cost = Dist(Last, P) + Dist(P, D)
         # p_detours[N] was 0? (Actually p_detours[N] should be Dist(Last, P))
@@ -333,19 +337,19 @@ class VectorizedInserter:
         # Mask 3: Total Feasibility (Cell Check)
         # For I < J: cost = p_detours[I] + d_detours[J]
         # For I == J: cost = chain_detours[I]
-        
+
         # Create full cost grid
         cost_grid = p_detours[I] + d_detours[J]
-        
+
         # Overwrite diagonal
         # This is efficient for small N
         np.fill_diagonal(cost_grid, chain_detours)
-        
+
         mask_total = cost_grid <= min_slack_from[J]
 
         # Combine
         final_mask = mask_order & mask_p & mask_total
-        
+
         return list(zip(*np.where(final_mask)))
 
     def find_optimal_vehicle_integration(
@@ -441,18 +445,18 @@ class VectorizedInserter:
             travel_v0_t0 = self.matrix[v0_idx, t0_idx]  # Type: ignore
 
             arr_t0 = start_time + travel_v0_t0
-            
+
             # HARD CHECK: Does V0 -> T0 make T0 late?
             if arr_t0 > base_perm.stops[0].hard_latest:
                 return None
-            
+
             # Delay Calculation
             delay = max(0.0, arr_t0 - base_arrivals[0])
-            
+
             if delay <= limit_vector[0]:
                 current_delay[0] = delay
             else:
-                return None # Impossible to even start
+                return None  # Impossible to even start
         else:
             current_delay[0] = 0.0
 
@@ -625,7 +629,6 @@ class PermutationRTVGraphBuilder(IRTVGraphBuilder):
         rv_graph: RVGraph,
         vehicles: Set[VehicleAvailability],
         requests: Set[Request],
-        max_trip_size: int,
     ) -> RTVGraph:
 
         rtv_graph = RTVGraph()
@@ -634,7 +637,7 @@ class PermutationRTVGraphBuilder(IRTVGraphBuilder):
 
         # Size -> {TripId -> GlobalTrip}
         global_trips: Dict[int, Dict[TripId, GlobalTrip]] = {}
-        for k in range(1, max_trip_size + 1):
+        for k in range(1, VEHICLE_CAPACITY + +1):
             global_trips[k] = {}
 
         # --- PHASE 1: SIZE 1 ---
@@ -679,7 +682,7 @@ class PermutationRTVGraphBuilder(IRTVGraphBuilder):
                     global_trips[1][t_id] = GlobalTrip(t_id, t_id, [perm], valid_vehs)
 
         # --- PHASE 2+: EXPANSION ---
-        for k in range(2, max_trip_size + 1):
+        for k in range(2, VEHICLE_CAPACITY + 1):
             prev_level = global_trips[k - 1]
 
             for i, base_trip in enumerate(prev_level.values()):
