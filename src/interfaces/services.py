@@ -184,7 +184,7 @@ class IRTVGraphBuilder(ABC):
         rv_graph: RVGraph,
         vehicles: set[VehicleAvailability],
         requests: set[Request],
-        max_trip_size: int,
+        # max_trip_size: int,
     ) -> RTVGraph:
         """
         Builds the RTV-graph:
@@ -206,18 +206,6 @@ class IRTVGraphBuilder(ABC):
         pass
 
 
-from abc import ABC, abstractmethod
-from typing import Set, Iterable
-
-# Assuming these imports exist based on your previous code context
-from src.interfaces import (
-    AssignmentResult,
-    Request,
-    VehicleAvailability,
-)
-from src.interfaces.graphs import RTVGraph
-
-
 class IAssignmentSolver(ABC):
     """
     Interface for the optimization module that assigns vehicles to trips.
@@ -227,8 +215,8 @@ class IAssignmentSolver(ABC):
     def solve(
         self,
         rtv_graph: RTVGraph,
-        requests: Set[Request],
-        vehicles: Set[VehicleAvailability],
+        requests: set[Request],
+        vehicles: set[VehicleAvailability],
         solver_timeout: float,
         current_time: float,  # <-- Added as requested
     ) -> AssignmentResult:

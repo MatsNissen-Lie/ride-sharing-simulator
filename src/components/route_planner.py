@@ -83,6 +83,7 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
     ) -> FeasibilityResult:
         """
         Unified DFS Branch-and-Bound solver for RV and RTV.
+        Objective: Minimize Total Passenger Delay.
         """
         # --- 1. SETUP ---
         start_node = availability.available_at_node
@@ -119,6 +120,9 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
         s_node = [s.node for s in stops]
         s_is_pick = [s.is_pickup for s in stops]
         s_req_id = [s.request_id for s in stops]
+
+        # Pre-calculate Request Times (Needed for Delay Cost calculation)
+        req_times = [all_reqs[rid].request_time for rid in s_req_id]
 
         # Time Windows
         t_earliest = []
@@ -193,25 +197,21 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
                     # C. Time
                     travel = tt.get((u_node, s_node[i]), float("inf"))
                     arr = u_time + travel
-                    # Wait if early (not applicable for dropoffs usually, but logic holds)
+                    # Wait if early await strict wait time logic?
+                    # Original logic was: act_arr = max(arr, t_earliest[i])
                     act_arr = max(arr, t_earliest[i])
 
                     if act_arr > t_latest[i]:
                         continue
 
                     # D. Cost Function (Objective: Minimize Total Delay)
-                    # Cost = Cumulative Travel Time + Wait Time?
-                    # Standard: Sum of (Arrival_Dropoff - Request_Time)
-                    # Your generic metric: Sum of Travel Times + Lateness Penalty
+                    # Only add to cost when a passenger is dropped off.
+                    added_cost = 0.0
+                    if not s_is_pick[i]:
+                        # Cost = Arrival Time - Request Time
+                        added_cost = act_arr - req_times[i]
 
-                    # Simple accumulation:
-                    new_cost = cost + travel
-                    # Add wait time at pickup (if driver arrives early)
-                    if act_arr > arr:
-                        raise ValueError(
-                            "Unexpected wait time at pickup stop. Should not happen as vehicles are dispatched after request time."
-                        )
-                        new_cost += act_arr - arr
+                    new_cost = cost + added_cost
 
                     path.append(i)
                     solve(s_node[i], act_arr, new_load, mask | (1 << i), new_cost, path)
@@ -237,26 +237,3 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
         """Pre-calculates all-pairs travel times for a small set of nodes."""
         # assume all nodes pares are primed in the cache
         return self._network.get_travel_times_l1_cache_subset(nodes)
-
-    # @staticmethod
-    # def _build_stops(request_a: Request, request_b: Request) -> tuple[Stop, ...]:
-    #     return (
-    #         Stop(node=request_a.origin_node, is_pickup=True, request_id=request_a.id),
-    #         Stop(
-    #             node=request_a.destination_node,
-    #             is_pickup=False,
-    #             request_id=request_a.id,
-    #         ),
-    #         Stop(node=request_b.origin_node, is_pickup=True, request_id=request_b.id),
-    #         Stop(
-    #             node=request_b.destination_node,
-    #             is_pickup=False,
-    #             request_id=request_b.id,
-    #         ),
-    #     )
-
-
-if __name__ == "__main__":
-    from src.demos.route_planner_demo import run_demo
-
-    run_demo()

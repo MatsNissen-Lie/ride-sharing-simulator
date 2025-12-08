@@ -1,4 +1,4 @@
-from config.config import MAX_REQUESTS, OMEGA, DELTA
+from config.config import MAX_REQUESTS_ABOVE_CAPACITY
 from old_code.rv_graph_builder import RVGraph
 from src.interfaces import FeasibleRoute
 from collections import defaultdict
@@ -38,7 +38,6 @@ class RTVGraphBuilder(IRTVGraphBuilder):
         rv_graph: RVGraph,
         vehicles: Set[VehicleAvailability],
         requests: set[Request],
-        max_trip_size: int,
     ) -> RTVGraph:
         rtv_graph = RTVGraph()
 
@@ -80,7 +79,6 @@ class RTVGraphBuilder(IRTVGraphBuilder):
                     v_avail=v_avail,
                     rv_graph=rv_graph,
                     requests_by_id=requests_by_id,
-                    max_trip_size=max_trip_size,
                     rtv_graph=rtv_graph,
                 )
         except Exception as e:
@@ -99,7 +97,6 @@ class RTVGraphBuilder(IRTVGraphBuilder):
         v_avail: VehicleAvailability,
         rv_graph: RVGraph,
         requests_by_id: Dict[str, Request],
-        max_trip_size: int,
         rtv_graph: RTVGraph,
     ) -> None:
         """
@@ -108,7 +105,7 @@ class RTVGraphBuilder(IRTVGraphBuilder):
         """
         m = len(v_avail.passengers_onboard)
         available_seats = v_avail.capacity - m
-        limit_k = min(max_trip_size, available_seats, MAX_REQUESTS)
+        limit_k = max(available_seats, MAX_REQUESTS_ABOVE_CAPACITY)
 
         if limit_k <= 0:
             return

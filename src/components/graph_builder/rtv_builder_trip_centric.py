@@ -6,8 +6,10 @@ from enum import IntEnum, auto
 
 from config import get_logger
 from config.config import (
+    MAX_REQUESTS_ABOVE_CAPACITY,
     OMEGA,
     DELTA,
+    VEHICLE_CAPACITY,
 )
 from src.interfaces import (
     ISingleVehicleRoutePlanner,
@@ -34,6 +36,7 @@ class StopType(IntEnum):
 @dataclass(frozen=True)
 class GraphStop:
     """Internal Stop representation for the Graph Builder."""
+
     id: str
     node_id: int
     hard_earliest: float
@@ -175,32 +178,35 @@ class TripGraph:
             load=current_load,
         )
 
-        if res[0] != 'Success':
+        if res[0] != "Success":
             return None
-            
+
         # Explicit unpacking for type safety
         _, cost, path_indices, _, _ = res
 
         ordered_stops = [self.stops[i] for i in path_indices]
         # Filter out V_Start from result route
-        final_stops_local = [s for s in ordered_stops if s.type != StopType.VEHICLE_START]
-        
+        final_stops_local = [
+            s for s in ordered_stops if s.type != StopType.VEHICLE_START
+        ]
+
         # Convert to Interface Stop
         final_stops_dm = []
         for s in final_stops_local:
-             # VEHICLE_DROP is also a drop-off (is_pickup=False)
-             is_pick = (s.type == StopType.PICKUP)
-             final_stops_dm.append(DMStop(node=s.node_id, is_pickup=is_pick, request_id=s.id))
-        
+            # VEHICLE_DROP is also a drop-off (is_pickup=False)
+            is_pick = s.type == StopType.PICKUP
+            final_stops_dm.append(
+                DMStop(node=s.node_id, is_pickup=is_pick, request_id=s.id)
+            )
+
         return FeasibleRoute(
-            route=Route(tuple(final_stops_dm), cost, 0.0, 0.0),
-            cost=cost
+            route=Route(tuple(final_stops_dm), cost, 0.0, 0.0), cost=cost
         )
 
     def _dfs_selfish(self, u_idx: int, visited: int, time: float, load: int) -> Union[
-        Tuple[Literal['Success'], float, List[int], float, int],
-        Tuple[Literal['FailTime'], float],
-        Tuple[Literal['FailCap'], int]
+        Tuple[Literal["Success"], float, List[int], float, int],
+        Tuple[Literal["FailTime"], float],
+        Tuple[Literal["FailCap"], int],
     ]:
         """
         Selfish & Collaborative Solver.
@@ -321,22 +327,22 @@ class TripGraph:
         for v, arr_time, dist, n_load, delta in candidates:
 
             res = self._dfs_selfish(v, visited | (1 << v), arr_time, n_load)
-            
+
             # Explicit checking to help Pyright narrow the Union type
-            if res[0] == 'Success':
+            if res[0] == "Success":
                 _, s_cost, s_seq, s_L, s_cap = res
                 total_cost = dist + s_cost
-                
+
                 if total_cost < best_cost:
                     best_cost = total_cost
                     # Back-propagate constraints
                     my_L = min(self.stops[u_idx].hard_latest, s_L - dist)
                     my_cap = max(0, delta, delta + s_cap)
-                    best_res = ('Success', total_cost, [v] + s_seq, my_L, my_cap)
+                    best_res = ("Success", total_cost, [v] + s_seq, my_L, my_cap)
 
-            elif res[0] == 'FailTime':
+            elif res[0] == "FailTime":
                 min_fail_time = min(min_fail_time, res[1])
-            elif res[0] == 'FailCap':
+            elif res[0] == "FailCap":
                 max_fail_cap = max(max_fail_cap, res[1])
 
         # 5. AGGREGATE & UPDATE CACHE
@@ -439,8 +445,8 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
         rv_graph: RVGraph,
         vehicles: Set[VehicleAvailability],
         requests: Set[Request],
-        max_trip_size: int,
     ) -> RTVGraph:
+        max_trip_size = VEHICLE_CAPACITY + MAX_REQUESTS_ABOVE_CAPACITY
         rtv = RTVGraph()
         req_map = {r.id: r for r in requests}
         veh_map = {v.vehicle_id: v for v in vehicles}
