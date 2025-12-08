@@ -15,7 +15,7 @@ VEHICLE_CAPACITY = 4  # vehicle capacity
 # max passengers to consider in route planning
 VEHICLE_CAPACITY = 4
 
-MAX_REQUESTS_ABOVE_CAPACITY = 2
+MAX_REQUESTS_ABOVE_CAPACITY = 4
 
 
 # simulation settings

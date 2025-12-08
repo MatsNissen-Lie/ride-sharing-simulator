@@ -1,9 +1,13 @@
 from config import BATCH_DURATION, get_logger, NUMBER_OF_VEHICLES
 from config.config import MIN_START_TIME
 from src.components.batch_controller import BatchController
-from src.components.graph_builder.rtv_builder_trip_centric import (
+from src.components.graph_builder.rtv_builder_min import (
     TripCentricRTVGraphBuilder,
 )
+
+# from src.components.graph_builder.rtv_builder_trip_centric import (
+#     TripCentricRTVGraphBuilder,
+# )
 from src.components.graph_builder.rv_builder import RVGraphBuilder
 from src.components.network_service import NetworkXService
 from src.components.rebalance_solver import RebalancingSolver
