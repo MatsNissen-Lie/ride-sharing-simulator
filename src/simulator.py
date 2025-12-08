@@ -3,7 +3,7 @@ from typing import Iterator, Any
 import logging
 
 from config import get_logger
-from config.config import MIN_REQUESTS_TO_PROCESS, PLOT_RTV_GRAPH, MAX_REQUESTS
+from config.config import MIN_REQUESTS_TO_PROCESS, PLOT_RTV_GRAPH
 from config.paths import PLOT_DIR
 from src.interfaces.batch_control import IBatchController
 from src.interfaces.services import (
@@ -102,7 +102,7 @@ class Simulator:
                 # 4. Build RTV Graph (Algorithm Step 2)
                 rtv_start_time = time.perf_counter()
                 rtv_graph = self.rtv_builder.build_graph(
-                    rv_graph, vehicle_avail_pool, all_requests_in_pool, max_trip_size=4
+                    rv_graph, vehicle_avail_pool, all_requests_in_pool
                 )
                 rtv_end_time = time.perf_counter()
                 rtv_duration = rtv_end_time - rtv_start_time
@@ -232,7 +232,7 @@ class Simulator:
                 }
 
                 # Add breakdown by size
-                for size in range(1, MAX_REQUESTS + 1):
+                for size in trip_stats.keys():
                     stats_payload[f"trips_size_{size}"] = trip_stats.get(size, 0)
 
                 # --- Track Unique Requests ---

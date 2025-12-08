@@ -1,4 +1,6 @@
-from config.config import MAX_REQUESTS
+from config.config import (
+    MAX_REQUESTS_ABOVE_CAPACITY,
+)
 from old_code.rv_graph_builder import RVGraph
 from src.interfaces import FeasibleRoute
 from collections import defaultdict
@@ -38,7 +40,6 @@ class RTVGraphBuilder(IRTVGraphBuilder):
         rv_graph: RVGraph,
         vehicles: Set[VehicleAvailability],
         requests: set[Request],
-        max_trip_size: int,
     ) -> RTVGraph:
         rtv_graph = RTVGraph()
 
@@ -80,7 +81,6 @@ class RTVGraphBuilder(IRTVGraphBuilder):
                     v_avail=v_avail,
                     rv_graph=rv_graph,
                     requests_by_id=requests_by_id,
-                    max_trip_size=max_trip_size,
                     rtv_graph=rtv_graph,
                 )
         except Exception as e:
@@ -99,7 +99,6 @@ class RTVGraphBuilder(IRTVGraphBuilder):
         v_avail: VehicleAvailability,
         rv_graph: RVGraph,
         requests_by_id: Dict[str, Request],
-        max_trip_size: int,
         rtv_graph: RTVGraph,
     ) -> None:
         """
@@ -108,7 +107,7 @@ class RTVGraphBuilder(IRTVGraphBuilder):
         """
         m = len(v_avail.passengers_onboard)
         available_seats = v_avail.capacity - m
-        limit_k = min(max_trip_size, available_seats, MAX_REQUESTS)
+        limit_k = max(available_seats, MAX_REQUESTS_ABOVE_CAPACITY)
 
         if limit_k <= 0:
             return
@@ -139,23 +138,23 @@ class RTVGraphBuilder(IRTVGraphBuilder):
 
         # Sort valid_singles for deterministic ordering (optional but good for consistency)
         sorted_singles = sorted(list(valid_singles))
-        
+
         for r1 in sorted_singles:
             # Get all neighbors of r1 from the RV-graph
             neighbors = rv_graph.request_request.get(r1, set())
-            
+
             # Intersect neighbors with valid_singles to ensure the other request is also serviceable
             # We enforce r1 < r2 to avoid duplicates ({A,B} vs {B,A}) and self-loops
             potential_r2 = [r2 for r2 in neighbors if r2 in valid_singles and r1 < r2]
-            
+
             for r2 in potential_r2:
                 # We know r1 and r2 are neighbors (graph) and valid singles (vehicle).
                 # We just need to check if they can fit together in this specific vehicle.
                 candidate_trip = frozenset({r1, r2})
-                
+
                 reqs = {requests_by_id[r] for r in candidate_trip}
                 result = self._route_planner.check_feasibility(reqs, vehicle=v_avail)
-                
+
                 if result.is_feasible:
                     T_by_size[2].add(candidate_trip)
                     rtv_graph.add_trip_for_vehicle(
@@ -196,8 +195,8 @@ class RTVGraphBuilder(IRTVGraphBuilder):
                     # 3. Sub-trip Lemma (Lemma 2)
                     is_valid_structure = True
                     prefix = trip_a[:-1]
-                    
-                    # We need to verify that merging r_x and r_y into the prefix 
+
+                    # We need to verify that merging r_x and r_y into the prefix
                     # doesn't violate any other subset constraints.
                     for idx in range(len(prefix)):
                         # Remove one element from the prefix
@@ -208,13 +207,15 @@ class RTVGraphBuilder(IRTVGraphBuilder):
                         if check_subtrip not in T_by_size[k - 1]:
                             is_valid_structure = False
                             break
-                    
+
                     if not is_valid_structure:
                         continue
 
                     # 4. Feasibility Check
                     reqs = {requests_by_id[r] for r in candidate_trip}
-                    result = self._route_planner.check_feasibility(reqs, vehicle=v_avail)
+                    result = self._route_planner.check_feasibility(
+                        reqs, vehicle=v_avail
+                    )
 
                     if result.is_feasible:
                         T_by_size[k].add(candidate_trip)

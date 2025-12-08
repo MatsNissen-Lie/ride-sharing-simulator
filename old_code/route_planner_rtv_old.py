@@ -1,7 +1,6 @@
 """Minimal single-vehicle route planner used during prototyping."""
 
 from config import DELTA, OMEGA, get_logger
-from config.config import VEHICLE_CAPACITY, MAX_REQUESTS_ABOVE_CAPACITY
 
 from src.interfaces import (
     FeasibilityResult,

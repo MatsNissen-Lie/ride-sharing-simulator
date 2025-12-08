@@ -31,7 +31,9 @@ def _ensure_single_stream_handler(logger: logging.Logger, attr: str) -> logging.
             return handler
 
     for handler in list(logger.handlers):
-        if isinstance(handler, logging.StreamHandler) and not getattr(handler, attr, False):
+        if isinstance(handler, logging.StreamHandler) and not getattr(
+            handler, attr, False
+        ):
             logger.removeHandler(handler)
 
     handler = logging.StreamHandler()
