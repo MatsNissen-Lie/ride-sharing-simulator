@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Iterable
+from typing import Any, Iterable
 import numpy as np
 
 from src.interfaces.data_models import (
@@ -43,7 +43,7 @@ class INetworkService(ABC):
     @abstractmethod
     def get_travel_time(self, origin: int, destination: int) -> float:
         """
-        Returns the travel time between two nodes. 
+        Returns the travel time between two nodes.
         Returns float('inf') if no path exists.
         """
         pass
@@ -81,15 +81,23 @@ class INetworkService(ABC):
         """
         pass
 
-    def update_cache(self, time_matrix: np.ndarray) -> None:
+    def update_cache(self, cache: Any) -> None:
         """
         Updates the L1 cache with a given time matrix.
         """
         raise NotImplementedError("update_cache not implemented in base class")
 
-    def get_l1_cache(self):
+    @abstractmethod
+    def get_matrix_and_mapping(self) -> tuple[np.ndarray, dict[int, int]]:
         """
-        Returns the current L1 cache.
+        Returns the raw travel time matrix and a mapping from Node ID -> Matrix Index.
+        Used for vectorized operations that require direct index access.
+        """
+        pass
+
+    def get_l1_cache(self) -> Any:
+        """
+        Returns the internal L1 cache object, if any.
         """
         raise NotImplementedError("get_l1_cache not implemented in base class")
 

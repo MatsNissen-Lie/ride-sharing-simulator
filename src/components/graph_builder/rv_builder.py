@@ -80,19 +80,17 @@ class RVGraphBuilder(IRVGraphBuilder):
         if n_req == 0:
             return graph
 
-        # --- PREPARATION: DATA ARRAYS ---
-        # Create numpy views for fast access
-        req_origins = np.array([r.origin_node for r in req_list])
-        req_dests = np.array([r.destination_node for r in req_list])
-        req_times = np.array([r.request_time for r in req_list])
-
         # --- 1. RR PIPELINE (Prune + Solve Integrated) ---
-
         # A. Full Matrix Fetch (N x N)
         # We fetch this once. We will use it for BOTH pruning AND the solver.
-        rr_matrix = self._network.get_travel_time_matrix(
-            req_origins.tolist(), req_origins.tolist()
-        )
+        req_origins = [r.origin_node for r in req_list]
+        rr_matrix = self._network.get_travel_time_matrix(req_origins, req_origins)
+
+        # --- PREPARATION: DATA ARRAYS ---
+        # Create numpy views for fast access
+        req_origins = np.array(req_origins)
+        req_dests = np.array([r.destination_node for r in req_list])
+        req_times = np.array([r.request_time for r in req_list])
 
         # B. Vectorized Pruning
         # Condition: Time(i,j) <= Omega OR Time(j,i) <= Omega

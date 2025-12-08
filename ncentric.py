@@ -1,12 +1,8 @@
 from config import BATCH_DURATION, get_logger, NUMBER_OF_VEHICLES
 from config.config import MIN_START_TIME
 from src.components.batch_controller import BatchController
-
-# from src.components.graph_builder.rtv_builder_permutations import (
-#     PermutationRTVGraphBuilder,
-# )
-from src.components.graph_builder.rtv_builder_permutations import (
-    PermutationRTVGraphBuilder,
+from src.components.graph_builder.rtv_builder_trip_centric import (
+    TripCentricRTVGraphBuilder,
 )
 from src.components.graph_builder.rv_builder import RVGraphBuilder
 from src.components.network_service import NetworkXService
@@ -57,8 +53,7 @@ def main():
         network_service, provider.iter_vehicles(NUMBER_OF_VEHICLES)
     )
     rv_builder = RVGraphBuilder(planner, network_service)
-    rtv_builder = PermutationRTVGraphBuilder(planner)
-
+    rtv_builder = TripCentricRTVGraphBuilder(planner)
     assignment_solver = GurobiAssignmentSolver()
     rebalancing_solver = RebalancingSolver(network_service)
 

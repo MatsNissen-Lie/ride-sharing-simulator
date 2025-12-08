@@ -11,12 +11,10 @@ from src.interfaces import (
     Request,
     Stop,
     Route,
-    Passenger,
     INetworkService,
     VehicleAvailability,
     ISingleVehicleRoutePlanner,
 )
-import heapq
 
 logger = get_logger(__name__)
 
@@ -210,6 +208,9 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
                     new_cost = cost + travel
                     # Add wait time at pickup (if driver arrives early)
                     if act_arr > arr:
+                        raise ValueError(
+                            "Unexpected wait time at pickup stop. Should not happen as vehicles are dispatched after request time."
+                        )
                         new_cost += act_arr - arr
 
                     path.append(i)

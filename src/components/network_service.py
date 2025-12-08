@@ -329,14 +329,27 @@ class NetworkXService(INetworkService):
         np.fill_diagonal(self._time_matrix, 0.0)
         np.fill_diagonal(self._dist_matrix, 0.0)
 
-    def update_cache(self, time_matrix: np.ndarray) -> None:
+    def update_cache(self, cache: np.ndarray) -> None:
         """Updates the L1 cache with a given time matrix."""
-        if time_matrix.shape != (self.N, self.N):
+        if cache.shape != (self.N, self.N):
             raise ValueError(
-                f"Input time_matrix shape {time_matrix.shape} does not match expected {(self.N, self.N)}"
+                f"Input time_matrix shape {cache.shape} does not match expected {(self.N, self.N)}"
             )
-        self._time_matrix = time_matrix
+        self._time_matrix = cache
 
     def get_l1_cache(self):
         """Returns the current L1 cache."""
         return self._time_matrix
+
+    def get_matrix_and_mapping(self) -> tuple[np.ndarray, dict[int, int]]:
+        """
+        Returns the raw travel time matrix and a mapping from Node ID -> Matrix Index.
+        In this implementation, Node ID == Matrix Index (Identity Mapping).
+        """
+        # Identity mapping for 0..N-1
+        # For performance, we can return a specialized dict-like object or just a dict.
+        # Given the User Request emphasizes explicit robust mapping, we return a dict.
+        # Use cache if N is large?
+        if not hasattr(self, "_identity_mapping"):
+            self._identity_mapping = {i: i for i in range(self.N)}
+        return self._time_matrix, self._identity_mapping
