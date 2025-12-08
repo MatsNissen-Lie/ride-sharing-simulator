@@ -110,7 +110,7 @@ class TripGraph:
     ) -> FeasibilityResult:
         """
         Solves the TSP/VRP for this specific Trip + This specific Vehicle.
-        Uses the exact low-level logic from the 'Old Code' for speed.
+        Uses cached travel times and bitwise masks for maximum speed.
         """
 
         # --- 1. SETUP DYNAMIC CONTEXT ---
@@ -173,82 +173,39 @@ class TripGraph:
         all_req_times = onboard_req_times + self.req_times
         is_dropoff_mask = [True] * num_onboard + [not p for p in self.is_pickup]
 
-        # --- 2. TRAVEL TIME MATRIX ---
-        # We need distances:
-        # 1. Vehicle Start -> All Stops
-        # 2. Onboard -> All Stops
-        # 3. Static -> Onboard (Unlikely, but part of matrix)
-        # 4. Static -> Static (Cached!)
+        # --- 2. TRAVEL TIME MATRIX MATERIALIZATION ---
+        # Pre-calculate full N x N matrix to avoid function calls in DFS loop.
 
-        # To simplify, we just fetch the needed rows.
-        # Ideally, we stitch matrices, but fetching V+Onboard -> All is safer/easier.
-        # We know unique locations.
+        # Initialize full matrix
+        full_adj = np.zeros((total_stops, total_stops))
 
-        # Optimization: We only really need to fetch:
-        # Source: [V_Loc] + [Onboard_Nodes] + [Static_Nodes]
-        # Dest:   [Onboard_Nodes] + [Static_Nodes]
-        # Since 'Static->Static' is cached, we just overlay it.
-
-        # Construct full adjacency. Initialize with INF.
-        full_adj = np.full((total_stops, total_stops), INF)
-
-        # Fill Static->Static block (Bottom-Right)
+        # A. Fill Static-to-Static (Bottom-Right) - Block Copy using Trip Graph Cache
         if num_static > 0:
             full_adj[num_onboard:, num_onboard:] = self.static_adj
 
-        # We need to fetch the "Dynamic" rows/cols
-        # Sources needed: V_Start (for initial steps) AND All nodes (for transitions)
-        # We actually need a dist lookup from (u, v).
-        # Let's just create a quick lookup map or efficient matrix.
-
-        # Collect all unique nodes to query network once
-        unique_nodes = list(set([v_loc] + all_nodes))
-        # This might be slightly redundant with static_adj, but ensures 100% correct "Old Code" behavior
-        # without complex matrix stitching logic errors.
-        # For max speed, we SHOULD stitch, but let's trust the network cache for now.
-        # To adhere to "Trip Centric", we rely on the fact that self.static_adj is already done.
-
-        # Let's only query: [V_Loc + Onboard_Nodes] -> [All_Nodes]
-        # And [Static_Nodes] -> [Onboard_Nodes] (Rare path, but possible)
+        # B. Fill Dynamic Rows (Vehicle + Onboard -> All)
+        # We query: [V_Loc, Onboard_1, ... Onboard_N] -> [All Nodes]
         sources = [v_loc] + onboard_stops_nodes
         targets = all_nodes
 
-        # 1. From Vehicle/Onboard to Everyone
-        if sources:
-            d_matrix_dyn = network.get_travel_time_matrix(sources, targets)
+        dyn_matrix = network.get_travel_time_matrix(sources, targets)
 
-        # 2. From Static to Onboard (if any onboard exist)
+        # Row 0 is V_Start distances. Separate to avoid special -1 index logic in matrix
+        dist_from_start = dyn_matrix[0]  # Shape [total_stops]
+
+        # Rows 1..N are Onboard -> All. Copy to Top-Rows of full_adj
+        if num_onboard > 0:
+            full_adj[:num_onboard, :] = dyn_matrix[1:]
+
+        # C. Fill Static -> Onboard (Cross terms)
+        # These are rare (pickup new pax then drop old pax?), but valid topological paths.
         if num_onboard > 0 and num_static > 0:
-            d_matrix_cross = network.get_travel_time_matrix(
+            cross_matrix = network.get_travel_time_matrix(
                 self.nodes, onboard_stops_nodes
             )
+            full_adj[num_onboard:, :num_onboard] = cross_matrix
 
-        # Helper to get dist(u_idx, v_idx) inside the list 'all_nodes'
-        # Special case: u_idx = -1 means V_Start
-
-        def get_dist(u_idx, v_idx):
-            # Target is always v_idx in all_nodes
-
-            # Case A: From Vehicle Start
-            if u_idx == -1:
-                # Row 0 in d_matrix_dyn corresponds to V_Loc
-                return d_matrix_dyn[0, v_idx]
-
-            # Case B: From Onboard Node (Indices 0 to num_onboard-1)
-            if u_idx < num_onboard:
-                # Row (u_idx + 1) in d_matrix_dyn
-                return d_matrix_dyn[u_idx + 1, v_idx]
-
-            # Case C: From Static Node (Indices num_onboard to End)
-            # Target is Static (Bottom-Right Block) -> Use Cached
-            if v_idx >= num_onboard:
-                return self.static_adj[u_idx - num_onboard, v_idx - num_onboard]
-
-            # Case D: From Static to Onboard (Cross) -> Use d_matrix_cross
-            # u_idx is static, v_idx is onboard
-            return d_matrix_cross[u_idx - num_onboard, v_idx]
-
-        # --- 3. DFS SOLVER (The "Old Code" Logic) ---
+        # --- 3. DFS SOLVER ---
 
         best_cost = INF
         best_path = []
@@ -292,7 +249,12 @@ class TripGraph:
                     continue
 
                 # 4. Time Check
-                dist = get_dist(u_idx, v)
+                # FAST LOOKUP via Array
+                if u_idx == -1:
+                    dist = dist_from_start[v]
+                else:
+                    dist = full_adj[u_idx, v]
+
                 arrival = current_time + dist
 
                 # Wait if early (Standard VRP logic: max(arrival, earliest))
