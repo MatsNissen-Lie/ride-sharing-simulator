@@ -4,7 +4,7 @@ from collections.abc import Iterable, Iterator
 from typing import Set, Tuple
 import bisect
 
-from config.config import OMEGA, BATCH_DURATION
+from config.config import DELTA, OMEGA, BATCH_DURATION
 from config.logging import get_logger
 from src.interfaces.batch_control import IBatchController
 from src.interfaces import (
@@ -348,6 +348,7 @@ class BatchController(IBatchController):
                     destination_node=meta.destination_node,
                     request_time=meta.request_time,
                     earliest_dropoff_time=meta.request_time + travel_time,
+                    # latest_dropoff_time=meta.request_time + travel_time + DELTA,
                 )
             )
         return converted
@@ -503,7 +504,9 @@ class BatchController(IBatchController):
         #   current_route / route_assignment_time projection gave them.
 
     def get_rebalancing_candidates(
-        self, assignment_result: AssignmentResult, vehicle_avail_pool: Set[VehicleAvailability]
+        self,
+        assignment_result: AssignmentResult,
+        vehicle_avail_pool: Set[VehicleAvailability],
     ) -> Tuple[list[VehicleAvailability], list[Request]]:
         """
         Identifies the inputs for the Rebalancing LP (Algorithm 4).
@@ -577,8 +580,15 @@ class BatchController(IBatchController):
             origin_node=request.origin_node,
             destination_node=request.destination_node,
             request_time=request.request_time,
-            earliest_dropoff_time=promised_pickup_time,  # request.earliest_dropoff_time,
-            promised_pickup_time=promised_pickup_time,
+            earliest_dropoff_time=promised_pickup_time
+            + getattr(
+                self._network.get_shortest_path(
+                    request.origin_node, request.destination_node
+                ),
+                "travel_time",
+            ),  # if no path found, an exception will be raised
+            # latest_dropoff_time=promised_pickup_time + DELTA,
+            promised_pickup_time=promised_pickup_time,  # we need this info later
         )
 
     def _expire_stale_requests(self, t_now: float) -> None:

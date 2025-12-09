@@ -4,6 +4,7 @@ import logging
 
 from config import get_logger
 from config.config import (
+    DELTA,
     MIN_REQUESTS_TO_PROCESS,
     PLOT_RTV_GRAPH,
     MAX_BATCHES,
@@ -80,7 +81,10 @@ class Simulator:
                     self.provider.get_simulation_clock().from_relative_seconds(t_now)
                 )
 
-                if len(all_requests_in_pool) < MIN_REQUESTS_TO_PROCESS and not MEGA_BATCH_MODE:
+                if (
+                    len(all_requests_in_pool) < MIN_REQUESTS_TO_PROCESS
+                    and not MEGA_BATCH_MODE
+                ):
                     continue
 
                 if MEGA_BATCH_MODE:
@@ -108,9 +112,7 @@ class Simulator:
                         new_req_time = t_now - BATCH_DURATION + offset
 
                         # Recalculate dropoff based on original duration
-                        original_duration = (
-                            req.earliest_dropoff_time - req.request_time
-                        )
+                        original_duration = req.earliest_dropoff_time - req.request_time
 
                         new_req = Request(
                             id=req.id,
@@ -118,7 +120,9 @@ class Simulator:
                             destination_node=req.destination_node,
                             request_time=new_req_time,
                             earliest_dropoff_time=new_req_time + original_duration,
-                            promised_pickup_time=None,
+                            # latest_dropoff_time=new_req_time
+                            # + original_duration
+                            # + DELTA,
                         )
                         refreshed_requests.add(new_req)
                         # Inject into controller to bypass expiration
@@ -297,7 +301,9 @@ class Simulator:
                 self.stats_logger.log_batch(stats_payload)
 
                 if batch_count >= MAX_BATCHES:
-                    logger.info(f"🛑 Reached max batches limit ({MAX_BATCHES}). Stopping simulation.")
+                    logger.info(
+                        f"🛑 Reached max batches limit ({MAX_BATCHES}). Stopping simulation."
+                    )
                     break
 
             logger.info("🏁 Simulation complete.")

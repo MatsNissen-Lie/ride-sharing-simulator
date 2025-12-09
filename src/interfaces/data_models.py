@@ -42,7 +42,9 @@ class Request(MetaRequest):
     # request_time: float  # Timestamp of request (t_r^r)
     # Pre-calculated earliest drop-off time
     # t_r^* = t_r^r + tau(o_r, d_r) aka request_time + shortest_path_travel_time
+
     earliest_dropoff_time: float
+    # latest_dropoff_time: float
 
     promised_pickup_time: float | None = (
         None  # Assigned pickup time (t_r^p), but not committed (aka not picked up yet)

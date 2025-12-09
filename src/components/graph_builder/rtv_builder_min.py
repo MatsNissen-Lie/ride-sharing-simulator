@@ -59,7 +59,20 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
         """
         Trip-Centric RTV Construction using the "Old Code" Solver Baseline.
         """
+        TripSolverclass = TripSolver
 
+        from src.components.graph_builder.trip_graph_bfs_memo import TripSolver as MBFS
+        from src.components.graph_builder.trip_graph_path_cache import (
+            TripSolverCached as TSC,
+        )
+
+        from src.components.graph_builder.trip_graph_bfs import TripSolver as BFSSolver
+
+        TripSolverclass = BFSSolver
+        TripSolverclass = MBFS
+        TripSolverclass = TSC
+
+        trip_solver = TripSolverclass()
         # --- 1. SETUP ---
         rtv_graph = RTVGraph()
 
@@ -121,7 +134,7 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
                 if len(candidate_trip) > this_limit_k:
                     continue
 
-                result = TripSolver.solve(req_objs, vehicle, global_matrix, memo=memo)
+                result = trip_solver.solve(req_objs, vehicle, global_matrix)
 
                 if result and result.is_feasible:
                     T_by_size[2].add(candidate_trip)
@@ -215,9 +228,7 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
                         if len(candidate_trip) > this_limit_k:
                             continue
 
-                        result = TripSolver.solve(
-                            req_objs, vehicle, global_matrix, memo=joined_memo
-                        )
+                        result = trip_solver.solve(req_objs, vehicle, global_matrix)
 
                         if result and result.is_feasible:
                             T_by_size[k].add(candidate_trip)

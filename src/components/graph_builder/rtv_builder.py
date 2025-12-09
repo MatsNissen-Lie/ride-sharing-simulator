@@ -104,6 +104,13 @@ class RTVGraphBuilder(IRTVGraphBuilder):
         Implements Algorithm 1 using Clique Expansion + Lexicographic Ordering.
         We only iterate over the intersection of neighbors in the RV-graph.
         """
+        from src.components.graph_builder.trip_graph import TripSolver as AStarDFSSolver
+        from src.components.graph_builder.trip_graph_bfs import TripSolver as BFSSolver
+
+        TripSolverClass = TripSolver
+        TripSolverClass = AStarDFSSolver
+        TripSolverClass = BFSSolver
+
         m = len(v_avail.passengers_onboard)
         available_seats = v_avail.capacity - m
         limit_k = max(available_seats, MAX_REQUESTS_ABOVE_CAPACITY)
@@ -154,7 +161,7 @@ class RTVGraphBuilder(IRTVGraphBuilder):
                 # result = TripSolver.solve(
                 #     reqs, v_avail, self._route_planner._network
                 # )
-                result = TripSolver.solve(
+                result = TripSolverClass.solve(
                     reqs, v_avail, self._route_planner._network.get_l1_cache()
                 )
 
@@ -226,7 +233,7 @@ class RTVGraphBuilder(IRTVGraphBuilder):
                     # This is the heavy calculation - only performed if structural integrity passes
                     reqs = {requests_by_id[r] for r in candidate_trip}
 
-                    result = TripSolver.solve(
+                    result = TripSolverClass.solve(
                         reqs, v_avail, self._route_planner._network.get_l1_cache()
                     )
 
