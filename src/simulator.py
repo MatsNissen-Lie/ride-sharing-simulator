@@ -3,14 +3,23 @@ from typing import Iterator, Any
 import logging
 
 from config import get_logger
-from config.config import MIN_REQUESTS_TO_PROCESS, PLOT_RTV_GRAPH, MAX_BATCHES
+from config.config import (
+    MIN_REQUESTS_TO_PROCESS,
+    PLOT_RTV_GRAPH,
+    MAX_BATCHES,
+    MEGA_BATCH_MODE,
+    MEGA_BATCH_SIZE,
+    BATCH_DURATION,
+)
 from config.paths import PLOT_DIR
 from src.interfaces.batch_control import IBatchController
 from src.interfaces.services import (
     IAssignmentSolver,
     IRVGraphBuilder,
     IRTVGraphBuilder,
+    IRTVGraphBuilder,
     INetworkService,
+    Request,
 )
 from src.components.simulation_data_provider import SimulationDataProvider
 from src.utils.rtv_plot import plot_rtv_graph
@@ -57,6 +66,7 @@ class Simulator:
         batch_count = 0
         seen_requests = set()
         served_requests = set()
+        self.mega_pool = []
 
         try:
             for batch in self.controller.iter_batches(
@@ -70,8 +80,53 @@ class Simulator:
                     self.provider.get_simulation_clock().from_relative_seconds(t_now)
                 )
 
-                if len(all_requests_in_pool) < MIN_REQUESTS_TO_PROCESS:
+                if len(all_requests_in_pool) < MIN_REQUESTS_TO_PROCESS and not MEGA_BATCH_MODE:
                     continue
+
+                if MEGA_BATCH_MODE:
+                    # Accumulate requests
+                    for req in all_requests_in_pool:
+                        if req not in self.mega_pool:
+                            self.mega_pool.append(req)
+
+                    if len(self.mega_pool) < MEGA_BATCH_SIZE:
+                        logger.info(
+                            f"🧬 Accumulating requests... [{len(self.mega_pool)}/{MEGA_BATCH_SIZE}]"
+                        )
+                        continue  # Skip processing until we reach the threshold
+
+                    # Threshold reached: "Refresh" timestamps and inject back
+                    logger.info(
+                        f"🧬 MEGA BATCH threshold reached! Refreshing {len(self.mega_pool)} requests..."
+                    )
+
+                    refreshed_requests = set()
+                    for req in self.mega_pool:
+                        # Logic: shift request time to be within the current batch window
+                        # We use % BATCH_DURATION to keep the relative offset
+                        offset = req.request_time % BATCH_DURATION
+                        new_req_time = t_now - BATCH_DURATION + offset
+
+                        # Recalculate dropoff based on original duration
+                        original_duration = (
+                            req.earliest_dropoff_time - req.request_time
+                        )
+
+                        new_req = Request(
+                            id=req.id,
+                            origin_node=req.origin_node,
+                            destination_node=req.destination_node,
+                            request_time=new_req_time,
+                            earliest_dropoff_time=new_req_time + original_duration,
+                            promised_pickup_time=None,
+                        )
+                        refreshed_requests.add(new_req)
+                        # Inject into controller to bypass expiration
+                        self.controller._request_index[new_req.id] = new_req
+
+                    # Override the current batch connection
+                    all_requests_in_pool = refreshed_requests
+                    self.mega_pool = []  # Reset for next mega batch (or we could break)
 
                 start_loop_time = time.perf_counter()
                 logger.info("--- Batch %d starting at t=%.2f ---", batch_count, t_now)

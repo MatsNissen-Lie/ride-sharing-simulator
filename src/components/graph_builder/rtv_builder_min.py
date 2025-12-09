@@ -1,5 +1,5 @@
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import FrozenSet
 
 from config import get_logger
@@ -7,7 +7,7 @@ from config.config import (
     MAX_REQUESTS_ABOVE_CAPACITY,
     VEHICLE_CAPACITY,
 )
-from src.components.graph_builder.trip_graph import TripSolver
+from src.components.graph_builder.trip_graph import MEMO_TYPE, TripSolver
 from src.interfaces import (
     ISingleVehicleRoutePlanner,
     VehicleAvailability,
@@ -20,6 +20,7 @@ from src.interfaces.services import IRTVGraphBuilder
 logger = get_logger(__name__)
 
 
+# @dataclass(frozen=False)
 @dataclass(frozen=True)
 class GlobalTrip:
     """
@@ -30,6 +31,7 @@ class GlobalTrip:
     id: TripId
     candidate_vehicle_ids: FrozenSet[str]
     # No graph needed!
+    memo: MEMO_TYPE = field(default_factory=dict)
 
     def __hash__(self) -> int:
         return hash(self.id)
@@ -93,45 +95,45 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
                 candidate_vehicle_ids=frozenset(veh_ids),
             )
 
-        sorted_singles = sorted(list(valid_singles))
-        for r1 in sorted_singles:
-            # Get all neighbors of r1 from the RV-graph
-            neighbors = rv_graph.request_request.get(r1, set())
-            potential_r2 = [r2 for r2 in neighbors if r2 in valid_singles and r1 < r2]
-            for r2 in potential_r2:
-                candidate_trip = frozenset((r1, r2))
-                # We need to look at the intersection of vehicles that served r1 and r2
-                common_vehs = global_trips[
-                    frozenset([r1])
-                ].candidate_vehicle_ids.intersection(
-                    global_trips[frozenset([r2])].candidate_vehicle_ids
-                )
-                if not common_vehs:
+        for (
+            rr1,
+            rr2,
+            common_vehs,
+        ) in rv_graph.get_all_unique_shareable_pairs_with_vehicles():
+            if not common_vehs:
+                continue
+
+            if rr1 < rr2:
+                r1, r2 = rr1, rr2
+            else:
+                r1, r2 = rr2, rr1
+            candidate_trip = frozenset((r1, r2))
+
+            valid_vehs = set()
+
+            req_objs = [req_map[r] for r in candidate_trip]
+            memo = {}
+            for vid in common_vehs:
+                vehicle: VehicleAvailability = veh_map.get(vid)  # type: ignore
+
+                available_seats = vehicle.capacity - len(vehicle.passengers_onboard)
+                this_limit_k = max(available_seats, MAX_REQUESTS_ABOVE_CAPACITY)
+                if len(candidate_trip) > this_limit_k:
                     continue
-                valid_vehs = set()
 
-                req_objs = [req_map[r] for r in candidate_trip]
+                result = TripSolver.solve(req_objs, vehicle, global_matrix, memo=memo)
 
-                for vid in common_vehs:
-                    vehicle: VehicleAvailability = veh_map.get(vid)  # type: ignore
+                if result and result.is_feasible:
+                    T_by_size[2].add(candidate_trip)
+                    rtv_graph.add_trip_for_vehicle(candidate_trip, vid, result)  # type: ignore
+                    valid_vehs.add(vid)
 
-                    available_seats = vehicle.capacity - len(vehicle.passengers_onboard)
-                    this_limit_k = max(available_seats, MAX_REQUESTS_ABOVE_CAPACITY)
-                    if len(candidate_trip) > this_limit_k:
-                        continue
-
-                    result = TripSolver.solve(req_objs, vehicle, global_matrix)
-
-                    if result and result.is_feasible:
-                        T_by_size[2].add(candidate_trip)
-                        rtv_graph.add_trip_for_vehicle(candidate_trip, vid, result)  # type: ignore
-                        valid_vehs.add(vid)
-
-                if valid_vehs:
-                    global_trips[candidate_trip] = GlobalTrip(
-                        id=candidate_trip,
-                        candidate_vehicle_ids=frozenset(valid_vehs),
-                    )
+            if valid_vehs:
+                global_trips[candidate_trip] = GlobalTrip(
+                    id=candidate_trip,
+                    candidate_vehicle_ids=frozenset(valid_vehs),
+                    memo=memo,
+                )
 
         # --- 3. EXPANSION LOOP (k=2 to Limit) ---
         for k in range(3, limit_k + 1):
@@ -196,6 +198,13 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
 
                     req_objs = [req_map[r] for r in candidate_trip_list]
 
+                    joined_memo = global_trips.get(
+                        frozenset(trip_a)
+                    ).memo.copy()  # type: ignore
+                    joined_memo.update(
+                        global_trips.get(frozenset(trip_b)).memo  # type: ignore
+                    )  # type: ignore
+
                     for vid in candidate_vehs:
                         vehicle: VehicleAvailability = veh_map.get(vid)  # type: ignore
 
@@ -206,7 +215,9 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
                         if len(candidate_trip) > this_limit_k:
                             continue
 
-                        result = TripSolver.solve(req_objs, vehicle, global_matrix)
+                        result = TripSolver.solve(
+                            req_objs, vehicle, global_matrix, memo=joined_memo
+                        )
 
                         if result and result.is_feasible:
                             T_by_size[k].add(candidate_trip)

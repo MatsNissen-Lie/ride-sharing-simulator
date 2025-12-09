@@ -105,6 +105,23 @@ class RVGraph:
         # We filter keys so we only get one representation of the undirected edge
         return [(r1, r2) for (r1, r2) in self.rr_details.keys() if r1 < r2]
 
+    def get_all_unique_shareable_pairs_with_vehicles(
+        self,
+    ) -> list[tuple[str, str, set[str]]]:
+        """Returns a list of unique shareable request pairs (r1, r2) where r1 < r2."""
+        # We filter keys so we only get one representation of the undirected edge
+        return [
+            (
+                r1,
+                r2,
+                set(self.request_vehicle.get(r1, set())).intersection(
+                    self.request_vehicle.get(r2, set())
+                ),
+            )
+            for (r1, r2) in self.rr_details.keys()
+            if r1 < r2
+        ]
+
 
 @dataclass
 class RTVGraph:

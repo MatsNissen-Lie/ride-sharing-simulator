@@ -168,6 +168,9 @@ class Stop:
     is_pickup: bool  # True for pickup, False for drop-off
     request_id: str  # Identifies which request this stop serves
 
+    def __hash__(self):
+        return hash((self.is_pickup, self.request_id))
+
     # TODO perhaps the stops that have been calculated pickup time should be saved. However we also want to have stops that are not yet assigned.
     # But a route could maybe contain the scheduled times for each stop?
 
@@ -240,6 +243,9 @@ class Infeasible(FeasibilityResult):
 
 
 TripId = FrozenSet[str]
+
+StopId = Tuple[bool, str]
+"""Unique identifier for a stop: (is_pickup, request_id)"""
 
 
 @dataclass(frozen=True)
