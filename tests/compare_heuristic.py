@@ -2,7 +2,7 @@ import time
 from typing import cast, List, Tuple
 import numpy as np
 from src.components.search_algorithm.dfs_astar import TripSolver as AStarSolver
-from src.components.graph_builder.trip_graph_no_memo import TripSolver as DFSSolver
+from src.components.search_algorithm.dfs_bnb import TripSolver as DFSSolver
 from src.components.search_algorithm.bfs_astar import TripSolver as BFSSolver
 from src.interfaces import VehicleAvailability, Request
 from src.interfaces.data_models import FeasibleRoute

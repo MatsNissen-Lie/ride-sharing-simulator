@@ -1,6 +1,6 @@
 from config.config import MAX_REQUESTS_ABOVE_CAPACITY
 from old_code.rv_graph_builder import RVGraph
-from src.components.graph_builder.trip_graph_no_memo import TripSolver
+from src.components.search_algorithm.dfs_bnb import TripSolver
 from src.interfaces import FeasibleRoute
 from collections import defaultdict
 from typing import Set, Dict, cast
