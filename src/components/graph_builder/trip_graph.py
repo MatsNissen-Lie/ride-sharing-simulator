@@ -80,8 +80,7 @@ class TripSolver:
             r = p.original_request
             node_indices.append(r.destination_node)
             is_pickup.append(False)
-            limit = r.earliest_dropoff_time
-            hard_latest.append((limit + DELTA) if limit else INF)
+            hard_latest.append(r.latest_dropoff_time)
             req_times.append(r.request_time)
             req_ids_ordered.append(r.id)
             local_to_canon_bit.append(0)  # 0 = Ignore in cache mask
@@ -104,7 +103,7 @@ class TripSolver:
             # 1. Pickup
             node_indices.append(r.origin_node)
             is_pickup.append(True)
-            hard_latest.append(r.request_time + OMEGA)
+            hard_latest.append(r.latest_pickup_time)
             req_times.append(r.request_time)
             req_ids_ordered.append(r.id)
 
@@ -121,8 +120,7 @@ class TripSolver:
             # 2. Dropoff
             node_indices.append(r.destination_node)
             is_pickup.append(False)
-            limit = r.earliest_dropoff_time
-            hard_latest.append((limit + DELTA) if limit else INF)
+            hard_latest.append(r.latest_dropoff_time)
             req_times.append(r.request_time)
             req_ids_ordered.append(r.id)
 

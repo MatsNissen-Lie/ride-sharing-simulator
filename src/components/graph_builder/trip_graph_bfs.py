@@ -49,7 +49,7 @@ class TripSolver:
             r = p.original_request
             node_indices.append(r.destination_node)
             is_pickup.append(False)
-            hard_latest.append((p.original_request.earliest_dropoff_time + DELTA))
+            hard_latest.append(r.latest_dropoff_time)
             req_times.append(r.request_time)
             req_ids_ordered.append(r.id)
 
@@ -62,7 +62,7 @@ class TripSolver:
         for r in requests:
             node_indices.append(r.origin_node)
             is_pickup.append(True)
-            hard_latest.append(r.request_time + OMEGA)
+            hard_latest.append(r.latest_pickup_time)
             req_times.append(r.request_time)
             prereqs.append(0)
             req_ids_ordered.append(r.id)
@@ -72,7 +72,7 @@ class TripSolver:
 
             node_indices.append(r.destination_node)
             is_pickup.append(False)
-            hard_latest.append(r.earliest_dropoff_time + DELTA)
+            hard_latest.append(r.latest_dropoff_time)
             req_times.append(r.request_time)
             prereqs.append(1 << pk_local_idx)
             req_ids_ordered.append(r.id)

@@ -425,8 +425,7 @@ class RVGraphBuilder(IRVGraphBuilder):
         for i in v_idxs:
             v = veh_list[i]
             pax = list(v.passengers_onboard)[0]  # The only passenger (set -> list)
-            limit = getattr(pax.original_request, "earliest_dropoff_time", None)
-            d1_dead = (limit + DELTA) if limit else 1e9
+            d1_dead = pax.original_request.latest_dropoff_time
             v_data.append(
                 (
                     v.available_at_node,

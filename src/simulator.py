@@ -6,6 +6,7 @@ from config import get_logger
 from config.config import (
     DELTA,
     MIN_REQUESTS_TO_PROCESS,
+    OMEGA,
     PLOT_RTV_GRAPH,
     MAX_BATCHES,
     MEGA_BATCH_MODE,
@@ -119,10 +120,10 @@ class Simulator:
                             origin_node=req.origin_node,
                             destination_node=req.destination_node,
                             request_time=new_req_time,
-                            earliest_dropoff_time=new_req_time + original_duration,
-                            # latest_dropoff_time=new_req_time
-                            # + original_duration
-                            # + DELTA,
+                            latest_pickup_time=new_req_time + OMEGA,
+                            latest_dropoff_time=new_req_time
+                            + original_duration
+                            + DELTA,
                         )
                         refreshed_requests.add(new_req)
                         # Inject into controller to bypass expiration

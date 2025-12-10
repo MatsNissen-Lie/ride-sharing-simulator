@@ -7,7 +7,6 @@ from config.config import (
     MAX_REQUESTS_ABOVE_CAPACITY,
     VEHICLE_CAPACITY,
 )
-from src.components.graph_builder.trip_graph import MEMO_TYPE, TripSolver
 from src.interfaces import (
     ISingleVehicleRoutePlanner,
     VehicleAvailability,
@@ -31,7 +30,6 @@ class GlobalTrip:
     id: TripId
     candidate_vehicle_ids: FrozenSet[str]
     # No graph needed!
-    memo: MEMO_TYPE = field(default_factory=dict)
 
     def __hash__(self) -> int:
         return hash(self.id)
@@ -59,18 +57,16 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
         """
         Trip-Centric RTV Construction using the "Old Code" Solver Baseline.
         """
-        TripSolverclass = TripSolver
 
         from src.components.graph_builder.trip_graph_bfs_memo import TripSolver as MBFS
         from src.components.graph_builder.trip_graph_path_cache import (
             TripSolverCached as TSC,
         )
-
         from src.components.graph_builder.trip_graph_bfs import TripSolver as BFSSolver
 
-        TripSolverclass = BFSSolver
         TripSolverclass = MBFS
         TripSolverclass = TSC
+        TripSolverclass = BFSSolver
 
         trip_solver = TripSolverclass()
         # --- 1. SETUP ---
@@ -145,7 +141,6 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
                 global_trips[candidate_trip] = GlobalTrip(
                     id=candidate_trip,
                     candidate_vehicle_ids=frozenset(valid_vehs),
-                    memo=memo,
                 )
 
         # --- 3. EXPANSION LOOP (k=2 to Limit) ---

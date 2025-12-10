@@ -1,12 +1,12 @@
 import time
 from typing import cast, List, Tuple
 import numpy as np
-from src.components.graph_builder.trip_graph_Astar import TripSolver as AStarSolver
+from src.components.graph_builder.trip_graph_dfs_astar import TripSolver as AStarSolver
 from src.components.graph_builder.trip_graph_no_memo import TripSolver as DFSSolver
 from src.components.graph_builder.trip_graph_bfs import TripSolver as BFSSolver
-from src.interfaces import VehicleAvailability, Request, Passenger
+from src.interfaces import VehicleAvailability, Request
 from src.interfaces.data_models import FeasibleRoute
-from config.config import DELTA
+from config.config import DELTA, OMEGA
 
 
 def generate_problem(
@@ -45,15 +45,14 @@ def generate_problem(
 
         # 10 minutes slack
         hard_limit = req_time + direct_time + DELTA
-        earliest_dropoff = hard_limit - DELTA
 
         req = Request(
             id=f"R{i}",
             origin_node=origin,
             destination_node=dest,
             request_time=req_time,
-            earliest_dropoff_time=earliest_dropoff,
-            # latest_dropoff_time=hard_limit,
+            latest_dropoff_time=hard_limit,
+            latest_pickup_time=req_time + OMEGA,
         )
         requests.append(req)
 

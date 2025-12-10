@@ -34,7 +34,10 @@ class MetaRequest:
 
 @dataclass(frozen=True)
 class Request(MetaRequest):
-    """A single, unassigned travel request."""
+    """A single, unassigned travel request.
+    - latest_dropoff_time: t_r^* + Delta
+    - latest_pickup_time: t_r^r + Omega
+    """
 
     # id: str
     # origin_node: int  # Graph node ID of pickup
@@ -43,8 +46,12 @@ class Request(MetaRequest):
     # Pre-calculated earliest drop-off time
     # t_r^* = t_r^r + tau(o_r, d_r) aka request_time + shortest_path_travel_time
 
-    earliest_dropoff_time: float
+    # earliest_dropoff_time: float
     # latest_dropoff_time: float
+
+    latest_dropoff_time: float  # Latest allowable drop-off time (t_r^* + Delta)
+
+    latest_pickup_time: float  # Latest allowable pickup time (t_r^r + Omega)
 
     promised_pickup_time: float | None = (
         None  # Assigned pickup time (t_r^p), but not committed (aka not picked up yet)

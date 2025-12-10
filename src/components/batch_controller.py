@@ -347,8 +347,8 @@ class BatchController(IBatchController):
                     origin_node=meta.origin_node,
                     destination_node=meta.destination_node,
                     request_time=meta.request_time,
-                    earliest_dropoff_time=meta.request_time + travel_time,
-                    # latest_dropoff_time=meta.request_time + travel_time + DELTA,
+                    latest_pickup_time=meta.request_time + OMEGA,
+                    latest_dropoff_time=meta.request_time + travel_time + DELTA,
                 )
             )
         return converted
@@ -580,14 +580,8 @@ class BatchController(IBatchController):
             origin_node=request.origin_node,
             destination_node=request.destination_node,
             request_time=request.request_time,
-            earliest_dropoff_time=promised_pickup_time
-            + getattr(
-                self._network.get_shortest_path(
-                    request.origin_node, request.destination_node
-                ),
-                "travel_time",
-            ),  # if no path found, an exception will be raised
-            # latest_dropoff_time=promised_pickup_time + DELTA,
+            latest_pickup_time=promised_pickup_time,  # cant go back on a promise
+            latest_dropoff_time=request.latest_dropoff_time,
             promised_pickup_time=promised_pickup_time,  # we need this info later
         )
 

@@ -652,14 +652,14 @@ class PermutationRTVGraphBuilder(IRTVGraphBuilder):
                     r.id,
                     r.origin_node,
                     r.request_time,
-                    r.request_time + OMEGA,
+                    r.latest_pickup_time,
                     "pickup",
                 ),
                 Stop(
                     r.id,
                     r.destination_node,
                     r.request_time,
-                    r.earliest_dropoff_time + DELTA,
+                    r.latest_dropoff_time,
                     "dropoff",
                 ),
             ]
@@ -722,14 +722,14 @@ class PermutationRTVGraphBuilder(IRTVGraphBuilder):
                         new_req.id,
                         new_req.origin_node,
                         new_req.request_time,
-                        new_req.request_time + OMEGA,
+                        new_req.latest_pickup_time,
                         "pickup",
                     )
                     d_stop = Stop(
                         new_req.id,
                         new_req.destination_node,
                         new_req.request_time,
-                        new_req.earliest_dropoff_time + DELTA,
+                        new_req.latest_dropoff_time,
                         "dropoff",
                     )
 
@@ -834,7 +834,7 @@ class PermutationRTVGraphBuilder(IRTVGraphBuilder):
                         p.original_request.id,
                         p.original_request.destination_node,
                         veh.available_from_time,
-                        p.original_request.earliest_dropoff_time + DELTA,
+                        p.original_request.latest_dropoff_time,
                         "vehicle_drop",
                     )
                 )
@@ -861,9 +861,6 @@ class PermutationRTVGraphBuilder(IRTVGraphBuilder):
 
                         # Reconstruct the merged sequence
                         merged_stops = []
-
-                        # Pointer to the trip permutation
-                        t_ptr = 0
 
                         # Pointer to the vehicle stops
                         v_ptr = 0
