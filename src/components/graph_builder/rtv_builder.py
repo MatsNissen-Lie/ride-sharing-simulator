@@ -1,6 +1,5 @@
 from config.config import MAX_REQUESTS_ABOVE_CAPACITY
 from old_code.rv_graph_builder import RVGraph
-from src.components.search_algorithm.dfs_bnb import TripSolver
 from src.interfaces import FeasibleRoute
 from collections import defaultdict
 from typing import Set, Dict, cast
@@ -104,13 +103,15 @@ class RTVGraphBuilder(IRTVGraphBuilder):
         Implements Algorithm 1 using Clique Expansion + Lexicographic Ordering.
         We only iterate over the intersection of neighbors in the RV-graph.
         """
+        from src.components.search_algorithm.dfs_bnb import TripSolver as Original_BnB
+
         from src.components.search_algorithm.dfs_bnb_memo import (
             TripSolver as AStarDFSSolver,
         )
         from src.components.search_algorithm.bfs_astar import TripSolver as BFSSolver
 
-        TripSolverClass = TripSolver
         TripSolverClass = AStarDFSSolver
+        TripSolverClass = Original_BnB
         TripSolverClass = BFSSolver
 
         m = len(v_avail.passengers_onboard)

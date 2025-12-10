@@ -121,7 +121,6 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
             valid_vehs = set()
 
             req_objs = [req_map[r] for r in candidate_trip]
-            memo = {}
             for vid in common_vehs:
                 vehicle: VehicleAvailability = veh_map.get(vid)  # type: ignore
 
@@ -205,13 +204,6 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
                     valid_vehs = set()
 
                     req_objs = [req_map[r] for r in candidate_trip_list]
-
-                    joined_memo = global_trips.get(
-                        frozenset(trip_a)
-                    ).memo.copy()  # type: ignore
-                    joined_memo.update(
-                        global_trips.get(frozenset(trip_b)).memo  # type: ignore
-                    )  # type: ignore
 
                     for vid in candidate_vehs:
                         vehicle: VehicleAvailability = veh_map.get(vid)  # type: ignore

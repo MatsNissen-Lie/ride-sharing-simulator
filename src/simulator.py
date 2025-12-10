@@ -68,7 +68,7 @@ class Simulator:
         batch_count = 0
         seen_requests = set()
         served_requests = set()
-        self.mega_pool = []
+        self.mega_pool: list[Request] = []
 
         try:
             for batch in self.controller.iter_batches(
@@ -113,7 +113,9 @@ class Simulator:
                         new_req_time = t_now - BATCH_DURATION + offset
 
                         # Recalculate dropoff based on original duration
-                        original_duration = req.earliest_dropoff_time - req.request_time
+                        original_duration = (
+                            req.latest_dropoff_time - DELTA - req.request_time
+                        )
 
                         new_req = Request(
                             id=req.id,
