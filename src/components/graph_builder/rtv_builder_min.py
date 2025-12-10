@@ -60,13 +60,13 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
 
         from src.components.search_algorithm.bfs_memo import TripSolver as MBFS
         from src.components.search_algorithm.bfs_memo_positive import (
-            TripSolverCached as TSC,
+            TripSolverCached as MemoOptimal,
         )
         from src.components.search_algorithm.bfs_astar import TripSolver as BFSSolver
 
         TripSolverclass = MBFS
-        TripSolverclass = TSC
         TripSolverclass = BFSSolver
+        TripSolverclass = MemoOptimal
 
         trip_solver = TripSolverclass()
         # --- 1. SETUP ---
