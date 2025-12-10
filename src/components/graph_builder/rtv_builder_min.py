@@ -58,11 +58,11 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
         Trip-Centric RTV Construction using the "Old Code" Solver Baseline.
         """
 
-        from src.components.graph_builder.trip_graph_bfs_memo import TripSolver as MBFS
-        from src.components.graph_builder.trip_graph_path_cache import (
+        from src.components.search_algorithm.bfs_memo import TripSolver as MBFS
+        from src.components.search_algorithm.bfs_memo_positive import (
             TripSolverCached as TSC,
         )
-        from src.components.graph_builder.trip_graph_bfs import TripSolver as BFSSolver
+        from src.components.search_algorithm.bfs_astar import TripSolver as BFSSolver
 
         TripSolverclass = MBFS
         TripSolverclass = TSC

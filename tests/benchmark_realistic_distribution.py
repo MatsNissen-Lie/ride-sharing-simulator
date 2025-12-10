@@ -5,11 +5,11 @@ import random
 from typing import List, Dict
 import os
 
-from src.components.graph_builder.trip_graph_bfs import TripSolver as BFSSolver
-from src.components.graph_builder.trip_graph_bfs_memo import TripSolver as MemoSolver
-from src.components.graph_builder.trip_graph_bfs_memo import _UNIVERSAL_CACHE
+from src.components.search_algorithm.bfs_astar import TripSolver as BFSSolver
+from src.components.search_algorithm.bfs_memo import TripSolver as MemoSolver
+from src.components.search_algorithm.bfs_memo import _UNIVERSAL_CACHE
 from src.interfaces import VehicleAvailability, Request, Passenger
-from config.config import DELTA
+from config.config import DELTA, OMEGA
 
 
 def generate_coherent_batch(
@@ -38,15 +38,16 @@ def generate_coherent_batch(
             dest = np.random.choice(candidates)
 
         dist = time_matrix[origin, dest]
-        hard_limit = dist + 600
-        earliest_dropoff = hard_limit - DELTA
+        hard_limit = float(dist) + DELTA
 
         req = Request(
             id=f"Req_{r_idx}",
             origin_node=origin,
             destination_node=dest,
             request_time=0.0,
-            earliest_dropoff_time=earliest_dropoff,  # type: ignore
+            latest_dropoff_time=hard_limit,
+            latest_pickup_time=OMEGA,
+            # earliest_dropoff_time=earliest_dropoff,
             # latest_dropoff_time=earliest_dropoff + DELTA,
         )
         requests.append(req)
@@ -68,13 +69,14 @@ def generate_vehicles(
                 dest_node = np.random.randint(0, n_nodes)
 
             dist = time_matrix[start_node, dest_node]
-            earliest_dropoff = dist + 300
+
             req = Request(
                 id=f"Onboard_{v_idx}_{p_idx}",
                 origin_node=start_node,
                 destination_node=dest_node,
                 request_time=0.0,
-                earliest_dropoff_time=earliest_dropoff,
+                latest_dropoff_time=dist + DELTA,
+                latest_pickup_time=0.0 + OMEGA,
             )
 
             p = Passenger(original_request=req, pickup_time=0.0)
