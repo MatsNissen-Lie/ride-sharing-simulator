@@ -132,6 +132,8 @@ class TripSolver:
                         return INF
                     if arr > r_time:
                         h += arr - r_time
+                    else:
+                        raise NotImplementedError("Should not happen")
 
             # 2. Waiting
             for (
@@ -152,12 +154,16 @@ class TripSolver:
                         return INF
                     if arr_dp > r_time:
                         h += arr_dp - r_time
+                    else:
+                        raise NotImplementedError("Should not happen")
                 elif not ((mask >> dp_i) & 1):
                     arr = c_time + time_matrix[u_idx, dest]
                     if arr > dp_lim:
                         return INF
                     if arr > r_time:
                         h += arr - r_time
+                    else:
+                        raise NotImplementedError("Should not happen")
             return h
 
         h_start = calc_heuristic(v_node, v_start, 0)
