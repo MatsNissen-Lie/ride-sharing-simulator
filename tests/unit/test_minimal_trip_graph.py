@@ -93,6 +93,7 @@ class TestMinimalTripGraph(unittest.TestCase):
         res = graph.solve(vehicle_start_time=0, capacity=4, current_load=3)
 
         self.assertIsNotNone(res)
+        assert res is not None
         # Check path: V->A->X->B
         path_ids = [s.request_id for s in res.route.stops]  # Use request_id from DMStop
         self.assertEqual(path_ids, ["A", "X", "B"])
@@ -159,6 +160,7 @@ class TestMinimalTripGraph(unittest.TestCase):
         # Solving should populate cache for ("A", {B}) and ("B", {A}) etc.
         # Path V->A->B (Cost 10+2=12).
         res = graph.solve(0, 4, 0)
+        assert res is not None
         self.assertEqual(res.cost, 12.0)
 
         # Identify "A", {B} key
@@ -171,6 +173,7 @@ class TestMinimalTripGraph(unittest.TestCase):
         entry = graph.suffix_cache[key]
         self.assertIsNotNone(entry.best_sol)
         sol = entry.best_sol
+        assert sol is not None
 
         # B is best next.
         # Cost B->End (Empty) is 0. Distance A->B is 2. Total 2.

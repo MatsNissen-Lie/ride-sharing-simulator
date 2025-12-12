@@ -154,6 +154,7 @@ class TestPermutations(unittest.TestCase):
         # 1. Base case: A
         topo_a = validate_sequence([stop_a_p, stop_a_d], self.network)
         self.assertIsNotNone(topo_a)
+        assert topo_a is not None
         
         # 2. Insert B
         results = extend_permutations([topo_a], [stop_b_p, stop_b_d], self.network)

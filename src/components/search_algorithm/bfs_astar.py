@@ -190,11 +190,34 @@ class TripSolver:
                     route=Route(tuple(final_stops), g, 0.0, 0.0), cost=g
                 )
 
-            # Pruning with Closed Set
             state_key = (u_idx, mask)
-            if state_key in closed and closed[state_key] <= c_time:
-                continue
-            closed[state_key] = c_time
+
+            # if state_key in closed and closed[state_key] <= c_time:
+            #     continue
+            # closed[state_key] = c_time
+
+            # --- RESTORED & REFINED PRUNING ---
+            state_key = (u_idx, mask)
+
+            if state_key in closed:
+                # Retrieve the best previous state for this node/mask combo
+                prev_g, prev_time = closed[state_key]
+
+                # If the previous path to get here was "better" in every way:
+                # 1. It cost less (or equal)
+                # 2. AND it arrived earlier (or same time)
+                # Then the current path is strictly worse. Discard it.
+                if prev_g <= g and prev_time <= c_time:
+                    continue
+
+                # If the current path is NOT strictly dominated (e.g. it's slower but cheaper),
+                # we keep it alive. We also update the closed set to reflect this new frontier.
+                # (Ideally, we store a list of Pareto-optimal states, but simply updating
+                # if we are strictly better is usually sufficient for VRP speeds).
+                if g < prev_g and c_time < prev_time:
+                    closed[state_key] = (g, c_time)
+            else:
+                closed[state_key] = (g, c_time)
 
             # Expand
             # Iterate over all possible next stops v

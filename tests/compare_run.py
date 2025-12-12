@@ -19,7 +19,7 @@ from src.components.network_service import NetworkXService
 from src.components.simulation_data_provider import SimulationDataProvider
 from src.components.graph_builder.rv_builder import RVGraphBuilder
 from src.database.simple_db import DuckDBPathCache
-from config.config import MAX_REQUESTS, BATCH_DURATION, MIN_START_TIME, NUMBER_OF_VEHICLES
+from config.config import BATCH_DURATION, MIN_START_TIME, NUMBER_OF_VEHICLES, OMEGA, DELTA
 
 # Setup logging
 logging.basicConfig(level=logging.ERROR)
@@ -74,7 +74,8 @@ def run_comparison():
             origin_node=meta.origin_node,
             destination_node=meta.destination_node,
             request_time=meta.request_time,
-            earliest_dropoff_time=meta.request_time + tt
+            latest_pickup_time=meta.request_time + OMEGA,
+            latest_dropoff_time=meta.request_time + tt + DELTA
         )
         all_requests.append(req)
         count += 1
@@ -112,7 +113,7 @@ def run_comparison():
     # 4. Run OLD Builder
     print("\nRunning OLD Builder...")
     t0 = time.time()
-    rtv_old = old_builder.build_graph(rv_graph, vehicle_pool, set(all_requests), max_trip_size=4)
+    rtv_old = old_builder.build_graph(rv_graph, vehicle_pool, set(all_requests))
     print(f"Old Time: {time.time() - t0:.4f}s")
     stats_old, trips_old = rtv_old.get_trip_stats()
     print(f"Old Stats: {stats_old}")
@@ -120,7 +121,7 @@ def run_comparison():
     # 5. Run NEW Builder
     print("\nRunning NEW Builder...")
     t0 = time.time()
-    rtv_new = new_builder.build_graph(rv_graph, vehicle_pool, set(all_requests), max_trip_size=4)
+    rtv_new = new_builder.build_graph(rv_graph, vehicle_pool, set(all_requests))
     print(f"New Time: {time.time() - t0:.4f}s")
     stats_new, trips_new = rtv_new.get_trip_stats()
     print(f"New Stats: {stats_new}")
