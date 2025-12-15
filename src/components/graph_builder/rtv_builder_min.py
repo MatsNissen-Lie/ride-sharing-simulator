@@ -63,12 +63,16 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
             TripSolverCached as MemoOptimal,
         )
         from src.components.search_algorithm.bfs_astar import TripSolver as BFSSolver
+        from src.components.search_algorithm.bfs_astar_real import (
+            TripSolver as BfsReal,
+        )
 
-        TripSolverclass = MBFS
-        TripSolverclass = BFSSolver
-        TripSolverclass = MemoOptimal
+        TripSolverClass = MBFS
+        TripSolverClass = MemoOptimal
+        TripSolverClass = BFSSolver
+        TripSolverClass = BfsReal
 
-        trip_solver = TripSolverclass()
+        trip_solver = TripSolverClass()
         # --- 1. SETUP ---
         rtv_graph = RTVGraph()
 
@@ -112,11 +116,8 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
             if not common_vehs:
                 continue
 
-            if rr1 < rr2:
-                r1, r2 = rr1, rr2
-            else:
-                r1, r2 = rr2, rr1
-            candidate_trip = frozenset((r1, r2))
+            sorted_reqs = sorted([rr1, rr2])
+            candidate_trip = frozenset(sorted_reqs)
 
             valid_vehs = set()
 
@@ -150,7 +151,7 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
             # We iterate over existing valid trips and try to extend them
             # Optimization: Use a sorted list of trips to avoid duplicate pairs {A,B} vs {B,A}
 
-            prev_trips_list = sorted([list(t) for t in T_by_size[k - 1]])
+            prev_trips_list = sorted([sorted(list(t)) for t in T_by_size[k - 1]])
             n = len(prev_trips_list)
 
             for i in range(n):
@@ -159,21 +160,33 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
                 for j in range(i + 1, n):
                     trip_b = prev_trips_list[j]
 
-                    # OPTIMIZATION: Ensure they share k-2 requests (Apriori)
+                    # OPTIMIZATION:
+                    # Two trips of size k-1 are candidates to merge ONLY if
+                    # their first k-2 elements are identical.
+                    # Since the list is sorted, if the prefix doesn't match,
+                    # we can break the inner loop immediately (for this block).
+
+                    # Check prefix (all elements except the last one)
                     if trip_a[:-1] != trip_b[:-1]:
                         break
 
                     # Create candidate trip by merging
-                    new_req_id = trip_b[-1]
-                    candidate_trip_list = trip_a + [new_req_id]
+
+                    # Create the candidate trip of size k
+                    # (trip_b[-1] is guaranteed to be > trip_a[-1] because of sorting)
+                    candidate_trip_list = trip_a + [trip_b[-1]]
                     candidate_trip = frozenset(candidate_trip_list)
 
                     # Determine common vehicles that served both trips
-                    gt_a = global_trips.get(frozenset(trip_a)).candidate_vehicle_ids  # type: ignore
-                    gt_b = global_trips.get(frozenset(trip_b)).candidate_vehicle_ids  # type: ignore
-                    candidate_vehs = set(gt_a.intersection(gt_b))
+
+                    candidate_vehs = global_trips.get(frozenset(trip_a)).candidate_vehicle_ids  # type: ignore
                     if not candidate_vehs:
                         continue
+                    # gt_a = global_trips.get(frozenset(trip_a)).candidate_vehicle_ids  # type: ignore
+                    # gt_b = global_trips.get(frozenset(trip_b)).candidate_vehicle_ids  # type: ignore
+                    # candidate_vehs = set(gt_a.intersection(gt_b))
+                    # if not candidate_vehs:
+                    #     continue
 
                     # Sub-trip check
                     is_structure_valid = True
@@ -198,6 +211,7 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
                         if not candidate_vehs:
                             is_structure_valid = False
                             break
+
                     if not is_structure_valid:
                         continue
 
@@ -211,7 +225,8 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
                         available_seats = vehicle.capacity - len(
                             vehicle.passengers_onboard
                         )
-                        this_limit_k = max(available_seats, MAX_REQUESTS_ABOVE_CAPACITY)
+                        this_limit_k = available_seats + MAX_REQUESTS_ABOVE_CAPACITY
+
                         if len(candidate_trip) > this_limit_k:
                             continue
 

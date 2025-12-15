@@ -112,19 +112,23 @@ class RTVGraphBuilder(IRTVGraphBuilder):
         from src.components.search_algorithm.bfs_astar_monotonic import (
             TripSolver as BfsMono,
         )
-        from src.components.search_algorithm.bfs_astar_gradient import (
+        from src.components.search_algorithm.bfs_astar_gradient_bad import (
             TripSolver as BfsGradient,
+        )
+        from src.components.search_algorithm.bfs_astar_real import (
+            TripSolver as BfsReal,
         )
 
         TripSolverClass = AStarDFSSolver
         TripSolverClass = Original_BnB
         TripSolverClass = BfsMono
-        TripSolverClass = BFSSolver
         TripSolverClass = BfsGradient
+        TripSolverClass = BFSSolver
+        TripSolverClass = BfsReal
 
         m = len(v_avail.passengers_onboard)
         available_seats = v_avail.capacity - m
-        limit_k = max(available_seats, MAX_REQUESTS_ABOVE_CAPACITY)
+        limit_k = available_seats + MAX_REQUESTS_ABOVE_CAPACITY
 
         if limit_k <= 0:
             return

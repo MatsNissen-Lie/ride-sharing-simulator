@@ -123,19 +123,28 @@ class TripSolver:
 
         # Let's define the heuristic function to reuse
         def calc_heuristic(u_idx, c_time, mask):
-            h = 0.0
-            # 1. Onboard
+            # h(s) = |R_unserved| * t_now + sum(MinRemainingTime(r)) - sum(t_req^r)
+
+            unserved_count = 0
+            sum_min_remaining = 0.0
+            sum_req_times = 0.0
+
+            # 1. Onboard Passengers (only dropoff needed)
             for i, dest_idx, r_time, limit in onboard_data:
                 if not ((mask >> i) & 1):
-                    arr = c_time + time_matrix[u_idx, dest_idx]
-                    if arr > limit:
-                        return INF
-                    if arr > r_time:
-                        h += arr - r_time
-                    else:
-                        raise NotImplementedError("Should not happen")
+                    # Unserved
+                    dist = time_matrix[u_idx, dest_idx]
+                    arrival_est = c_time + dist
 
-            # 2. Waiting
+                    # Pruning check
+                    if arrival_est > limit:
+                        return INF
+
+                    unserved_count += 1
+                    sum_min_remaining += dist
+                    sum_req_times += r_time
+
+            # 2. Waiting Requests (pickup and dropoff needed)
             for (
                 pk_i,
                 dp_i,
@@ -146,24 +155,40 @@ class TripSolver:
                 pk_lim,
                 dp_lim,
             ) in waiting_data:
+                # Check if served (dropoff visited)
+                if (mask >> dp_i) & 1:
+                    continue
+
+                # Not served (fully)
+                unserved_count += 1
+                sum_req_times += r_time
+
                 if not ((mask >> pk_i) & 1):
-                    dist_u_origin = time_matrix[u_idx, origin]
-                    arr_pk = c_time + dist_u_origin
+                    # Not picked up yet: Current -> Pickup -> Drop
+                    dist_u_pk = time_matrix[u_idx, origin]
+                    # MinRemaining = dist(u, pk) + dist(pk, dp)
+                    # Note: static = dist(pk, dp)
+
+                    # Pruning checks
+                    arr_pk = c_time + dist_u_pk
                     arr_dp = arr_pk + static
                     if arr_pk > pk_lim or arr_dp > dp_lim:
                         return INF
-                    if arr_dp > r_time:
-                        h += arr_dp - r_time
-                    else:
-                        raise NotImplementedError("Should not happen")
-                elif not ((mask >> dp_i) & 1):
-                    arr = c_time + time_matrix[u_idx, dest]
-                    if arr > dp_lim:
+
+                    sum_min_remaining += dist_u_pk + static
+
+                else:
+                    # Picked up, not dropped: Current -> Drop
+                    dist_u_dp = time_matrix[u_idx, dest]
+
+                    # Pruning checks
+                    arr_dp = c_time + dist_u_dp
+                    if arr_dp > dp_lim:
                         return INF
-                    if arr > r_time:
-                        h += arr - r_time
-                    else:
-                        raise NotImplementedError("Should not happen")
+
+                    sum_min_remaining += dist_u_dp
+
+            h = (unserved_count * c_time) + sum_min_remaining - sum_req_times
             return h
 
         h_start = calc_heuristic(v_node, v_start, 0)
@@ -202,7 +227,7 @@ class TripSolver:
             #     continue
             # closed[state_key] = c_time
 
-            # --- RESTORED & REFINED PRUNING ---
+            # # --- RESTORED & REFINED PRUNING ---
             state_key = (u_idx, mask)
 
             if state_key in closed:
