@@ -34,6 +34,9 @@ MEGA_BATCH_MODE = True
 MEGA_BATCH_MODE = False
 MEGA_BATCH_SIZE = 250
 
+# WARMUP
+WARMUP_DURATION = 15 * 60  # 15 minutes
+
 __all__ = [
     "OMEGA",
     "DELTA",
@@ -42,4 +45,5 @@ __all__ = [
     "MAX_BATCHES",
     "MEGA_BATCH_MODE",
     "MEGA_BATCH_SIZE",
+    "WARMUP_DURATION",
 ]

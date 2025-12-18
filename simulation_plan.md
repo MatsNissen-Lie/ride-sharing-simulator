@@ -1,8 +1,8 @@
-# Section 5: Computational Study - Simulation Plan
+# Simulation Plan: Data & Plot Generation for Computational Study
 
-Based on the context established in your **Introduction** and **Solution Method**, the **Computational Study** (Section 5) needs to validate your baseline model and answer the first part of your research question: *"How can a baseline model for centralized ride-sharing be established using real-world data?"*.
+**Goal:** Generate the specific plots, tables, and numerical results required for Section 5 (Computational Study) of the report. This document outlines the data extraction and visualization tasks needed to validate the baseline model.
 
-It must demonstrate that your implementation of the Alonso-Mora framework (RV/RTV graphs + ILP) works on the Manhattan road network and establishes the "status quo" you promised in the contributions.
+The following outputs are required to demonstrate the Alonso-Mora framework's performance on the Manhattan road network.
 
 Here is a recommended structure and content outline for Section 5:
 

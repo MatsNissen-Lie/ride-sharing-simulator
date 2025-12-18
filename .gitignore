@@ -19,3 +19,5 @@ rich_riders/
 
 *.duckdb
 *.duckdb*
+
+Sections/

@@ -1,7 +1,7 @@
 import itertools
 
 from config import BATCH_DURATION, get_logger, NUMBER_OF_VEHICLES
-from config.config import MIN_START_TIME
+from config.config import MIN_START_TIME, WARMUP_DURATION
 from src.components.batch_controller import BatchController
 from src.components.graph_builder.rtv_builder import RTVGraphBuilder
 from src.components.graph_builder.rv_builder import RVGraphBuilder
@@ -78,6 +78,7 @@ def main():
         request_iterator=req_iter,
         batch_duration=BATCH_DURATION,
         min_start_time=min_start_time,
+        warmup_duration=WARMUP_DURATION,
     )
 
 

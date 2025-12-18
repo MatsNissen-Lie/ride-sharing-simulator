@@ -85,3 +85,34 @@ class SimulationStatsLogger:
                 logger.warning(f"Could not calculate stats for {key}")
 
         logger.info("=" * 60)
+
+    def export_to_csv(self, filepath: str) -> None:
+        """
+        Exports the collected metrics to a CSV file.
+        Each row represents a batch.
+        """
+        import csv
+        import os
+
+        if not self._metrics:
+            logger.warning("No metrics to export.")
+            return
+
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+
+        fieldnames = sorted(self._metrics.keys())
+        num_batches = len(self._metrics[fieldnames[0]])
+
+        try:
+            with open(filepath, mode="w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+
+                for i in range(num_batches):
+                    row = {key: self._metrics[key][i] for key in fieldnames}
+                    writer.writerow(row)
+            
+            logger.info(f"Statistics exported to {filepath}")
+        except Exception as e:
+            logger.error(f"Failed to export statistics: {e}")
