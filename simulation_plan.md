@@ -54,38 +54,3 @@ To fully address the "status quo" contribution, briefly show how the model react
 
 * **Varying $\Omega$ and $\Delta$:** What happens if you allow passengers to wait longer? (Usually, service rate goes up, and occupancy goes up).
 
----
-
-### Suggested Content for Subsection 5.1 (Drafting Start)
-
-**5.1 Data Description and Experimental Setup**
-To validate the proposed solution method, we utilize a historical dataset of taxi trips from New York City. As outlined in the objectives, Manhattan serves as the topological testbed due to its high density and grid-like road network.
-
-**5.1.1 Road Network and Demand Data**
-The simulation environment is built upon a directed graph representation of the Manhattan road network extracted from OpenStreetMap (OSM).
-
-* **Nodes:** [Insert Number] (representing intersections).
-* **Edges:** [Insert Number] (representing road segments).
-Travel times are static and calculated based on free-flow speed limits, consistent with the foundational work by \textcite{alonsomora2017pnas}.
-
-Demand is derived from the NYC Taxi & Limousine Commission (TLC) trip records. We selected [Date/Time Range] to represent a high-demand scenario. Raw GPS coordinates were mapped to the nearest graph nodes.
-
-**5.1.2 Simulation Configuration**
-The baseline model is executed with the following parameters, chosen to reflect standard urban mobility constraints:
-\begin{table}[h]
-\centering
-\begin{tabular}{l|l}
-\textbf{Parameter} & \textbf{Value} \\ \hline
-Batch Duration ($\tau$) & 30 seconds \\
-Vehicle Capacity ($C_{max}$) & 4 passengers \\
-Max Wait Time ($\Omega$) & [e.g., 5 minutes] \\
-Max Detour Factor ($\Delta$) & [e.g., 1.5x direct trip] \\
-Fleet Size ($|V|$) & Varied [e.g., 100 - 3000] \\
-\end{tabular}
-\caption{Baseline Simulation Parameters}
-\label{tab:sim_params}
-\end{table}
-
----
-
-**Would you like me to generate the LaTeX code for the "Performance Metrics" section next, defining the equations for Service Rate and Average Delay?**

@@ -1,5 +1,5 @@
 import itertools
-
+import config.config as config  # Import config module for metadata saving
 from config import BATCH_DURATION, get_logger, NUMBER_OF_VEHICLES
 from config.config import MIN_START_TIME, WARMUP_DURATION
 from src.components.batch_controller import BatchController
@@ -12,6 +12,7 @@ from src.components.simulation_data_provider import SimulationDataProvider
 from src.components.assignment_solver import GurobiAssignmentSolver
 from src.database.simple_db import DuckDBPathCache
 from src.simulator import Simulator
+from src.utils.output_manager import SimulationOutputManager
 
 logger = get_logger(__name__)
 
@@ -30,6 +31,10 @@ def main():
     )
     args = parser.parse_args()
 
+    # --- 0. Output Management ---
+    output_manager = SimulationOutputManager(base_dir="reports", run_name="sim_standard")
+    output_manager.save_metadata(config)
+    
     logger.info("🚀 Simulation starting...")
     if args.read_only:
         logger.info("🔒 Running in READ-ONLY mode.")
@@ -79,7 +84,18 @@ def main():
         batch_duration=BATCH_DURATION,
         min_start_time=min_start_time,
         warmup_duration=WARMUP_DURATION,
+        output_dir=output_manager.get_run_dir(),
     )
+    
+    # --- 5. Generate Plots ---
+    logger.info("📊 Generating plots...")
+    from src.utils.generate_plots import generate_plots
+    import os
+    csv_path = os.path.join(output_manager.get_run_dir(), "simulation_stats.csv")
+    if os.path.exists(csv_path):
+        generate_plots(csv_path)
+    else:
+        logger.warning("No stats CSV found, skipping plot generation.")
 
 
 if __name__ == "__main__":
