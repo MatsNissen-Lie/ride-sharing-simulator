@@ -127,6 +127,8 @@ def plot_rtv_graph_on_manhattan(
     edges: list[EdgeRecord] = []
 
     cmap = plt.get_cmap("tab20")
+    # Exclude indices 14 (gray) and 15 (light gray) to ensure visibility on the map
+    safe_colors = [cmap(i) for i in range(20) if i not in (14, 15)]
     trips = list(rtv_graph.trip_to_vehicles.keys())
 
     pair_idx = 0  # color index for (trip, vehicle) pairs
@@ -162,7 +164,7 @@ def plot_rtv_graph_on_manhattan(
             if first_req_id is None:
                 continue
 
-            color = cmap(pair_idx % cmap.N)
+            color = safe_colors[pair_idx % len(safe_colors)]
             pair_idx += 1
 
             # ---- R-R edges for this (trip, v) pair ----
