@@ -240,29 +240,7 @@ class Simulator:
                         for req_id in assignment.trip_id:
                             served_requests.add(req_id)
                             
-                        # Calculate Wait Time by walking the route
-                        # 1. Find the vehicle (it is in vehicle_avail_pool)
-                        v_avail = next((v for v in vehicle_avail_pool if v.vehicle_id == assignment.vehicle_id), None)
-                        
-                        if v_avail and assignment.route:
-                            current_time = v_avail.available_from_time
-                            current_node = v_avail.available_at_node
-                            
-                            for stop in assignment.route.stops:
-                                # Travel time
-                                travel_time = self.network_service.get_travel_time(current_node, stop.node)
-                                current_time += travel_time
-                                current_node = stop.node
-                                
-                                if stop.is_pickup:
-                                    # Find request
-                                    # Since we don't have direct access to request object from ID easily without iteration, 
-                                    # we rely on 'all_requests_in_pool'.
-                                    # Note: this might be slow if pool is huge, but it's fine for now.
-                                    req = next((r for r in all_requests_in_pool if r.id == stop.request_id), None)
-                                    if req:
-                                        wait_time = current_time - req.request_time
-                                        wait_times.append(wait_time)
+
 
 
                 # 6. Commit Assignment (Controller Step 2)
@@ -315,6 +293,18 @@ class Simulator:
                 loop_duration = loop_end_time - start_loop_time
                 logger.info("Batch completed in %.4f seconds.", loop_duration)
 
+                # --- Capture Realized Stats ---
+                delivered_stats = self.controller.consume_delivered_stats()
+                
+                realized_delays = [s["total_delay"] for s in delivered_stats]
+                pickup_waits = [s["wait_time"] for s in delivered_stats]
+                
+                avg_realized_delay = sum(realized_delays) / len(realized_delays) if realized_delays else 0.0
+                avg_pickup_wait = sum(pickup_waits) / len(pickup_waits) if pickup_waits else 0.0
+                
+                if delivered_stats:
+                    logger.info(f"📦 Delivered {len(delivered_stats)} passengers. Avg Delay: {avg_realized_delay:.2f}s, Avg Wait: {avg_pickup_wait:.2f}s")
+                
                 # --- LOG STATS ---
                 is_warmup = t_now < (min_start_time + warmup_duration)
                 
@@ -326,7 +316,13 @@ class Simulator:
                     "newly_served_count": newly_served_count,
                     "active_vehicles_count": active_vehicles_count,
                     "idle_vehicles_count": idle_vehicles_count,
-                    "average_wait_time": sum(wait_times) / len(wait_times) if wait_times else 0.0,
+                    "average_delay": float(total_delay / newly_served_count) if newly_served_count > 0 else 0.0,
+                    
+                    # --- Realized Stats (Ex-Post) ---
+                    "realized_avg_delay": avg_realized_delay,
+                    "realized_avg_wait_time": avg_pickup_wait,
+                    "delivered_count": len(delivered_stats),
+
                     "rv_build_time": rv_duration,
                     "rv_edges_count": len(rv_graph.rv_details),
                     "rtv_build_time": rtv_duration,
@@ -334,8 +330,8 @@ class Simulator:
                     "assignment_time": assignment_duration,
                     "rebalancing_time": rebalancing_duration,
                     "total_batch_time": loop_duration,
-                    "objective_value": assignment_result.total_cost,
-                    "total_delay": total_delay,
+                    "objective_value": float(assignment_result.total_cost),
+                    "total_delay": float(total_delay),
                 }
 
                 # Add breakdown by size

@@ -30,16 +30,25 @@ def generate_plots(csv_path):
     plt.close()
     print("Generated runtime_breakdown.png")
 
-    # 2. Wait Time Over Time
+    # 2. Average Delay Over Time (Previously Wait Time)
     plt.figure(figsize=(10, 6))
-    plt.plot(df['sim_time'], df['average_wait_time'], marker='o', label='Avg Wait Time')
+    if 'average_delay' in df.columns:
+        plt.plot(df['sim_time'], df['average_delay'], marker='o', label='Avg Delay')
+        plt.title('Average Delay per Batch (Cost)')
+        plt.ylabel('Delay (Cost)')
+    else:
+        # Fallback for old CSVs
+        plt.plot(df['sim_time'], df['average_wait_time'], marker='o', label='Avg Wait Time')
+        plt.title('Average Wait Time per Batch')
+        plt.ylabel('Wait Time (s)')
+        
     plt.xlabel('Simulation Time (s)')
-    plt.ylabel('Wait Time (s)')
-    plt.title('Average Wait Time per Batch')
     plt.grid(True)
-    plt.savefig(os.path.join(output_dir, 'wait_time_over_time.png'))
+    plt.savefig(os.path.join(output_dir, 'wait_time_over_time.png')) # Keeping same filename for compatibility or change? 
+    # Let's change filename to be correct
+    plt.savefig(os.path.join(output_dir, 'average_delay_over_time.png'))
     plt.close()
-    print("Generated wait_time_over_time.png")
+    print("Generated average_delay_over_time.png")
 
     # 3. Fleet Utilization
     plt.figure(figsize=(10, 6))

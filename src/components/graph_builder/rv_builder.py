@@ -31,6 +31,7 @@ from config import get_logger
 from config.config import DELTA, OMEGA
 
 
+from src.components.search_algorithm.bfs_astar_real import TripSolver as AstarTripSolver
 from src.interfaces import (
     ISingleVehicleRoutePlanner,
     VehicleAvailability,
@@ -64,6 +65,8 @@ class RVGraphBuilder(IRVGraphBuilder):
     ) -> None:
         super().__init__(route_planner)
         self._network = network
+        self._route_planner = None  # this is not used in RVGraphBuilder anymore
+        self._route_solver = AstarTripSolver
 
     def build_graph(
         self, requests: set[Request], vehicles: set[VehicleAvailability]
@@ -362,8 +365,8 @@ class RVGraphBuilder(IRVGraphBuilder):
         count = len(occupied_tasks)
 
         # --- PATH A: SEQUENTIAL (Low Volume) ---
-        # 1000 is a safe crossover point where overhead usually breaks even
-        if count < 1000:
+        # 2000 is a safe crossover point where overhead usually breaks even
+        if count < 2000:
             logger.info(f"RV Occupied: Processing {count} tasks sequentially.")
 
             # 1. Calculation Phase (Pure, Parallelizable logic if needed)
@@ -372,7 +375,11 @@ class RVGraphBuilder(IRVGraphBuilder):
                 (
                     task.req.id,
                     task.vehicle.vehicle_id,
-                    self._route_planner.check_feasibility({task.req}, task.vehicle),
+                    self._route_solver.solve(
+                        requests=[task.req],
+                        vehicle=task.vehicle,
+                        time_matrix=self._network.get_l1_cache(),
+                    ),
                 )
                 for task in occupied_tasks
             ]
@@ -385,7 +392,7 @@ class RVGraphBuilder(IRVGraphBuilder):
             return
 
         # --- PATH B: PARALLEL (High Volume) ---
-        logger.info(f"RV Occupied: Processing {count} tasks in Parallel Pool.")
+        logger.warning(f"RV Occupied: Processing {count} tasks in Parallel Pool.")
         l1_cache_copy = self._network.get_l1_cache()
         chunk_size = 400
 

@@ -19,18 +19,17 @@ MAX_REQUESTS_ABOVE_CAPACITY = 0
 
 
 # simulation settings
-PLOT_RV_GRAPH = True
-PLOT_RTV_GRAPH = True
+PLOT_RV_GRAPH = False
+PLOT_RTV_GRAPH = False
 
-MIN_START_TIME = 3 * 24 * 3600  # after 3 days
 MIN_START_TIME = 0  # after 3 days
-MIN_REQUESTS_TO_PROCESS = 30
+MIN_START_TIME = 3 * 24 * 3600  # after 3 days
+MIN_REQUESTS_TO_PROCESS = 0  # this should be zero for normal runs
 
 
-MAX_BATCHES = 120
+MAX_BATCHES = 300
 
 ##### Otherwise use mega-batching ######
-MEGA_BATCH_MODE = True
 MEGA_BATCH_MODE = False
 MEGA_BATCH_SIZE = 250
 

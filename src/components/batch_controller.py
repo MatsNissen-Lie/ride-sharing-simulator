@@ -29,6 +29,8 @@ class BatchController(IBatchController):
         self._id_to_vehicle: dict[str, Vehicle] = {v.id: v for v in self._fleet}
         # Optimized history: separate lists for bisect
         self._batch_end_times: list[float] = []
+        self._delivered_stats: list[dict] = []
+        self._last_processed_time: float = 0.0
 
     def project_fleet_and_update_requests(
         self, t_now: float
@@ -150,6 +152,45 @@ class BatchController(IBatchController):
                             del self._request_index[stop.request_id]
                     else:
                         target_id = stop.request_id
+
+                        # Find the passenger before removing
+                        passenger = next(
+                            (p for p in onboard if p.original_request.id == target_id),
+                            None,
+                        )
+
+                        # Track stats if this is a new event
+                        if passenger and cur_time > self._last_processed_time:
+                            req = passenger.original_request
+                            wait_time = passenger.pickup_time - req.request_time
+
+                            direct_travel_time = self._network.get_travel_time(
+                                req.origin_node, req.destination_node
+                            )
+                            # Fallback if path not found (though it should be)
+                            if direct_travel_time == float("inf"):
+                                logger.warning(
+                                    f"Could not calc direct travel time for req {req.id}"
+                                )
+                                direct_travel_time = (
+                                    0.0  # Should not happen in connected graph
+                                )
+
+                            total_delay = (
+                                cur_time - req.request_time - direct_travel_time
+                            )
+
+                            self._delivered_stats.append(
+                                {
+                                    "req_id": req.id,
+                                    "vehicle_id": v.id,
+                                    "wait_time": wait_time,
+                                    "total_delay": total_delay,
+                                    "dropoff_time": cur_time,
+                                    "direct_travel_time": direct_travel_time,
+                                }
+                            )
+
                         onboard = {
                             p for p in onboard if p.original_request.id != target_id
                         }
@@ -436,6 +477,9 @@ class BatchController(IBatchController):
             if batch_requests or snapshots:
                 yield t_window_end, batch_requests, snapshots
 
+            # Mark this time as processed to avoid duplicate stats in future replays
+            self._last_processed_time = t_window_end
+
             if (
                 current is None
             ):  #  and not self._request_index and all(v.is_idle for v in self._fleet):
@@ -632,6 +676,12 @@ class BatchController(IBatchController):
                 raise ValueError(
                     f"Request {req.id} has request_time {req.request_time} after batch time {t_now}"
                 )
+
+    def consume_delivered_stats(self) -> list[dict]:
+        """Returns the accumulated delivered stats and clears the buffer."""
+        stats = self._delivered_stats
+        self._delivered_stats = []
+        return stats
 
 
 __all__ = ["BatchController"]
