@@ -15,13 +15,14 @@ from config.config import (
 )
 from config.paths import PLOT_DIR
 from src.components.batch_controller import BatchController
-from src.interfaces.services import (
+from src.interfaces import (
+    VehicleAvailability,
     IAssignmentSolver,
     IRVGraphBuilder,
     IRTVGraphBuilder,
-    IRTVGraphBuilder,
     INetworkService,
     Request,
+    MetaRequest,
 )
 from src.components.simulation_data_provider import SimulationDataProvider
 from src.interfaces.stats import BatchStatistics
@@ -58,13 +59,14 @@ class Simulator:
 
     def run(
         self,
-        request_iterator: Iterator[
-            Any
-        ],  # Using Any for Request type to avoid import overhead if not needed
+        request_iterator: Iterator[MetaRequest],
         batch_duration: int,
         min_start_time: float,
         warmup_duration: float = 0.0,
         output_dir: str | None = None,
+        mega_batch_mode: bool = MEGA_BATCH_MODE,
+        mega_batch_size: int = MEGA_BATCH_SIZE,
+        max_batches: int = MAX_BATCHES,
     ):
         logger.info("🚀 Simulation starting...")
 
@@ -81,25 +83,31 @@ class Simulator:
                 batch_count += 1
                 t_now, all_requests_in_pool, vehicle_avail_pool = batch
 
+                if batch_count > max_batches:
+                    logger.info(
+                        f"🛑 Reached max batches limit ({max_batches}). Stopping simulation."
+                    )
+                    break
+
                 batch_datetime = (
                     self.provider.get_simulation_clock().from_relative_seconds(t_now)
                 )
 
                 if (
                     len(all_requests_in_pool) < MIN_REQUESTS_TO_PROCESS
-                    and not MEGA_BATCH_MODE
+                    and not mega_batch_mode
                 ):
                     continue
 
-                if MEGA_BATCH_MODE:
+                if mega_batch_mode:
                     # Accumulate requests
                     for req in all_requests_in_pool:
                         if req not in self.mega_pool:
                             self.mega_pool.append(req)
 
-                    if len(self.mega_pool) < MEGA_BATCH_SIZE:
+                    if len(self.mega_pool) < mega_batch_size:
                         logger.info(
-                            f"🧬 Accumulating requests... [{len(self.mega_pool)}/{MEGA_BATCH_SIZE}]"
+                            f"🧬 Accumulating requests... [{len(self.mega_pool)}/{mega_batch_size}]"
                         )
                         continue  # Skip processing until we reach the threshold
 
@@ -339,11 +347,6 @@ class Simulator:
                 else:
                     logger.info(f"🔥 Warm-up batch {batch_count}. Stats NOT logged.")
 
-                if batch_count >= MAX_BATCHES:
-                    logger.info(
-                        f"🛑 Reached max batches limit ({MAX_BATCHES}). Stopping simulation."
-                    )
-                    break
 
             logger.info("🏁 Simulation complete.")
 

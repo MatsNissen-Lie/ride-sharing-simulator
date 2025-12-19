@@ -25,11 +25,21 @@ logger = get_logger(__name__)
 class BatchController(IBatchController):
     """Minimal batch controller focusing on MetaRequest conversion."""
 
-    def __init__(self, network: INetworkService, vehicles: Iterable[Vehicle]) -> None:
+    def __init__(
+        self,
+        network: INetworkService,
+        vehicles: Iterable[Vehicle],
+        omega: float = OMEGA,
+        delta: float = DELTA,
+    ) -> None:
         super().__init__(network, vehicles)
         self._id_to_vehicle: dict[str, Vehicle] = {v.id: v for v in self._fleet}
         # Optimized history: separate lists for bisect
         self._batch_end_times: list[float] = []
+
+        # Constraint Parameters
+        self._omega = omega
+        self._delta = delta
 
         # Stats Aggregators
         self._current_stats = ControllerStats()
@@ -393,8 +403,8 @@ class BatchController(IBatchController):
                     origin_node=meta.origin_node,
                     destination_node=meta.destination_node,
                     request_time=meta.request_time,
-                    latest_pickup_time=meta.request_time + OMEGA,
-                    latest_dropoff_time=meta.request_time + travel_time + DELTA,
+                    latest_pickup_time=meta.request_time + self._omega,
+                    latest_dropoff_time=meta.request_time + travel_time + self._delta,
                 )
             )
         return converted
@@ -635,10 +645,10 @@ class BatchController(IBatchController):
         )
 
     def _expire_stale_requests(self, t_now: float) -> None:
-        """Remove all requests that have waited longer than OMEGA."""
+        """Remove all requests that have waited longer than omega."""
         to_remove: list[str] = []
         for req_id, req in self._request_index.items():
-            if t_now - req.request_time > OMEGA:
+            if t_now - req.request_time > self._omega:
                 to_remove.append(req_id)
                 # Capture stats
                 self._current_stats.expired_count += 1
@@ -690,18 +700,6 @@ class BatchController(IBatchController):
         stats = self._current_stats
         self._current_stats = ControllerStats()
         return stats
-
-    # def consume_delivered_stats(self) -> list[dict]:
-    #     """Returns the accumulated delivered stats and clears the buffer."""
-    #     stats = self._delivered_stats
-    #     self._delivered_stats = []
-    #     return stats
-
-    # def consume_expired_stats(self) -> list[dict]:
-    #     """Returns the accumulated expired stats and clears the buffer."""
-    #     stats = self._expired_stats
-    #     self._expired_stats = []
-    #     return stats
 
 
 __all__ = ["BatchController"]

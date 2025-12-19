@@ -37,11 +37,13 @@ class SimulationDataProvider:
         rider_dir: Path = RIDER_DIR,
         rider_pattern: str = RIDER_PATTERN,
         vehicle_count: int = NUMBER_OF_VEHICLES,
+        vehicle_capacity: int = VEHICLE_CAPACITY,
     ) -> None:
         self._graph: nx.MultiDiGraph = load_graph()
         self._rider_dir = rider_dir
         self._rider_pattern = rider_pattern
         self._vehicle_count = vehicle_count
+        self._vehicle_capacity = vehicle_capacity
         self._request_counter = 0
         self._clock: SimulationClock | None = None
 
@@ -129,7 +131,7 @@ class SimulationDataProvider:
         node_id = int(row.get("current_node", row["node_id"]))
         return Vehicle(
             id=str(row["vehicle_id"]),
-            capacity=VEHICLE_CAPACITY,
+            capacity=self._vehicle_capacity,
             passengers_onboard=passengers,
             last_visited_node=node_id,
             last_visited_time=0.0,

@@ -62,11 +62,15 @@ class RVGraphBuilder(IRVGraphBuilder):
         self,
         route_planner: ISingleVehicleRoutePlanner,
         network: INetworkService,
+        omega: float = OMEGA,
+        delta: float = DELTA,
     ) -> None:
         super().__init__(route_planner)
         self._network = network
-        self._route_planner = None  # this is not used in RVGraphBuilder anymore
+        self._route_planner = None
         self._route_solver = AstarTripSolver
+        self._omega = omega
+        self._delta = delta
 
     def build_graph(
         self, requests: set[Request], vehicles: set[VehicleAvailability]
@@ -98,7 +102,9 @@ class RVGraphBuilder(IRVGraphBuilder):
         # B. Vectorized Pruning
         # Condition: Time(i,j) <= Omega OR Time(j,i) <= Omega
         # Note: We only look at upper triangle (k=1) to avoid duplicates (i,j) vs (j,i)
-        rr_mask = np.triu((rr_matrix <= OMEGA) | (rr_matrix.T <= OMEGA), k=1)
+        rr_mask = np.triu(
+            (rr_matrix <= self._omega) | (rr_matrix.T <= self._omega), k=1
+        )
 
         rr_idx_i, rr_idx_j = np.where(rr_mask)
 
@@ -144,7 +150,7 @@ class RVGraphBuilder(IRVGraphBuilder):
 
             # We use the raw difference for the check first
             raw_diff = (v_times_arr + rv_matrix) - r_times_arr
-            rv_mask = raw_diff <= OMEGA
+            rv_mask = raw_diff <= self._omega
 
             # Indices of ALL feasible pairs
             v_idx, r_idx = np.where(rv_mask)
@@ -237,10 +243,10 @@ class RVGraphBuilder(IRVGraphBuilder):
             p_del2 = p2 - t2
 
             mask = (
-                (del1 <= DELTA)
-                & (del2 <= DELTA)
-                & (p_del1 <= OMEGA)
-                & (p_del2 <= OMEGA)
+                (del1 <= self._delta)
+                & (del2 <= self._delta)
+                & (p_del1 <= self._omega)
+                & (p_del2 <= self._omega)
             )
             costs[perm, mask] = del1[mask] + del2[mask]
 
@@ -365,8 +371,8 @@ class RVGraphBuilder(IRVGraphBuilder):
         count = len(occupied_tasks)
 
         # --- PATH A: SEQUENTIAL (Low Volume) ---
-        # 2000 is a safe crossover point where overhead usually breaks even
-        if count < 2000:
+        # 12000 is a safe crossover point where overhead usually breaks even
+        if count < 12000:
             logger.info(f"RV Occupied: Processing {count} tasks sequentially.")
 
             # 1. Calculation Phase (Pure, Parallelizable logic if needed)
@@ -478,21 +484,21 @@ class RVGraphBuilder(IRVGraphBuilder):
         a_p = np.maximum(v_time + t_v_p, r_times)
         a_d = a_p + t_p_d
         a_d1 = a_d + t_d_d1
-        mask0 = (a_p - r_times <= OMEGA) & (a_d1 <= d1_dead) & (a_d <= r_dead)
+        mask0 = (a_p - r_times <= self._omega) & (a_d1 <= d1_dead) & (a_d <= r_dead)
         costs[0, mask0] = (a_d1 - v_time)[mask0]
 
         # -- Perm 1: P -> D1 -> D --
         a_p = np.maximum(v_time + t_v_p, r_times)
         a_d1 = a_p + t_p_d1
         a_d = a_d1 + t_d1_d
-        mask1 = (a_p - r_times <= OMEGA) & (a_d1 <= d1_dead) & (a_d <= r_dead)
+        mask1 = (a_p - r_times <= self._omega) & (a_d1 <= d1_dead) & (a_d <= r_dead)
         costs[1, mask1] = (a_d - v_time)[mask1]
 
         # -- Perm 2: D1 -> P -> D --
         a_d1 = v_time + t_v_d1
         a_p = np.maximum(a_d1 + t_d1_p, r_times)
         a_d = a_p + t_p_d
-        mask2 = (a_d1 <= d1_dead) & (a_p - r_times <= OMEGA) & (a_d <= r_dead)
+        mask2 = (a_d1 <= d1_dead) & (a_p - r_times <= self._omega) & (a_d <= r_dead)
         costs[2, mask2] = (a_d - v_time)[mask2]
 
         # 4. REDUCE

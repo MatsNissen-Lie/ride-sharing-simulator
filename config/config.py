@@ -9,7 +9,7 @@ DELTA = 5 * 60  # 5 minutes in seconds
 # SIM
 BATCH_DURATION = 30  # 30 seconds
 # data
-NUMBER_OF_VEHICLES = 25
+NUMBER_OF_VEHICLES = 2500
 VEHICLE_CAPACITY = 4  # vehicle capacity
 
 # max passengers to consider in route planning
@@ -27,7 +27,7 @@ MIN_START_TIME = (
     3 * 24 * 3600 + 3 * 3600 + 7 * 60 + 35 - 10 * 60 - 30 - 30
 )  # after 3 days 3 hours 7 minutes 35 seconds
 MIN_REQUESTS_TO_PROCESS = 0  # this should be zero for normal runs
-MAX_BATCHES = 50
+MAX_BATCHES = 100
 WARMUP_DURATION = 15 * 60
 WARMUP_DURATION = 0
 
