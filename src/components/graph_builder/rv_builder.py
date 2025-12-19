@@ -452,6 +452,7 @@ class RVGraphBuilder(IRVGraphBuilder):
         r_origins = np.array([req_list[i].origin_node for i in r_idxs])
         r_dests = np.array([req_list[i].destination_node for i in r_idxs])
         r_times = np.array([req_list[i].request_time for i in r_idxs])
+        r_dead = np.array([req_list[i].latest_dropoff_time for i in r_idxs])
 
         # 2. FETCH TRAVEL TIMES
         mat = self._network.get_l1_cache()
@@ -477,21 +478,21 @@ class RVGraphBuilder(IRVGraphBuilder):
         a_p = np.maximum(v_time + t_v_p, r_times)
         a_d = a_p + t_p_d
         a_d1 = a_d + t_d_d1
-        mask0 = (a_p - r_times <= OMEGA) & (a_d1 <= d1_dead)
+        mask0 = (a_p - r_times <= OMEGA) & (a_d1 <= d1_dead) & (a_d <= r_dead)
         costs[0, mask0] = (a_d1 - v_time)[mask0]
 
         # -- Perm 1: P -> D1 -> D --
         a_p = np.maximum(v_time + t_v_p, r_times)
         a_d1 = a_p + t_p_d1
         a_d = a_d1 + t_d1_d
-        mask1 = (a_p - r_times <= OMEGA) & (a_d1 <= d1_dead)
+        mask1 = (a_p - r_times <= OMEGA) & (a_d1 <= d1_dead) & (a_d <= r_dead)
         costs[1, mask1] = (a_d - v_time)[mask1]
 
         # -- Perm 2: D1 -> P -> D --
         a_d1 = v_time + t_v_d1
         a_p = np.maximum(a_d1 + t_d1_p, r_times)
         a_d = a_p + t_p_d
-        mask2 = (a_d1 <= d1_dead) & (a_p - r_times <= OMEGA)
+        mask2 = (a_d1 <= d1_dead) & (a_p - r_times <= OMEGA) & (a_d <= r_dead)
         costs[2, mask2] = (a_d - v_time)[mask2]
 
         # 4. REDUCE

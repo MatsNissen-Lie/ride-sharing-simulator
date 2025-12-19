@@ -17,6 +17,7 @@ from src.interfaces import (
     Vehicle,
 )
 from src.interfaces.data_models import NetworkPathExtended, Route
+from src.interfaces.stats import ControllerStats
 
 logger = get_logger(__name__)
 
@@ -29,7 +30,9 @@ class BatchController(IBatchController):
         self._id_to_vehicle: dict[str, Vehicle] = {v.id: v for v in self._fleet}
         # Optimized history: separate lists for bisect
         self._batch_end_times: list[float] = []
-        self._delivered_stats: list[dict] = []
+
+        # Stats Aggregators
+        self._current_stats = ControllerStats()
         self._last_processed_time: float = 0.0
 
     def project_fleet_and_update_requests(
@@ -162,6 +165,15 @@ class BatchController(IBatchController):
                         # Track stats if this is a new event
                         if passenger and cur_time > self._last_processed_time:
                             req = passenger.original_request
+
+                            # Validating constraint
+                            if cur_time > req.latest_dropoff_time + 1e-9:  # tolerance
+                                raise RuntimeError(
+                                    f"HARD CONSTRAINT VIOLATION: Request {req.id} dropped off at {cur_time:.2f} "
+                                    f"but latest_dropoff_time is {req.latest_dropoff_time:.2f}. "
+                                    f"Delay: {cur_time - req.latest_dropoff_time:.2f}s"
+                                )
+
                             wait_time = passenger.pickup_time - req.request_time
 
                             direct_travel_time = self._network.get_travel_time(
@@ -180,16 +192,9 @@ class BatchController(IBatchController):
                                 cur_time - req.request_time - direct_travel_time
                             )
 
-                            self._delivered_stats.append(
-                                {
-                                    "req_id": req.id,
-                                    "vehicle_id": v.id,
-                                    "wait_time": wait_time,
-                                    "total_delay": total_delay,
-                                    "dropoff_time": cur_time,
-                                    "direct_travel_time": direct_travel_time,
-                                }
-                            )
+                            self._current_stats.delivered_count += 1
+                            self._current_stats.sum_wait_time += wait_time
+                            self._current_stats.sum_total_delay += total_delay
 
                         onboard = {
                             p for p in onboard if p.original_request.id != target_id
@@ -635,6 +640,9 @@ class BatchController(IBatchController):
         for req_id, req in self._request_index.items():
             if t_now - req.request_time > OMEGA:
                 to_remove.append(req_id)
+                # Capture stats
+                self._current_stats.expired_count += 1
+                self._current_stats.sum_expired_wait += t_now - req.request_time
 
         for req_id in to_remove:
             del self._request_index[req_id]
@@ -677,11 +685,23 @@ class BatchController(IBatchController):
                     f"Request {req.id} has request_time {req.request_time} after batch time {t_now}"
                 )
 
-    def consume_delivered_stats(self) -> list[dict]:
+    def get_and_reset_metrics(self) -> ControllerStats:
         """Returns the accumulated delivered stats and clears the buffer."""
-        stats = self._delivered_stats
-        self._delivered_stats = []
+        stats = self._current_stats
+        self._current_stats = ControllerStats()
         return stats
+
+    # def consume_delivered_stats(self) -> list[dict]:
+    #     """Returns the accumulated delivered stats and clears the buffer."""
+    #     stats = self._delivered_stats
+    #     self._delivered_stats = []
+    #     return stats
+
+    # def consume_expired_stats(self) -> list[dict]:
+    #     """Returns the accumulated expired stats and clears the buffer."""
+    #     stats = self._expired_stats
+    #     self._expired_stats = []
+    #     return stats
 
 
 __all__ = ["BatchController"]

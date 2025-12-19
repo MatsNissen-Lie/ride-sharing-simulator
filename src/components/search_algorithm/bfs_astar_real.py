@@ -3,10 +3,6 @@ import heapq
 import numpy as np
 
 from config import get_logger
-from config.config import (
-    OMEGA,
-    DELTA,
-)
 from src.interfaces import (
     VehicleAvailability,
     Request,

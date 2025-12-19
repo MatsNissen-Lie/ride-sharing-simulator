@@ -14,7 +14,7 @@ from config.config import (
     BATCH_DURATION,
 )
 from config.paths import PLOT_DIR
-from src.interfaces.batch_control import IBatchController
+from src.components.batch_controller import BatchController
 from src.interfaces.services import (
     IAssignmentSolver,
     IRVGraphBuilder,
@@ -24,6 +24,7 @@ from src.interfaces.services import (
     Request,
 )
 from src.components.simulation_data_provider import SimulationDataProvider
+from src.interfaces.stats import BatchStatistics
 from src.utils.rtv_plot import plot_rtv_graph
 from src.utils.rv_plot import plot_rv_graph
 from src.utils.stats_logger import SimulationStatsLogger
@@ -35,7 +36,7 @@ class Simulator:
     def __init__(
         self,
         provider: SimulationDataProvider,
-        controller: IBatchController,
+        controller: BatchController,
         rv_builder: IRVGraphBuilder,
         rtv_builder: IRTVGraphBuilder,
         assignment_solver: IAssignmentSolver,
@@ -68,7 +69,7 @@ class Simulator:
         logger.info("🚀 Simulation starting...")
 
         batch_count = 0
-        seen_requests = set()
+        seen_requests = 0
         served_requests = set()
         self.mega_pool: list[Request] = []
 
@@ -226,23 +227,6 @@ class Simulator:
                     assignment_duration,
                 )
 
-                # --- Track Served Requests ---
-                total_delay = 0.0
-                newly_served_count = 0
-                wait_times = []
-
-                if assignment_result.assignments:
-                    for assignment in assignment_result.assignments:
-                        total_delay += assignment.cost
-                        newly_served_count += len(assignment.trip_id)
-                        
-                        # assignment.trip_id is a frozen set of request IDs
-                        for req_id in assignment.trip_id:
-                            served_requests.add(req_id)
-                            
-
-
-
                 # 6. Commit Assignment (Controller Step 2)
                 self.controller.commit_assignment(t_now, assignment_result)
                 commit_end = time.perf_counter()
@@ -253,10 +237,10 @@ class Simulator:
                         assignment_result, vehicle_avail_pool
                     )
                 )
-                
+
                 idle_vehicles_count = len(idle_vehicles)
                 active_vehicles_count = len(vehicle_avail_pool) - idle_vehicles_count
-                
+
                 rebal_candidates_end = time.perf_counter()
                 logger.debug(
                     f"Rebalancing candidates identified in {rebal_candidates_end - commit_end:.4f} seconds: {len(idle_vehicles)} idle vehicles, {len(unassigned_requests)} unassigned requests."
@@ -293,59 +277,67 @@ class Simulator:
                 loop_duration = loop_end_time - start_loop_time
                 logger.info("Batch completed in %.4f seconds.", loop_duration)
 
-                # --- Capture Realized Stats ---
-                delivered_stats = self.controller.consume_delivered_stats()
-                
-                realized_delays = [s["total_delay"] for s in delivered_stats]
-                pickup_waits = [s["wait_time"] for s in delivered_stats]
-                
-                avg_realized_delay = sum(realized_delays) / len(realized_delays) if realized_delays else 0.0
-                avg_pickup_wait = sum(pickup_waits) / len(pickup_waits) if pickup_waits else 0.0
-                
-                if delivered_stats:
-                    logger.info(f"📦 Delivered {len(delivered_stats)} passengers. Avg Delay: {avg_realized_delay:.2f}s, Avg Wait: {avg_pickup_wait:.2f}s")
-                
-                # --- LOG STATS ---
+                # --- Capture & Aggregated Stats ---
+                c_stats = self.controller.get_and_reset_metrics()
+
+                # 1. Candidate Trip Stats (from RTV Graph)
+                # trip_counts_by_size is a dict {size: count}
+                candidate_trip_stats, _ = rtv_graph.get_trip_stats()
+
+                # 2. Assigned Trip Stats (from Solver Result)
+                assigned_trip_stats = {}
+                for assignment in assignment_result.assignments:
+                    size = len(assignment.trip_id)
+                    assigned_trip_stats[size] = assigned_trip_stats.get(size, 0) + 1
+
                 is_warmup = t_now < (min_start_time + warmup_duration)
-                
-                stats_payload = {
-                    "batch_id": batch_count,
-                    "sim_time": t_now,
-                    "is_warmup": is_warmup,
-                    "requests_count": len(all_requests_in_pool),
-                    "newly_served_count": newly_served_count,
-                    "active_vehicles_count": active_vehicles_count,
-                    "idle_vehicles_count": idle_vehicles_count,
-                    "average_delay": float(total_delay / newly_served_count) if newly_served_count > 0 else 0.0,
-                    
-                    # --- Realized Stats (Ex-Post) ---
-                    "realized_avg_delay": avg_realized_delay,
-                    "realized_avg_wait_time": avg_pickup_wait,
-                    "delivered_count": len(delivered_stats),
 
-                    "rv_build_time": rv_duration,
-                    "rv_edges_count": len(rv_graph.rv_details),
-                    "rtv_build_time": rtv_duration,
-                    "trips_count": total_trips,
-                    "assignment_time": assignment_duration,
-                    "rebalancing_time": rebalancing_duration,
-                    "total_batch_time": loop_duration,
-                    "objective_value": float(assignment_result.total_cost),
-                    "total_delay": float(total_delay),
-                }
+                batch_stats = BatchStatistics(
+                    batch_id=batch_count,
+                    sim_time=t_now,
+                    is_warmup=is_warmup,
+                    requests_active=len(all_requests_in_pool),
+                    requests_delivered=c_stats.delivered_count,
+                    requests_expired=c_stats.expired_count,
+                    vehicles_active=active_vehicles_count,
+                    vehicles_idle=idle_vehicles_count,
+                    avg_wait_time=c_stats.avg_wait_time,
+                    avg_total_delay=c_stats.avg_total_delay,
+                    avg_expired_wait=c_stats.avg_expired_wait,
+                    time_rv=rv_duration,
+                    time_rtv=rtv_duration,
+                    time_assign=assignment_duration,
+                    time_rebal=rebalancing_duration,
+                    time_total_batch=loop_duration,
+                    rv_edges=len(rv_graph.rv_details),
+                    trips_count=total_trips,
+                    objective_value=float(assignment_result.total_cost),
+                    # Expanded Trip Stats
+                    candidate_trips_size_1=candidate_trip_stats.get(1, 0),
+                    candidate_trips_size_2=candidate_trip_stats.get(2, 0),
+                    candidate_trips_size_3=candidate_trip_stats.get(3, 0),
+                    candidate_trips_size_4=candidate_trip_stats.get(4, 0),
+                    candidate_trips_size_5=candidate_trip_stats.get(5, 0),
+                    candidate_trips_size_6=candidate_trip_stats.get(6, 0),
+                    assigned_trips_size_1=assigned_trip_stats.get(1, 0),
+                    assigned_trips_size_2=assigned_trip_stats.get(2, 0),
+                    assigned_trips_size_3=assigned_trip_stats.get(3, 0),
+                    assigned_trips_size_4=assigned_trip_stats.get(4, 0),
+                    assigned_trips_size_5=assigned_trip_stats.get(5, 0),
+                    assigned_trips_size_6=assigned_trip_stats.get(6, 0),
+                )
 
-                # Add breakdown by size
-                for size in trip_stats.keys():
-                    stats_payload[f"trips_size_{size}"] = trip_stats.get(size, 0)
+                if c_stats.delivered_count > 0:
+                    logger.info(f"📦 Delivered {c_stats.delivered_count} passengers.")
+                if c_stats.expired_count > 0:
+                    logger.info(f"💀 Expired {c_stats.expired_count} requests.")
 
                 # --- Track Unique Requests ---
-                for req in all_requests_in_pool:
-                    seen_requests.add(req.id)
 
-                self.stats_logger.log_batch(stats_payload)
-                
-                if is_warmup:
-                    logger.info("🔥 Warm-up batch. Stats logged but flagged.")
+                if not is_warmup:
+                    self.stats_logger.log_batch(batch_stats)
+                else:
+                    logger.info(f"🔥 Warm-up batch {batch_count}. Stats NOT logged.")
 
                 if batch_count >= MAX_BATCHES:
                     logger.info(
@@ -354,9 +346,10 @@ class Simulator:
                     break
 
             logger.info("🏁 Simulation complete.")
-            
+
             # Export Stats
             import os
+
             final_output_dir = output_dir if output_dir else PLOT_DIR
             csv_path = os.path.join(final_output_dir, "simulation_stats.csv")
             self.stats_logger.export_to_csv(csv_path)
@@ -365,14 +358,15 @@ class Simulator:
             logger.info("\n🛑 Simulation stopped by user (Ctrl+C).")
             # Attempt to export even on interrupt
             import os
+
             final_output_dir = output_dir if output_dir else PLOT_DIR
             csv_path = os.path.join(final_output_dir, "simulation_stats.csv")
             self.stats_logger.export_to_csv(csv_path)
 
         finally:
-            self.stats_logger.log_scalar_stat(
-                "Total Unique Requests Seen", len(seen_requests)
-            )
+            # self.stats_logger.log_scalar_stat(
+            #     "Total Unique Requests Seen", len(seen_requests)
+            # )
             self.stats_logger.log_scalar_stat(
                 "Total Requests Served", len(served_requests)
             )

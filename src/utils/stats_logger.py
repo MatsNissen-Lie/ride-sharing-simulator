@@ -1,8 +1,10 @@
 import statistics
 from collections import defaultdict
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Union
+from dataclasses import asdict
 
 from config import get_logger
+from src.interfaces.stats import BatchStatistics
 
 logger = get_logger(__name__)
 
@@ -18,18 +20,57 @@ class SimulationStatsLogger:
         self._scalars: Dict[str, Any] = {}
         self._batch_count = 0
 
-    def log_batch(self, metrics: Dict[str, Any]) -> None:
+    def log_batch(self, metrics: Union[Dict[str, Any], BatchStatistics]) -> None:
         """
         Log a set of metrics for a single batch.
         
         Args:
-            metrics: Dictionary containing metric names and values for this batch.
+            metrics: Dictionary or BatchStatistics object containing metric names and values for this batch.
                      Numerical values will be aggregated for stats.
         """
+        if isinstance(metrics, BatchStatistics):
+            metrics = asdict(metrics)
+
         self._batch_count += 1
         for key, value in metrics.items():
             if isinstance(value, (int, float)):
                 self._metrics[key].append(value)
+
+    def log_delivered_requests(self, requests: List[Dict[str, Any]]) -> None:
+        """
+        Log detailed stats for requests delivered in this batch.
+        Calculates and logs aggregate metrics (averages) for the batch.
+        """
+        # Calculate aggregates for this batch
+        count = len(requests)
+        avg_delay = 0.0
+        avg_wait = 0.0
+        
+        if count > 0:
+            total_delay = sum(r["total_delay"] for r in requests)
+            total_wait = sum(r["wait_time"] for r in requests)
+            avg_delay = total_delay / count
+            avg_wait = total_wait / count
+            
+        # Log to batch metrics
+        # We append directly to keep aligned with log_batch calls
+        self._metrics["realized_avg_delay"].append(avg_delay)
+        self._metrics["realized_avg_wait_time"].append(avg_wait)
+        self._metrics["delivered_count"].append(count)
+
+    def log_expired_requests(self, requests: List[Dict[str, Any]]) -> None:
+        """
+        Log stats for expired requests in this batch.
+        """
+        count = len(requests)
+        avg_wait = 0.0
+        
+        if count > 0:
+            total_wait = sum(r["wait_time"] for r in requests)
+            avg_wait = total_wait / count
+            
+        self._metrics["expired_count"].append(count)
+        self._metrics["avg_expired_wait_time"].append(avg_wait)
 
     def log_scalar_stat(self, key: str, value: Any) -> None:
         """

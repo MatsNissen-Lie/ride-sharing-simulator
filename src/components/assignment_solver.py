@@ -14,6 +14,9 @@ from src.interfaces.graphs import RTVGraph, TripId
 
 logger = get_logger(__name__)
 
+if __name__ != "__main__":
+    logger.setLevel("WARNING")
+
 
 class GurobiAssignmentSolver(IAssignmentSolver):
     """

@@ -16,8 +16,8 @@ def generate_plots(csv_path):
     os.makedirs(output_dir, exist_ok=True)
 
     # 1. Runtime Breakdown (Stacked)
-    # Columns: rv_build_time, rtv_build_time, assignment_time, rebalancing_time
-    runtime_cols = ['rv_build_time', 'rtv_build_time', 'assignment_time', 'rebalancing_time']
+    # Columns: time_rv, time_rtv, time_assign, time_rebal
+    runtime_cols = ['time_rv', 'time_rtv', 'time_assign', 'time_rebal']
     
     plt.figure(figsize=(10, 6))
     plt.stackplot(df['sim_time'], df[runtime_cols].T, labels=['RV Build', 'RTV Build', 'ILP Solve', 'Rebalancing'])
@@ -32,28 +32,31 @@ def generate_plots(csv_path):
 
     # 2. Average Delay Over Time (Previously Wait Time)
     plt.figure(figsize=(10, 6))
-    if 'average_delay' in df.columns:
-        plt.plot(df['sim_time'], df['average_delay'], marker='o', label='Avg Delay')
+    # Check for new column name
+    if 'avg_total_delay' in df.columns:
+        # Filter: Only plot batches where requests were actually served
+        df_served = df[df['requests_delivered'] > 0]
+        if not df_served.empty:
+            plt.plot(df_served['sim_time'], df_served['avg_total_delay'], marker='o', label='Avg Delay')
+        else:
+             plt.plot([], [], label='No Data') # Handle case with no served requests
+
         plt.title('Average Delay per Batch (Cost)')
         plt.ylabel('Delay (Cost)')
     else:
-        # Fallback for old CSVs
-        plt.plot(df['sim_time'], df['average_wait_time'], marker='o', label='Avg Wait Time')
-        plt.title('Average Wait Time per Batch')
-        plt.ylabel('Wait Time (s)')
+        # Fallback (unlikely needed if schema is strict)
+        pass
         
     plt.xlabel('Simulation Time (s)')
     plt.grid(True)
-    plt.savefig(os.path.join(output_dir, 'wait_time_over_time.png')) # Keeping same filename for compatibility or change? 
-    # Let's change filename to be correct
     plt.savefig(os.path.join(output_dir, 'average_delay_over_time.png'))
     plt.close()
     print("Generated average_delay_over_time.png")
 
     # 3. Fleet Utilization
     plt.figure(figsize=(10, 6))
-    plt.plot(df['sim_time'], df['active_vehicles_count'], label='Active Vehicles', color='green')
-    plt.plot(df['sim_time'], df['idle_vehicles_count'], label='Idle Vehicles', color='red')
+    plt.plot(df['sim_time'], df['vehicles_active'], label='Active Vehicles', color='green')
+    plt.plot(df['sim_time'], df['vehicles_idle'], label='Idle Vehicles', color='red')
     plt.xlabel('Simulation Time (s)')
     plt.ylabel('Vehicle Count')
     plt.title('Fleet Utilization Over Time')
@@ -64,27 +67,34 @@ def generate_plots(csv_path):
     print("Generated fleet_utilization.png")
 
     # 4. Occupancy / Trip Sizes (Aggregation)
-    # Sum up columns like trips_size_1, trips_size_2, etc.
-    size_cols = [c for c in df.columns if 'trips_size_' in c]
+    # Use ASSIGNED trips for occupancy distribution
+    size_cols = [c for c in df.columns if 'assigned_trips_size_' in c]
     if size_cols:
         total_counts = df[size_cols].sum()
-        # Clean labels: trips_size_1 -> 1 Pax
-        labels = [c.replace('trips_size_', '') + ' Pax' for c in total_counts.index]
+        # Clean labels: assigned_trips_size_1 -> 1 Pax
+        labels = [c.replace('assigned_trips_size_', '') + ' Pax' for c in total_counts.index]
         
-        plt.figure(figsize=(6, 6))
-        plt.pie(total_counts, labels=labels, autopct='%1.1f%%', startangle=140)
-        plt.title('Distribution of Trip Sizes (Occupancy)')
-        plt.savefig(os.path.join(output_dir, 'occupancy_distribution.png'))
-        plt.close()
-        print("Generated occupancy_distribution.png")
+        # Filter out 0 counts
+        filtered_counts = []
+        filtered_labels = []
+        for count, label in zip(total_counts, labels):
+            if count > 0:
+                filtered_counts.append(count)
+                filtered_labels.append(label)
+
+        if filtered_counts:
+            plt.figure(figsize=(6, 6))
+            plt.pie(filtered_counts, labels=filtered_labels, autopct='%1.1f%%', startangle=140)
+            plt.title('Distribution of Trip Sizes (Occupancy)')
+            plt.savefig(os.path.join(output_dir, 'occupancy_distribution.png'))
+            plt.close()
+            print("Generated occupancy_distribution.png")
 
     # 5. Service Rate (Cumulative)
-    # newly_served_count vs requests_count (requests count is snapshot size, need cumulative inputs?)
-    # For now, let's just plot serving rate per batch
     plt.figure(figsize=(10, 6))
-    plt.plot(df['sim_time'], df['newly_served_count'], marker='x', color='purple')
+    plt.plot(df['sim_time'], df['requests_delivered'], marker='x', color='purple')
     plt.xlabel('Simulation Time (s)')
-    plt.ylabel('Requests Served per Batch')
+    plt.ylabel('Requests Delivered per Batch')
     plt.title('Service Throughput')
     plt.grid(True)
     plt.savefig(os.path.join(output_dir, 'service_throughput.png'))
