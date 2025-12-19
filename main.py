@@ -22,6 +22,7 @@ def main():
     Main simulation entrypoint.
     """
     import argparse
+    import os
 
     parser = argparse.ArgumentParser(description="Run the ride-sharing simulation.")
     parser.add_argument(
@@ -78,16 +79,47 @@ def main():
         network_service=network_service,
         db_cache=db_cache,
     )
-
-    simulator.run(
-        request_iterator=req_iter,
-        batch_duration=BATCH_DURATION,
-        min_start_time=min_start_time,
-        warmup_duration=WARMUP_DURATION,
-        output_dir=output_manager.get_run_dir(),
-    )
     
-    # --- 5. Generate Plots ---
+    # --- 5. Run with Stats Logging ---
+    from src.utils.stats_logger import SimulationStatsLogger
+    from src.interfaces.stats import BatchStatistics
+    
+    stats_logger = SimulationStatsLogger()
+    
+    try:
+        for stats in simulator.run(
+            request_iterator=req_iter,
+            batch_duration=BATCH_DURATION,
+            min_start_time=min_start_time,
+            warmup_duration=WARMUP_DURATION,
+            output_dir=output_manager.get_run_dir(),
+        ):
+            if isinstance(stats, BatchStatistics):
+                # Only log if not warmup (logic moved from Simulator)
+                # Simulator yields all batches, but flags warmup.
+                if not stats.is_warmup:
+                    stats_logger.log_batch(stats)
+                    # Periodic flush every 20 batches
+                    if stats.batch_id % 20 == 0:
+                        csv_path = os.path.join(output_manager.get_run_dir(), "simulation_stats.csv")
+                        stats_logger.flush_to_csv(csv_path)
+                else:
+                    logger.info(f"🔥 Warm-up batch {stats.batch_id}. Stats NOT logged.")
+
+        logger.info("🏁 Simulation complete.")
+    
+    except KeyboardInterrupt:
+        logger.info("\n🛑 Simulation stopped by user (Ctrl+C).")
+
+    finally:
+        # Final Flush/Export
+        import os
+        csv_path = os.path.join(output_manager.get_run_dir(), "simulation_stats.csv")
+        # flush_to_csv will append any remaining batches
+        stats_logger.flush_to_csv(csv_path)
+        stats_logger.print_summary()
+
+    # --- 6. Generate Plots ---
     logger.info("📊 Generating plots...")
     from src.utils.generate_plots import generate_plots
     import os

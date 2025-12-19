@@ -134,6 +134,7 @@ class SimulationStatsLogger:
         """
         import csv
         import os
+        from dataclasses import fields
 
         if not self._metrics:
             logger.warning("No metrics to export.")
@@ -142,8 +143,23 @@ class SimulationStatsLogger:
         # Ensure directory exists
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
 
-        fieldnames = sorted(self._metrics.keys())
-        num_batches = len(self._metrics[fieldnames[0]])
+        # Use BatchStatistics fields to determine order
+        # We prefer the explicit order defined in the dataclass
+        dataclass_fields = [f.name for f in fields(BatchStatistics)]
+        
+        # Verify that we have data for these fields (or handle missing ones gracefully)
+        # We also might have extra fields in _metrics that are not in BatchStatistics?
+        # For now, let's strictly use the dataclass fields that are present in metrics, 
+        # plus any others sorted at the end if they exist.
+        
+        present_keys = set(self._metrics.keys())
+        ordered_fieldnames = [f for f in dataclass_fields if f in present_keys]
+        
+        # Add any extra keys that might be in metrics but not in dataclass (just in case)
+        extras = sorted(list(present_keys - set(ordered_fieldnames)))
+        fieldnames = ordered_fieldnames + extras
+
+        num_batches = len(self._metrics[fieldnames[0]]) if fieldnames else 0
 
         try:
             with open(filepath, mode="w", newline="") as f:
@@ -157,3 +173,48 @@ class SimulationStatsLogger:
             logger.info(f"Statistics exported to {filepath}")
         except Exception as e:
             logger.error(f"Failed to export statistics: {e}")
+
+    def flush_to_csv(self, filepath: str) -> None:
+        """
+        Appends the currently buffered metrics to the CSV file and clears the buffer.
+        """
+        import csv
+        import os
+        from dataclasses import fields
+
+        if not self._metrics:
+            return  # Nothing to flush
+
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        
+        file_exists = os.path.exists(filepath) and os.path.getsize(filepath) > 0
+
+        # Determine fieldnames (same logic as export_to_csv)
+        dataclass_fields = [f.name for f in fields(BatchStatistics)]
+        present_keys = set(self._metrics.keys())
+        ordered_fieldnames = [f for f in dataclass_fields if f in present_keys]
+        extras = sorted(list(present_keys - set(ordered_fieldnames)))
+        fieldnames = ordered_fieldnames + extras
+
+        num_batches = len(self._metrics[fieldnames[0]]) if fieldnames else 0
+
+        try:
+            with open(filepath, mode="a", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                
+                # Write header only if file didn't exist or was empty
+                if not file_exists:
+                    writer.writeheader()
+
+                for i in range(num_batches):
+                    row = {key: self._metrics[key][i] for key in fieldnames}
+                    writer.writerow(row)
+            
+            logger.info(f"Flushed {num_batches} batches to {filepath}")
+            
+            # Clear metrics from memory
+            self._metrics.clear()
+            
+        except Exception as e:
+            logger.error(f"Failed to flush statistics: {e}")

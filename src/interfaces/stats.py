@@ -9,6 +9,7 @@ class ControllerStats:
 
     delivered_count: int = 0
     expired_count: int = 0
+    new_requests_count: int = 0
 
     # Sums for averaging
     sum_wait_time: float = 0.0
@@ -50,6 +51,7 @@ class BatchStatistics:
     is_warmup: bool
 
     # Demand
+    requests_new: int
     requests_active: int
     requests_delivered: int
     requests_expired: int

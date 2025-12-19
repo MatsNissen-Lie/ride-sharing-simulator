@@ -514,6 +514,7 @@ class BatchController(IBatchController):
 
         # 3) Convert new meta requests and add to index
         new_requests = self.convert_meta_requests(new_meta)
+        self._current_stats.new_requests_count += len(new_requests)
         for req in new_requests:
             self._request_index[req.id] = req
 

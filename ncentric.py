@@ -78,11 +78,44 @@ def main():
         db_cache=db_cache,
     )
 
-    simulator.run(
-        request_iterator=req_iter,
-        batch_duration=BATCH_DURATION,
-        min_start_time=min_start_time,
-    )
+    from config.config import WARMUP_DURATION
+    from src.utils.stats_logger import SimulationStatsLogger
+    from src.interfaces.stats import BatchStatistics
+    from src.utils.output_manager import SimulationOutputManager
+    import os
+
+    # Setup Output
+    output_manager = SimulationOutputManager()
+    stats_logger = SimulationStatsLogger()
+
+    try:
+        for stats in simulator.run(
+            request_iterator=req_iter,
+            batch_duration=BATCH_DURATION,
+            min_start_time=min_start_time,
+            warmup_duration=WARMUP_DURATION,
+        ):
+            if isinstance(stats, BatchStatistics):
+                # Only log if not warmup
+                if not stats.is_warmup:
+                    stats_logger.log_batch(stats)
+                    # Periodic flush every 20 batches
+                    if stats.batch_id % 20 == 0:
+                        csv_path = os.path.join(output_manager.get_run_dir(), "simulation_stats.csv")
+                        stats_logger.flush_to_csv(csv_path)
+                else:
+                    logger.info(f"🔥 Warm-up batch {stats.batch_id}. Stats NOT logged.")
+
+        logger.info("🏁 Simulation complete.")
+    
+    except KeyboardInterrupt:
+        logger.info("\n🛑 Simulation stopped by user (Ctrl+C).")
+
+    finally:
+        # Final Flush/Export
+        csv_path = os.path.join(output_manager.get_run_dir(), "simulation_stats.csv")
+        stats_logger.flush_to_csv(csv_path)
+        stats_logger.print_summary()
 
 
 if __name__ == "__main__":
