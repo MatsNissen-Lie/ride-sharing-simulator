@@ -62,6 +62,8 @@ class Simulator:
         ],  # Using Any for Request type to avoid import overhead if not needed
         batch_duration: int,
         min_start_time: float,
+        warmup_duration: float = 0.0,
+        output_dir: str | None = None,
     ):
         logger.info("🚀 Simulation starting...")
 
@@ -226,12 +228,42 @@ class Simulator:
 
                 # --- Track Served Requests ---
                 total_delay = 0.0
+                newly_served_count = 0
+                wait_times = []
+
                 if assignment_result.assignments:
                     for assignment in assignment_result.assignments:
                         total_delay += assignment.cost
+                        newly_served_count += len(assignment.trip_id)
+                        
                         # assignment.trip_id is a frozen set of request IDs
                         for req_id in assignment.trip_id:
                             served_requests.add(req_id)
+                            
+                        # Calculate Wait Time by walking the route
+                        # 1. Find the vehicle (it is in vehicle_avail_pool)
+                        v_avail = next((v for v in vehicle_avail_pool if v.vehicle_id == assignment.vehicle_id), None)
+                        
+                        if v_avail and assignment.route:
+                            current_time = v_avail.available_from_time
+                            current_node = v_avail.available_at_node
+                            
+                            for stop in assignment.route.stops:
+                                # Travel time
+                                travel_time = self.network_service.get_travel_time(current_node, stop.node)
+                                current_time += travel_time
+                                current_node = stop.node
+                                
+                                if stop.is_pickup:
+                                    # Find request
+                                    # Since we don't have direct access to request object from ID easily without iteration, 
+                                    # we rely on 'all_requests_in_pool'.
+                                    # Note: this might be slow if pool is huge, but it's fine for now.
+                                    req = next((r for r in all_requests_in_pool if r.id == stop.request_id), None)
+                                    if req:
+                                        wait_time = current_time - req.request_time
+                                        wait_times.append(wait_time)
+
 
                 # 6. Commit Assignment (Controller Step 2)
                 self.controller.commit_assignment(t_now, assignment_result)
@@ -243,6 +275,10 @@ class Simulator:
                         assignment_result, vehicle_avail_pool
                     )
                 )
+                
+                idle_vehicles_count = len(idle_vehicles)
+                active_vehicles_count = len(vehicle_avail_pool) - idle_vehicles_count
+                
                 rebal_candidates_end = time.perf_counter()
                 logger.debug(
                     f"Rebalancing candidates identified in {rebal_candidates_end - commit_end:.4f} seconds: {len(idle_vehicles)} idle vehicles, {len(unassigned_requests)} unassigned requests."
@@ -280,8 +316,17 @@ class Simulator:
                 logger.info("Batch completed in %.4f seconds.", loop_duration)
 
                 # --- LOG STATS ---
+                is_warmup = t_now < (min_start_time + warmup_duration)
+                
                 stats_payload = {
+                    "batch_id": batch_count,
+                    "sim_time": t_now,
+                    "is_warmup": is_warmup,
                     "requests_count": len(all_requests_in_pool),
+                    "newly_served_count": newly_served_count,
+                    "active_vehicles_count": active_vehicles_count,
+                    "idle_vehicles_count": idle_vehicles_count,
+                    "average_wait_time": sum(wait_times) / len(wait_times) if wait_times else 0.0,
                     "rv_build_time": rv_duration,
                     "rv_edges_count": len(rv_graph.rv_details),
                     "rtv_build_time": rtv_duration,
@@ -302,6 +347,9 @@ class Simulator:
                     seen_requests.add(req.id)
 
                 self.stats_logger.log_batch(stats_payload)
+                
+                if is_warmup:
+                    logger.info("🔥 Warm-up batch. Stats logged but flagged.")
 
                 if batch_count >= MAX_BATCHES:
                     logger.info(
@@ -310,9 +358,20 @@ class Simulator:
                     break
 
             logger.info("🏁 Simulation complete.")
+            
+            # Export Stats
+            import os
+            final_output_dir = output_dir if output_dir else PLOT_DIR
+            csv_path = os.path.join(final_output_dir, "simulation_stats.csv")
+            self.stats_logger.export_to_csv(csv_path)
 
         except KeyboardInterrupt:
             logger.info("\n🛑 Simulation stopped by user (Ctrl+C).")
+            # Attempt to export even on interrupt
+            import os
+            final_output_dir = output_dir if output_dir else PLOT_DIR
+            csv_path = os.path.join(final_output_dir, "simulation_stats.csv")
+            self.stats_logger.export_to_csv(csv_path)
 
         finally:
             self.stats_logger.log_scalar_stat(

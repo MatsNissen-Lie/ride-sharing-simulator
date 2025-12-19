@@ -27,7 +27,7 @@ MIN_START_TIME = 0  # after 3 days
 MIN_REQUESTS_TO_PROCESS = 30
 
 
-MAX_BATCHES = 1
+MAX_BATCHES = 120
 
 ##### Otherwise use mega-batching ######
 MEGA_BATCH_MODE = True
