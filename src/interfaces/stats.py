@@ -1,5 +1,6 @@
 """Dataclasses for simulation statistics."""
 
+from datetime import datetime
 from dataclasses import dataclass
 
 
@@ -48,6 +49,7 @@ class BatchStatistics:
     # Context
     batch_id: int
     sim_time: float
+    timestamp: datetime
     is_warmup: bool
 
     # Demand

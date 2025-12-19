@@ -21,8 +21,8 @@ from src.components.assignment_solver import GurobiAssignmentSolver
 from src.database.simple_db import DuckDBPathCache
 from src.simulator import Simulator
 from src.utils.output_manager import SimulationOutputManager
-from src.utils.generate_plots import generate_plots
-from src.utils.comparison_analytics import generate_comparisons
+
+from src.utils.stress_test_plot import plot_stress_test_comparison
 
 logger = get_logger("sim_runner")
 
@@ -34,21 +34,21 @@ def run_simulation(
     mega_batch_mode: bool = MEGA_BATCH_MODE,
     mega_batch_size: int = MEGA_BATCH_SIZE,
     num_vehicles: int = NUMBER_OF_VEHICLES,
-    max_batches: int = config.MAX_BATCHES,
-) -> str | None:
+    base_output_dir: str = "reports",
+) -> dict | None:
     """
     Runs a single simulation scenario with specified parameters.
+    Returns a dictionary with runtime stats if successful, else None.
     """
     logger.info(f"=== Starting Scenario: {run_name} ===")
     logger.info(
         f"Params: omega={omega}, delta={delta}, mega_mode={mega_batch_mode}, mega_size={mega_batch_size}, vehicles={num_vehicles}"
     )
 
-    # Temporary override for MAX_BATCHES if needed
-    original_max_batches = config.MAX_BATCHES
-    config.MAX_BATCHES = max_batches
-
-    output_manager = SimulationOutputManager(base_dir="reports", run_name=run_name)
+    output_manager = SimulationOutputManager(
+        base_dir=base_output_dir, run_name=run_name
+    )
+    output_manager.save_metadata(config)
 
     # Initialize Core Components
     NUMBER_OF_VEHICLES = 2500
@@ -80,68 +80,103 @@ def run_simulation(
         db_cache=db_cache,
     )
 
+    from src.utils.stats_logger import SimulationStatsLogger
+    from src.interfaces.stats import BatchStatistics
+
+    stats_logger = SimulationStatsLogger()
+    final_stats: BatchStatistics | None = None
+
     try:
-        simulator.run(
+        for stats in simulator.run(
             request_iterator=req_iter,
             batch_duration=BATCH_DURATION,
             min_start_time=MIN_START_TIME,
             warmup_duration=WARMUP_DURATION,
-            output_dir=output_manager.get_run_dir(),
             mega_batch_mode=mega_batch_mode,
             mega_batch_size=mega_batch_size,
-            max_batches=max_batches,
-        )
+        ):
+            if isinstance(stats, BatchStatistics):
+                if not stats.is_warmup:
+                    stats_logger.log_batch(stats)
+                    # For mega batch, we capture this specific batch stats
+                    if mega_batch_mode:
+                        final_stats = stats
+                        logger.info("✅ Mega batch processed. Stopping simulation.")
+                        break
+                else:
+                    logger.info(f"🔥 Warm-up batch {stats.batch_id}. Stats NOT logged.")
 
-        # Generate Plots
+        # Final Flush/Export
         csv_path = os.path.join(output_manager.get_run_dir(), "simulation_stats.csv")
-        if os.path.exists(csv_path):
-            logger.info(f"📊 Generating plots for {run_name}...")
-            generate_plots(csv_path)
+        stats_logger.flush_to_csv(csv_path)
+        stats_logger.print_summary()
+
     finally:
         db_cache.close()
         # Restore config
-        config.MAX_BATCHES = original_max_batches
 
     logger.info(f"=== Scenario {run_name} Completed ===\n")
-    return os.path.join(output_manager.get_run_dir(), "simulation_stats.csv")
+
+    if final_stats:
+        return {
+            "name": run_name,
+            "total_time": final_stats.time_total_batch,
+            "breakdown": {
+                "RV Graph": final_stats.time_rv,
+                "RTV Graph": final_stats.time_rtv,
+                "Assignment": final_stats.time_assign,
+                "Rebalancing": final_stats.time_rebal,
+            },
+        }
+    return None
 
 
 if __name__ == "__main__":
     # Define stress test scenarios
+    OMEGA, DELTA = 300 * 2, 600 * 2  # Base values
+    FACTOR = 2
+    BATCH_SIZE = 200
     scenarios = [
         {
-            "name": "baseline_mega_200",
-            "omega": 300,
-            "delta": 600,
+            "name": f"Ω,Δ = {OMEGA / FACTOR},{DELTA / FACTOR}",
+            "omega": OMEGA / FACTOR,
+            "delta": DELTA / FACTOR,
         },
         {
-            "name": "tight_mega_200",
-            "omega": 120,
-            "delta": 240,
+            "name": f"Ω,Δ = {OMEGA},{DELTA}",
+            "omega": OMEGA,
+            "delta": DELTA,
         },
         {
-            "name": "loose_mega_200",
-            "omega": 600,
-            "delta": 1200,
+            "name": f"Ω,Δ = {OMEGA * FACTOR},{DELTA * FACTOR}",
+            "omega": OMEGA * FACTOR,
+            "delta": DELTA * FACTOR,
         },
     ]
 
-    # Run each scenario for a limited number of batches for quick verification
-    # For a real stress test, you'd increase max_batches
-    results_map = {}
+    # Create a shared timestamped folder for this batch of runs
+    timestamp_str = time.strftime("%Y-%m-%d_%H-%M-%S")
+    batch_run_dir = os.path.join("reports", f"stress_test_{timestamp_str}")
+    os.makedirs(batch_run_dir, exist_ok=True)
+    logger.info(f"📂 Saving all runs in: {batch_run_dir}")
+
+    results = []
     for s in scenarios:
-        csv_path = run_simulation(
+        scenario_result = run_simulation(
             run_name=s["name"],
             omega=s.get("omega", OMEGA),
             delta=s.get("delta", DELTA),
             mega_batch_mode=True,
-            mega_batch_size=200,
-            max_batches=1,  # mega batch is a one batch test #cannot run more than 1 batch
+            mega_batch_size=40,
+            base_output_dir=batch_run_dir,
         )
-        if csv_path:
-            results_map[s["name"]] = csv_path
+        if scenario_result:
+            results.append(scenario_result)
 
-    if results_map:
-        comparison_dir = os.path.join("reports", f"comparison_{int(time.time())}")
-        logger.info(f"📊 Generating comparative analytics in {comparison_dir}...")
-        generate_comparisons(results_map, comparison_dir)
+    if results:
+        logger.info(f"📊 Generating runtime comparison plot in {batch_run_dir}...")
+        plot_stress_test_comparison(
+            results,
+            batch_run_dir,
+            batch_size=BATCH_SIZE,
+        )

@@ -35,6 +35,8 @@ class SimulationStatsLogger:
         for key, value in metrics.items():
             if isinstance(value, (int, float)):
                 self._metrics[key].append(value)
+            elif hasattr(value, "isoformat"): # Datetime check
+                self._metrics[key].append(value)
 
     def log_delivered_requests(self, requests: List[Dict[str, Any]]) -> None:
         """

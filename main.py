@@ -1,9 +1,13 @@
-import itertools
 import config.config as config  # Import config module for metadata saving
 from config import BATCH_DURATION, get_logger, NUMBER_OF_VEHICLES
 from config.config import MIN_START_TIME, WARMUP_DURATION
 from src.components.batch_controller import BatchController
-from src.components.graph_builder.rtv_builder import RTVGraphBuilder
+
+# from src.components.graph_builder.rtv_builder import RTVGraphBuilder
+
+from src.components.graph_builder.rtv_builder_min import (
+    TripCentricRTVGraphBuilder as RTVGraphBuilder,
+)
 from src.components.graph_builder.rv_builder import RVGraphBuilder
 from src.components.network_service import NetworkXService
 from src.components.rebalance_solver import RebalancingSolver
@@ -33,9 +37,11 @@ def main():
     args = parser.parse_args()
 
     # --- 0. Output Management ---
-    output_manager = SimulationOutputManager(base_dir="reports", run_name="sim_standard")
+    output_manager = SimulationOutputManager(
+        base_dir="reports", run_name="sim_standard"
+    )
     output_manager.save_metadata(config)
-    
+
     logger.info("🚀 Simulation starting...")
     if args.read_only:
         logger.info("🔒 Running in READ-ONLY mode.")
@@ -79,20 +85,19 @@ def main():
         network_service=network_service,
         db_cache=db_cache,
     )
-    
+
     # --- 5. Run with Stats Logging ---
     from src.utils.stats_logger import SimulationStatsLogger
     from src.interfaces.stats import BatchStatistics
-    
+
     stats_logger = SimulationStatsLogger()
-    
+
     try:
         for stats in simulator.run(
             request_iterator=req_iter,
             batch_duration=BATCH_DURATION,
             min_start_time=min_start_time,
             warmup_duration=WARMUP_DURATION,
-            output_dir=output_manager.get_run_dir(),
         ):
             if isinstance(stats, BatchStatistics):
                 # Only log if not warmup (logic moved from Simulator)
@@ -101,19 +106,31 @@ def main():
                     stats_logger.log_batch(stats)
                     # Periodic flush every 20 batches
                     if stats.batch_id % 20 == 0:
-                        csv_path = os.path.join(output_manager.get_run_dir(), "simulation_stats.csv")
+                        csv_path = os.path.join(
+                            output_manager.get_run_dir(), "simulation_stats.csv"
+                        )
                         stats_logger.flush_to_csv(csv_path)
+
+                        # Generate plots periodically
+                        try:
+                            from src.utils.generate_plots import generate_plots
+
+                            if os.path.exists(csv_path):
+                                generate_plots(csv_path)
+                        except Exception as e:
+                            logger.warning(f"Failed to generate periodic plots: {e}")
                 else:
                     logger.info(f"🔥 Warm-up batch {stats.batch_id}. Stats NOT logged.")
 
         logger.info("🏁 Simulation complete.")
-    
+
     except KeyboardInterrupt:
         logger.info("\n🛑 Simulation stopped by user (Ctrl+C).")
 
     finally:
         # Final Flush/Export
         import os
+
         csv_path = os.path.join(output_manager.get_run_dir(), "simulation_stats.csv")
         # flush_to_csv will append any remaining batches
         stats_logger.flush_to_csv(csv_path)
@@ -123,6 +140,7 @@ def main():
     logger.info("📊 Generating plots...")
     from src.utils.generate_plots import generate_plots
     import os
+
     csv_path = os.path.join(output_manager.get_run_dir(), "simulation_stats.csv")
     if os.path.exists(csv_path):
         generate_plots(csv_path)

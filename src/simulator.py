@@ -1,3 +1,4 @@
+from pathlib import Path
 import time
 from typing import Iterator, Any
 import logging
@@ -12,6 +13,7 @@ from config.config import (
     MEGA_BATCH_MODE,
     MEGA_BATCH_SIZE,
     BATCH_DURATION,
+    END_TIME,
 )
 from config.paths import PLOT_DIR
 from src.components.batch_controller import BatchController
@@ -62,10 +64,9 @@ class Simulator:
         batch_duration: int,
         min_start_time: float,
         warmup_duration: float = 0.0,
-        output_dir: str | None = None,
         mega_batch_mode: bool = MEGA_BATCH_MODE,
         mega_batch_size: int = MEGA_BATCH_SIZE,
-        max_batches: int = MAX_BATCHES,
+        max_batches: int | float = MAX_BATCHES,
     ) -> Iterator[BatchStatistics]:
         logger.info("🚀 Simulation starting...")
 
@@ -80,10 +81,14 @@ class Simulator:
             batch_count += 1
             t_now, all_requests_in_pool, vehicle_avail_pool = batch
 
-            if batch_count > max_batches:
+            if max_batches is not None and batch_count > max_batches:
                 logger.info(
                     f"🛑 Reached max batches limit ({max_batches}). Stopping simulation."
                 )
+                break
+
+            if t_now >= END_TIME:
+                logger.info(f"🛑 Reached end time ({END_TIME}). Stopping simulation.")
                 break
 
             batch_datetime = self.provider.get_simulation_clock().from_relative_seconds(
@@ -198,7 +203,7 @@ class Simulator:
                     vehicle_avail_pool,
                     all_requests_in_pool,
                     self.provider.graph,
-                    output_dir=output_dir or PLOT_DIR,
+                    output_dir=PLOT_DIR,
                     datetime=batch_datetime,
                 )
             if PLOT_RTV_GRAPH:
@@ -207,7 +212,7 @@ class Simulator:
                     vehicle_avail_pool,
                     all_requests_in_pool,
                     self.provider.graph,
-                    output_dir=output_dir or PLOT_DIR,
+                    output_dir=PLOT_DIR,
                     datetime=batch_datetime,
                 )
 
@@ -301,6 +306,7 @@ class Simulator:
             batch_stats = BatchStatistics(
                 batch_id=batch_count,
                 sim_time=t_now,
+                timestamp=batch_datetime,
                 is_warmup=is_warmup,
                 requests_new=c_stats.new_requests_count,
                 requests_active=len(all_requests_in_pool),
