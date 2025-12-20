@@ -52,7 +52,7 @@ def run_simulation(
     output_manager = SimulationOutputManager(
         base_dir=base_output_dir, run_name=run_name
     )
-    
+
     # Save explicit parameters instead of global config
     run_params = {
         "OMEGA": omega,
@@ -145,7 +145,7 @@ def run_simulation(
 
 if __name__ == "__main__":
     # Define stress test scenarios
-    FACTOR = 1.1
+    FACTOR = 2
     BATCH_SIZE = 100
 
     scenarios = [
@@ -207,6 +207,7 @@ if __name__ == "__main__":
 
     if results:
         import json
+
         json_path = os.path.join(batch_run_dir, "comparison_results.json")
         try:
             with open(json_path, "w") as f:
