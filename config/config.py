@@ -7,7 +7,7 @@ DELTA = 5 * 60  # 5 minutes in seconds
 
 
 # SIM
-BATCH_DURATION = 30  # 30 seconds
+BATCH_DURATION = 20  # 30 seconds
 # data
 NUMBER_OF_VEHICLES = 2500
 VEHICLE_CAPACITY = 4  # vehicle capacity
@@ -24,15 +24,15 @@ PLOT_RTV_GRAPH = False
 
 MIN_START_TIME = 0  # after 3 days
 MIN_START_TIME = (
-    2 * 24 * 3600 + 19 * 3600 + 7 * 60 + 35 - 10 * 60 - 30 - 30
+    2 * 24 * 3600 + 11 * 3600 + 7 * 60 + 35 - 10 * 60 - 30 - 30
 )  # after 2 days 15 hours 7 minutes 35 seconds
-WARMUP_DURATION = 15 * 60
 WARMUP_DURATION = 0
+WARMUP_DURATION = 15 * 60
 END_TIME = MIN_START_TIME + WARMUP_DURATION + 3600 * 16
 
 
-MAX_BATCHES = 1e10  # no limit by default
 MAX_BATCHES = 5  # no limit by default
+MAX_BATCHES = 1e10  # no limit by default
 
 MIN_REQUESTS_TO_PROCESS = 0  # this should be zero for normal runs
 

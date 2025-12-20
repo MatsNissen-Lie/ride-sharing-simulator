@@ -5,7 +5,9 @@ from typing import Dict, Any
 
 
 def plot_stress_test_comparison(
-    results: list[Dict[str, Any]], output_dir: str, batch_size: int
+    results: list[Dict[str, Any]],
+    output_dir: str,
+    title: str = "Simulation Runtime Comparison",
 ):
     """
     Plots a comparison of runtimes for different scenarios.
@@ -33,7 +35,7 @@ def plot_stress_test_comparison(
     )
 
     plt.ylabel("Total Batch Runtime (s)")
-    plt.title("Simulation Runtime Comparison (Mega Batch)")
+    plt.title(title)
     plt.grid(axis="y", linestyle="--", alpha=0.7)
 
     # Add value labels on top of bars
@@ -64,7 +66,7 @@ def plot_stress_test_comparison(
 
         plot_df.plot(kind="bar", stacked=True, figsize=(10, 6))
         plt.ylabel("Runtime (s)")
-        plt.title("Runtime Breakdown per Scenario")
+        plt.title(f"{title} - Breakdown")
         plt.xticks(rotation=0)
         plt.grid(axis="y", linestyle="--", alpha=0.7)
         plt.legend(title="Component")

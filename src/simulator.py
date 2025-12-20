@@ -14,6 +14,7 @@ from config.config import (
     MEGA_BATCH_SIZE,
     BATCH_DURATION,
     END_TIME,
+    WARMUP_DURATION,
 )
 from config.paths import PLOT_DIR
 from src.components.batch_controller import BatchController
@@ -61,9 +62,9 @@ class Simulator:
     def run(
         self,
         request_iterator: Iterator[MetaRequest],
-        batch_duration: int,
         min_start_time: float,
-        warmup_duration: float = 0.0,
+        batch_duration: int = BATCH_DURATION,
+        warmup_duration: float = WARMUP_DURATION,
         mega_batch_mode: bool = MEGA_BATCH_MODE,
         mega_batch_size: int = MEGA_BATCH_SIZE,
         max_batches: int | float = MAX_BATCHES,

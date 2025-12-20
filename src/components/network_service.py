@@ -1,6 +1,7 @@
 import itertools
 from typing import Iterable
 import time
+from functools import lru_cache
 import networkx as nx
 import numpy as np
 
@@ -193,6 +194,64 @@ class NetworkXService(INetworkService):
         return self._db.get_travel_time_matrix(origins, destinations)
 
     def get_shortest_path_with_travel_time(
+        self, origin_node: int, destination_node: int
+    ) -> NetworkPathExtended | None:
+        return self._get_cached_path(origin_node, destination_node)
+
+    @lru_cache(maxsize=50_000)
+    def _get_cached_path(
+        self, origin_node: int, destination_node: int
+    ) -> NetworkPathExtended | None:
+        # 1. Check for basic connectivity first (Fast L1 lookup)
+        # using the simple matrix lookup to fail fast if no path exists
+        # or if nodes are invalid
+        direct_time = self.get_travel_time(origin_node, destination_node)
+        if direct_time == float("inf"):
+            return None
+
+        # 2. Compute Path (NetworkX Dijkstra)
+        try:
+            if self.G is None:
+                raise RuntimeError("Underlying graph is not initialized.")
+
+            nodes = nx.shortest_path(
+                self.G, origin_node, destination_node, weight="travel_time"
+            )
+        except nx.NetworkXNoPath:
+            return None
+
+        # 3. Compute Metrics
+        total_time = 0.0
+        total_dist = 0.0
+        edge_times_list: list[float] = []
+        G = self.G
+
+        # Optimize: get edge attributes via G[u][v]
+        # MultiDiGraph stores multiple edges, we need the one with min travel_time
+        # This loop is unavoidable if we need the *sequence* of edge times/dist
+
+        for u, v in zip(nodes, nodes[1:]):
+            # This is the most expensive part after Dijkstra
+            edge_data = G[u][v]
+            # Fast path for single edge
+            if len(edge_data) == 1:
+                edge_attr = next(iter(edge_data.values()))
+            else:
+                edge_attr = min(edge_data.values(), key=lambda a: a["travel_time"])
+
+            t = float(edge_attr["travel_time"])
+            total_time += t
+            total_dist += float(edge_attr.get("length", 0.0))
+            edge_times_list.append(t)
+
+        return NetworkPathExtended(
+            nodes=tuple(nodes),
+            travel_times=tuple(edge_times_list),
+            travel_time=total_time,
+            travel_distance=total_dist,
+        )
+
+    def get_shortest_path_with_travel_time_old(
         self, origin_node: int, destination_node: int
     ) -> NetworkPathExtended | None:
         # 1) Single round-trip to cache

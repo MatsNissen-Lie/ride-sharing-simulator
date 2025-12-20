@@ -3,9 +3,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import os
-import re
-from datetime import datetime
-import matplotlib.dates as mdates
 
 
 def generate_plots(csv_path):
@@ -15,6 +12,10 @@ def generate_plots(csv_path):
     # 0. Preprocessing: Datetime
     if "timestamp" in df.columns:
         df["timestamp"] = pd.to_datetime(df["timestamp"])
+        # Fix: Strip timezone info to ensure plots show local time (e.g. 16:11) instead of UTC (21:11)
+        # This keeps the "wall clock" time from the string rather than converting to UTC.
+        if isinstance(df["timestamp"].dtype, pd.DatetimeTZDtype):
+            df["timestamp"] = df["timestamp"].dt.tz_localize(None)  # type: ignore
         x_col = "timestamp"
         x_label = "Time of Day"
 
@@ -25,12 +26,13 @@ def generate_plots(csv_path):
             # Note: fig is defined later in each plot block, so this call might fail if fig is not in scope.
             # For now, assuming fig is accessible or will be handled by the context where format_xaxis is called.
             # The original code had this structure, so maintaining it.
-            if 'fig' in locals() or 'fig' in globals(): # Check if fig is defined
+            if "fig" in locals() or "fig" in globals():  # Check if fig is defined
                 fig.autofmt_xdate()  # Rotation
 
     else:
-        x_col = 'sim_time'
-        x_label = 'Simulation Time (s)'
+        x_col = "sim_time"
+        x_label = "Simulation Time (s)"
+
         def format_xaxis(ax):
             pass
 
@@ -147,30 +149,48 @@ def generate_plots(csv_path):
 
     # 4. Fleet Utilization
     plt.figure(figsize=(10, 6))
+
+    # Calculate total fleet size from the first row (assuming fixed fleet size)
+    total_vehicles = df["vehicles_active"].iloc[0] + df["vehicles_idle"].iloc[0]
+
     plt.plot(df[x_col], df["vehicles_active"], label="Active Vehicles", color="green")
-    plt.plot(df[x_col], df["vehicles_idle"], label="Idle Vehicles", color="red")
+    # plt.plot(df[x_col], df["vehicles_idle"], label="Idle Vehicles", color="red") # removed as requested
+
     plt.xlabel(x_label)
     if "timestamp" in df.columns:
         plt.gca().xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
         plt.gcf().autofmt_xdate()
+
     plt.ylabel("Vehicle Count")
-    plt.title("Fleet Utilization Over Time")
+    plt.title(f"Fleet Utilization Over Time (Total Fleet: {total_vehicles})")
     plt.legend()
     plt.grid(True)
     plt.savefig(os.path.join(output_dir, "fleet_utilization.png"))
     plt.close()
     print("Generated fleet_utilization.png")
 
-    # 5. Service Rate (Cumulative)
+    # 5. Service Throughput (Requests per Batch)
     plt.figure(figsize=(10, 6))
-    plt.plot(df[x_col], df["requests_delivered"], marker="x", color="purple")
+    
+    # Calculate final completion metric for title (Served / (Served + Expired))
+    total_delivered = df["requests_delivered"].sum()
+    total_expired = df["requests_expired"].sum()
+    total_finished = total_delivered + total_expired
+    final_rate = (total_delivered / total_finished * 100) if total_finished > 0 else 0.0
+
+    # Plot Incoming vs Served (Per Batch)
+    plt.plot(df[x_col], df["requests_new"], label="Incoming Requests", color="black", linestyle="--", alpha=0.5)
+    plt.plot(df[x_col], df["requests_delivered"], label="Served Requests", color="purple", linewidth=1.5, marker=".")
+    
     plt.xlabel(x_label)
     if "timestamp" in df.columns:
         plt.gca().xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
         plt.gcf().autofmt_xdate()
-    plt.ylabel("Requests Delivered per Batch")
-    plt.title("Service Throughput")
+    
+    plt.ylabel("Requests per Batch")
+    plt.title(f"Service Throughput (Completion Rate: {final_rate:.1f}%)")
     plt.grid(True)
+    plt.legend()
     plt.savefig(os.path.join(output_dir, "service_throughput.png"))
     plt.close()
     print("Generated service_throughput.png")
@@ -217,7 +237,7 @@ def generate_plots(csv_path):
 
 if __name__ == "__main__":
 
-    PATH = Path("reports/2025-12-19_18-56-06_sim_standard")
+    PATH = Path("reports/herorun1")
     csv_file = PATH / "simulation_stats.csv"
 
     if csv_file.exists():

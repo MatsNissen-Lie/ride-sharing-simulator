@@ -372,7 +372,7 @@ class RVGraphBuilder(IRVGraphBuilder):
 
         # --- PATH A: SEQUENTIAL (Low Volume) ---
         # 12000 is a safe crossover point where overhead usually breaks even
-        if count < 12000:
+        if count < 12000 or True:
             logger.info(f"RV Occupied: Processing {count} tasks sequentially.")
 
             # 1. Calculation Phase (Pure, Parallelizable logic if needed)
@@ -398,6 +398,7 @@ class RVGraphBuilder(IRVGraphBuilder):
             return
 
         # --- PATH B: PARALLEL (High Volume) ---
+        # this is tooo slow
         logger.warning(f"RV Occupied: Processing {count} tasks in Parallel Pool.")
         l1_cache_copy = self._network.get_l1_cache()
         chunk_size = 400

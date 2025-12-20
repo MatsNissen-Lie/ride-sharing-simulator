@@ -29,11 +29,16 @@ logger = get_logger("sim_runner")
 
 def run_simulation(
     run_name: str,
+    provider: SimulationDataProvider,
+    db_cache: DuckDBPathCache,
+    network_service: NetworkXService,
+    planner: RoutePlanner,
     omega: float = OMEGA,
     delta: float = DELTA,
     mega_batch_mode: bool = MEGA_BATCH_MODE,
     mega_batch_size: int = MEGA_BATCH_SIZE,
     num_vehicles: int = NUMBER_OF_VEHICLES,
+    batch_duration: int = BATCH_DURATION,
     base_output_dir: str = "reports",
 ) -> dict | None:
     """
@@ -42,7 +47,7 @@ def run_simulation(
     """
     logger.info(f"=== Starting Scenario: {run_name} ===")
     logger.info(
-        f"Params: omega={omega}, delta={delta}, mega_mode={mega_batch_mode}, mega_size={mega_batch_size}, vehicles={num_vehicles}"
+        f"Params: omega={omega}, delta={delta}, mega_mode={mega_batch_mode}, mega_size={mega_batch_size}, vehicles={num_vehicles}, batch_duration={batch_duration}"
     )
 
     output_manager = SimulationOutputManager(
@@ -50,14 +55,8 @@ def run_simulation(
     )
     output_manager.save_metadata(config)
 
-    # Initialize Core Components
-    NUMBER_OF_VEHICLES = 2500
-    provider = SimulationDataProvider(vehicle_count=NUMBER_OF_VEHICLES)
-    db_cache = DuckDBPathCache(read_only=True)
-    network_service = NetworkXService(provider.graph, db=db_cache)
-    planner = RoutePlanner(network_service=network_service)
-
     # Initialize Algorithm Pipeline with Injected Params
+
     controller = BatchController(
         network_service, provider.iter_vehicles(num_vehicles), omega=omega, delta=delta
     )
@@ -89,7 +88,7 @@ def run_simulation(
     try:
         for stats in simulator.run(
             request_iterator=req_iter,
-            batch_duration=BATCH_DURATION,
+            batch_duration=batch_duration,
             min_start_time=MIN_START_TIME,
             warmup_duration=WARMUP_DURATION,
             mega_batch_mode=mega_batch_mode,
@@ -111,9 +110,9 @@ def run_simulation(
         stats_logger.flush_to_csv(csv_path)
         stats_logger.print_summary()
 
-    finally:
-        db_cache.close()
-        # Restore config
+    except Exception as e:
+        logger.error(f"Error during simulation: {e}")
+        raise e
 
     logger.info(f"=== Scenario {run_name} Completed ===\n")
 
@@ -135,7 +134,7 @@ if __name__ == "__main__":
     # Define stress test scenarios
     OMEGA, DELTA = 300 * 2, 600 * 2  # Base values
     FACTOR = 2
-    BATCH_SIZE = 200
+    BATCH_SIZE = 150
     scenarios = [
         {
             "name": f"Ω,Δ = {OMEGA / FACTOR},{DELTA / FACTOR}",
@@ -156,27 +155,45 @@ if __name__ == "__main__":
 
     # Create a shared timestamped folder for this batch of runs
     timestamp_str = time.strftime("%Y-%m-%d_%H-%M-%S")
-    batch_run_dir = os.path.join("reports", f"stress_test_{timestamp_str}")
+    batch_run_dir = os.path.join("reports", f"constraint_test_{timestamp_str}")
     os.makedirs(batch_run_dir, exist_ok=True)
     logger.info(f"📂 Saving all runs in: {batch_run_dir}")
 
+    # Initialize Core Components ONCE
+    # Use max required vehicles to ensure provider has enough
+    MAX_VEHICLES = 2500
+    logger.info("Initializing shared simulation components (Graph, DB, Planner)...")
+    provider = SimulationDataProvider(vehicle_count=MAX_VEHICLES)
+    db_cache = DuckDBPathCache(read_only=True)
+    network_service = NetworkXService(provider.graph, db=db_cache)
+    planner = RoutePlanner(network_service=network_service)
+
     results = []
-    for s in scenarios:
-        scenario_result = run_simulation(
-            run_name=s["name"],
-            omega=s.get("omega", OMEGA),
-            delta=s.get("delta", DELTA),
-            mega_batch_mode=True,
-            mega_batch_size=40,
-            base_output_dir=batch_run_dir,
-        )
-        if scenario_result:
-            results.append(scenario_result)
+    try:
+        for s in scenarios:
+            scenario_result = run_simulation(
+                run_name=s["name"],
+                provider=provider,
+                db_cache=db_cache,
+                network_service=network_service,
+                planner=planner,
+                omega=s.get("omega", OMEGA),
+                delta=s.get("delta", DELTA),
+                batch_duration=s.get("batch_duration", BATCH_DURATION),
+                mega_batch_mode=True,
+                mega_batch_size=40,
+                base_output_dir=batch_run_dir,
+            )
+            if scenario_result:
+                results.append(scenario_result)
+    finally:
+        logger.info("Closing shared DB connection.")
+        db_cache.close()
 
     if results:
         logger.info(f"📊 Generating runtime comparison plot in {batch_run_dir}...")
         plot_stress_test_comparison(
             results,
             batch_run_dir,
-            batch_size=BATCH_SIZE,
+            title=f"Simulation Runtime Comparison (Batch Size = {BATCH_SIZE})",
         )
