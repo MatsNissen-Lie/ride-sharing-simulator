@@ -40,7 +40,7 @@ class NetworkXService(INetworkService):
             self.N = 0
 
         # L2: Persistent Storage
-        self._db = db if db is not None else DuckDBPathCache()
+        self._db = db if db is not None else DuckDBPathCache(read_only=True)
 
         # --- NUCLEAR CACHE SETUP ---
         # 4600^2 * 4 bytes = ~85 MB. Cheap!

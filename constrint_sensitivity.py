@@ -93,6 +93,7 @@ def run_simulation(
             warmup_duration=WARMUP_DURATION,
             mega_batch_mode=mega_batch_mode,
             mega_batch_size=mega_batch_size,
+            max_batches=1,
         ):
             if isinstance(stats, BatchStatistics):
                 if not stats.is_warmup:

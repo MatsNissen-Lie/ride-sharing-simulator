@@ -7,7 +7,7 @@ DELTA = 5 * 60  # 5 minutes in seconds
 
 
 # SIM
-BATCH_DURATION = 20  # 30 seconds
+BATCH_DURATION = 30  # 30 seconds
 # data
 NUMBER_OF_VEHICLES = 2500
 VEHICLE_CAPACITY = 4  # vehicle capacity

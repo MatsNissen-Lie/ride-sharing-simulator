@@ -52,7 +52,16 @@ def run_simulation(
     output_manager = SimulationOutputManager(
         base_dir=base_output_dir, run_name=run_name
     )
-    output_manager.save_metadata(config)
+    
+    # Save explicit parameters instead of global config
+    run_params = {
+        "OMEGA": omega,
+        "DELTA": delta,
+        "MEGA_BATCH_MODE": mega_batch_mode,
+        "MEGA_BATCH_SIZE": mega_batch_size,
+        "NUMBER_OF_VEHICLES": num_vehicles,
+    }
+    output_manager.save_metadata(run_params)
 
     # Initialize Algorithm Pipeline with Injected Params
     # Note: provider.iter_vehicles needs to be reset/called fresh?
@@ -91,9 +100,10 @@ def run_simulation(
             request_iterator=req_iter,
             batch_duration=BATCH_DURATION,
             min_start_time=MIN_START_TIME,
-            warmup_duration=WARMUP_DURATION,
             mega_batch_mode=mega_batch_mode,
             mega_batch_size=mega_batch_size,
+            warmup_duration=0,
+            max_batches=1,
         ):
             if isinstance(stats, BatchStatistics):
                 if not stats.is_warmup:
@@ -135,27 +145,27 @@ def run_simulation(
 
 if __name__ == "__main__":
     # Define stress test scenarios
-    FACTOR = 2
+    FACTOR = 1.1
     BATCH_SIZE = 100
 
     scenarios = [
         {
-            "name": f"Batch Size = {BATCH_SIZE}",
+            "name": f"Pool Size = {BATCH_SIZE}",
             "omega": OMEGA / 1,
             "delta": DELTA / 1,
-            "batch_size": BATCH_SIZE * FACTOR,
+            "batch_size": BATCH_SIZE,
         },
         {
-            "name": f"Batch Size = {BATCH_SIZE*FACTOR} ",
+            "name": f"Pool Size = {int(BATCH_SIZE*FACTOR)} ",
             "omega": OMEGA,
             "delta": DELTA,
-            "batch_size": BATCH_SIZE * FACTOR,
+            "batch_size": int(BATCH_SIZE * FACTOR),
         },
         {
-            "name": f"Batch Size = {400}",
+            "name": f"Pool Size = {int(BATCH_SIZE*FACTOR*FACTOR)} ",
             "omega": OMEGA * 1,
             "delta": DELTA * 1,
-            "batch_size": 400,
+            "batch_size": int(BATCH_SIZE * FACTOR * FACTOR),
         },
     ]
 
@@ -196,6 +206,15 @@ if __name__ == "__main__":
         db_cache.close()
 
     if results:
+        import json
+        json_path = os.path.join(batch_run_dir, "comparison_results.json")
+        try:
+            with open(json_path, "w") as f:
+                json.dump(results, f, indent=4)
+            logger.info(f"✅ Saved results to {json_path}")
+        except Exception as e:
+            logger.error(f"Failed to save results to JSON: {e}")
+
         logger.info(f"📊 Generating runtime comparison plot in {batch_run_dir}...")
         plot_stress_test_comparison(
             results,

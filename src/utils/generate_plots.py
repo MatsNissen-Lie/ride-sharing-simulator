@@ -66,32 +66,33 @@ def generate_plots(csv_path):
     ax1.tick_params(axis="y")
     ax1.grid(True, alpha=0.7, linestyle="--")
 
-    # Secondary Axis: Incoming Requests
-    ax2 = ax1.twinx()
-    req_color = "black"
-    ax2.set_ylabel("Incoming Requests (New)", color=req_color)
-    ax2.plot(
-        df[x_col],
-        df["requests_new"],
-        color=req_color,
-        linestyle="-",
-        linewidth=1.5,
-        label="Incoming Requests",
-        alpha=0.7,
-    )
-    ax2.tick_params(axis="y", labelcolor=req_color)
 
-    plt.title("Computational Runtime Breakdown")
 
     # Combined Legend
-    lines_1, labels_1 = ax1.get_legend_handles_labels()
-    lines_2, labels_2 = ax2.get_legend_handles_labels()
-    ax1.legend(lines_1 + lines_2, labels_1 + labels_2, loc="upper left", frameon=True)
+    ax1.legend(loc="upper left")
 
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "runtime_breakdown.png"), dpi=300)
     plt.close()
     print("Generated runtime_breakdown.png")
+
+    # 1.5. Incoming and Active Requests (Standalone)
+    plt.figure(figsize=(10, 6))
+    plt.plot(df[x_col], df["requests_new"], label="Incoming Requests (New)", color="black", linestyle="-", linewidth=1.5)
+    plt.plot(df[x_col], df["requests_active"], label="Active Requests (Queue)", color="tab:orange", linestyle="-", linewidth=1.5)
+    
+    plt.xlabel(x_label)
+    if "timestamp" in df.columns:
+        plt.gca().xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+        plt.gcf().autofmt_xdate()
+    
+    plt.ylabel("Request Count")
+    plt.title("Request Volume")
+    plt.grid(True)
+    plt.legend()
+    plt.savefig(os.path.join(output_dir, "request_volume.png"))
+    plt.close()
+    print("Generated request_volume.png")
 
     # 2. Graph Size / Scalability (Dual Axis)
     # Columns: rv_edges, trips_count

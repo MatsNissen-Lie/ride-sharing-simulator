@@ -78,15 +78,7 @@ class Simulator:
         for batch in self.controller.iter_batches(
             request_iterator, batch_duration, min_start_time=min_start_time
         ):
-            batch_start = time.perf_counter()
-            batch_count += 1
             t_now, all_requests_in_pool, vehicle_avail_pool = batch
-
-            if max_batches is not None and batch_count > max_batches:
-                logger.info(
-                    f"🛑 Reached max batches limit ({max_batches}). Stopping simulation."
-                )
-                break
 
             if t_now >= END_TIME:
                 logger.info(f"🛑 Reached end time ({END_TIME}). Stopping simulation.")
@@ -149,6 +141,13 @@ class Simulator:
                 # Override the current batch connection
                 all_requests_in_pool = refreshed_requests
                 self.mega_pool = []  # Reset for next mega batch (or we could break)
+
+            batch_count += 1
+            if max_batches is not None and batch_count > max_batches:
+                logger.info(
+                    f"🛑 Reached max batches limit ({max_batches}). Stopping simulation at batch {batch_count}."
+                )
+                break
 
             start_loop_time = time.perf_counter()
             logger.info("--- Batch %d starting at t=%.2f ---", batch_count, t_now)

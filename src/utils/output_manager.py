@@ -26,20 +26,23 @@ class SimulationOutputManager:
         """Return the absolute path to the current run directory."""
         return self.run_dir
 
-    def save_metadata(self, config_module: Any) -> None:
+    def save_metadata(self, config_source: Any) -> None:
         """
         Save configuration variables to metadata.json.
-        Excludes variables starting with 'MIN_' or containing 'min' if requested,
-        but typically we just grab upper case ones.
+        Accepts a module (extracts UPPERCASE vars) or a dictionary.
         """
         metadata = {}
-        # Extract all UPPERcase variables from the config module
-        for key in dir(config_module):
-            if key.isupper():
-                # Filter out MIN_ variables as per user feedback
-                if key.startswith("MIN_"):
-                    continue
-                metadata[key] = getattr(config_module, key)
+        
+        if isinstance(config_source, dict):
+            metadata = config_source
+        else:
+            # Extract all UPPERcase variables from the config module
+            for key in dir(config_source):
+                if key.isupper():
+                    # Filter out MIN_ variables as per user feedback
+                    if key.startswith("MIN_"):
+                        continue
+                    metadata[key] = getattr(config_source, key)
 
         metadata_path = os.path.join(self.run_dir, "metadata.json")
         try:
