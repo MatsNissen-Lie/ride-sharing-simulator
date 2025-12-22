@@ -131,35 +131,72 @@ def generate_plots(csv_path):
     plt.close()
     print("Generated graph_size_complexity.png")
 
-    # 3. Average Delay Over Time
+    # 3. Average Delay Breakdown (Stacked Area)
+    # Wait Time + Detour Delay = Total Delay
     plt.figure(figsize=(10, 6))
-    if "avg_total_delay" in df.columns:
+    if "avg_total_delay" in df.columns and "avg_wait_time" in df.columns:
         # Filter: Only plot batches where requests were actually served
-        df_served = df[df["requests_delivered"] > 0]
+        df_served = df[df["requests_delivered"] > 0].copy()
+
         if not df_served.empty:
-            plt.plot(
+            # Derived metric: Detour = Total - Wait
+            df_served["avg_detour_delay"] = (
+                df_served["avg_total_delay"] - df_served["avg_wait_time"]
+            )
+            # Ensure no negative values due to floating point or data quirks
+            df_served["avg_detour_delay"] = df_served["avg_detour_delay"].clip(lower=0)  # type: ignore
+
+            # Calculate Global Average Delay (Weighted by request count)
+            total_weighted_delay = (
+                df_served["avg_total_delay"] * df_served["requests_delivered"]
+            ).sum()
+            total_served = df_served["requests_delivered"].sum()
+            global_avg_delay = (
+                total_weighted_delay / total_served if total_served > 0 else 0.0
+            )
+
+            # Stacked Area Plot
+            plt.stackplot(
                 df_served[x_col],
-                df_served["avg_total_delay"],
-                label="Avg Delay",
-                linewidth=1.5,
+                df_served["avg_wait_time"],
+                df_served["avg_detour_delay"],
+                labels=["Avg Wait Time", "Avg Detour Delay"],
+                colors=["#3498db", "#e74c3c"],
+                alpha=0.7,
+            )
+
+            # Optional: Plot Total Delay as a line on top for clarity
+            # plt.plot(
+            #     df_served[x_col],
+            #     df_served["avg_total_delay"],
+            #     label="Total Delay",
+            #     color="#c92d2d",
+            #     linewidth=0.3,
+            #     linestyle="-",
+            # )
+
+            plt.legend(loc="upper left")
+            plt.title(
+                f"Average Delay Breakdown (Wait + Detour) | Mean: {global_avg_delay:.2f}s"
             )
         else:
             plt.plot([], [], label="No Data")
-
-        plt.title("Average Delay per Batch")
-        plt.ylabel("Delay (s)")
+            plt.legend()
+            plt.title("Average Delay Breakdown (Wait + Detour)")
+        plt.ylabel("Time (s)")
     else:
-        plt.plot([], [], label="Missing avg_total_delay")
+        plt.plot([], [], label="Missing delay columns")
+        plt.legend()
 
     plt.xlabel(x_label)
     if "timestamp" in df.columns:
         plt.gca().xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
         plt.gcf().autofmt_xdate()
 
-    plt.grid(True)
+    plt.grid(True, alpha=0.5)
     plt.savefig(os.path.join(output_dir, "average_delay_over_time.png"))
     plt.close()
-    print("Generated average_delay_over_time.png")
+    print("Generated average_delay_over_time.png (Stacked)")
 
     # 4. Fleet Utilization
     plt.figure(figsize=(10, 6))
@@ -245,16 +282,19 @@ def generate_plots(csv_path):
         # ShareX so format applied to bottom axis will affect top too technically if shared,
         # but let's apply to both or just bottom if standard sharex behavior
 
-        # Bottom: Trip Sizes
-        # Plot each size as a line
-        for col in active_size_cols:
-            rank = col.replace("candidate_trips_size_", "")
-            ax2.plot(df[x_col], df[col], label=f"Size {rank} Trips")
+        # Bottom: Trip Sizes (Stacked Area)
+        # Prepare data for stackplot
+        trip_data = [df[col] for col in active_size_cols]
+        trip_labels = [
+            col.replace("candidate_trips_size_", "Size ") for col in active_size_cols
+        ]
+
+        ax2.stackplot(df[x_col], trip_data, labels=trip_labels, alpha=1)
 
         ax2.set_ylabel("Count (Candidate Trips)")
         ax2.set_xlabel(x_label)
         format_xaxis(ax2)
-        ax2.grid(True, alpha=0.3)
+        ax2.grid(True, alpha=0.7)
         ax2.legend(loc="upper left")
 
         plt.tight_layout()
