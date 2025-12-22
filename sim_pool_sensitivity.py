@@ -162,6 +162,12 @@ if __name__ == "__main__":
             "batch_size": int(BATCH_SIZE * FACTOR),
         },
         {
+            "name": f"Pool Size = {int(BATCH_SIZE*3)} ",
+            "omega": OMEGA,
+            "delta": DELTA,
+            "batch_size": int(BATCH_SIZE * 3),
+        },
+        {
             "name": f"Pool Size = {int(BATCH_SIZE*FACTOR*FACTOR)} ",
             "omega": OMEGA * 1,
             "delta": DELTA * 1,

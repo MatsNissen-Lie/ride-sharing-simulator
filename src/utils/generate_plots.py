@@ -52,6 +52,7 @@ def generate_plots(csv_path):
         "time_assign": "ILP Assignment",
         "time_rtv": "RTV Graph",
     }
+
     runtime_cols = list(columns_and_labels.keys())
     labels = list(columns_and_labels.values())
 
@@ -66,8 +67,6 @@ def generate_plots(csv_path):
     ax1.tick_params(axis="y")
     ax1.grid(True, alpha=0.7, linestyle="--")
 
-
-
     # Combined Legend
     ax1.legend(loc="upper left")
 
@@ -78,14 +77,28 @@ def generate_plots(csv_path):
 
     # 1.5. Incoming and Active Requests (Standalone)
     plt.figure(figsize=(10, 6))
-    plt.plot(df[x_col], df["requests_new"], label="Incoming Requests (New)", color="black", linestyle="-", linewidth=1.5)
-    plt.plot(df[x_col], df["requests_active"], label="Active Requests (Queue)", color="tab:orange", linestyle="-", linewidth=1.5)
-    
+    plt.plot(
+        df[x_col],
+        df["requests_new"],
+        label="Incoming Requests (New)",
+        color="black",
+        linestyle="-",
+        linewidth=1.5,
+    )
+    plt.plot(
+        df[x_col],
+        df["requests_active"],
+        label="Active Requests (Queue)",
+        color="tab:orange",
+        linestyle="-",
+        linewidth=1.5,
+    )
+
     plt.xlabel(x_label)
     if "timestamp" in df.columns:
         plt.gca().xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
         plt.gcf().autofmt_xdate()
-    
+
     plt.ylabel("Request Count")
     plt.title("Request Volume")
     plt.grid(True)
@@ -127,8 +140,8 @@ def generate_plots(csv_path):
             plt.plot(
                 df_served[x_col],
                 df_served["avg_total_delay"],
-                marker="o",
                 label="Avg Delay",
+                linewidth=1.5,
             )
         else:
             plt.plot([], [], label="No Data")
@@ -172,7 +185,7 @@ def generate_plots(csv_path):
 
     # 5. Service Throughput (Requests per Batch)
     plt.figure(figsize=(10, 6))
-    
+
     # Calculate final completion metric for title (Served / (Served + Expired))
     total_delivered = df["requests_delivered"].sum()
     total_expired = df["requests_expired"].sum()
@@ -180,14 +193,28 @@ def generate_plots(csv_path):
     final_rate = (total_delivered / total_finished * 100) if total_finished > 0 else 0.0
 
     # Plot Incoming vs Served (Per Batch)
-    plt.plot(df[x_col], df["requests_new"], label="Incoming Requests", color="black", linestyle="--", alpha=0.5)
-    plt.plot(df[x_col], df["requests_delivered"], label="Served Requests", color="purple", linewidth=1.5, marker=".")
-    
+    plt.plot(
+        df[x_col],
+        df["requests_new"],
+        label="Incoming Requests",
+        color="black",
+        # linestyle="--",
+        alpha=0.5,
+    )
+    plt.plot(
+        df[x_col],
+        df["requests_delivered"],
+        label="Served Requests",
+        color="purple",
+        # linewidth=1.,
+        # marker=".",
+    )
+
     plt.xlabel(x_label)
     if "timestamp" in df.columns:
         plt.gca().xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
         plt.gcf().autofmt_xdate()
-    
+
     plt.ylabel("Requests per Batch")
     plt.title(f"Service Throughput (Completion Rate: {final_rate:.1f}%)")
     plt.grid(True)
@@ -235,10 +262,149 @@ def generate_plots(csv_path):
         plt.close()
         print("Generated runtime_vs_trip_sizes.png")
 
+    # 7. Assigned Trip Sizes
+    assigned_trip_cols = [c for c in df.columns if "assigned_trips_size_" in c]
+    # Filter to only sizes that actually have data > 0 at some point
+    active_assigned_cols = [c for c in assigned_trip_cols if df[c].sum() > 0]
+
+    if active_assigned_cols:
+        plt.figure(figsize=(10, 6))
+        for col in active_assigned_cols:
+            rank = col.replace("assigned_trips_size_", "")
+            plt.plot(df[x_col], df[col], label=f"Size {rank} Trips")
+
+        plt.xlabel(x_label)
+        if "timestamp" in df.columns:
+            plt.gca().xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+            plt.gcf().autofmt_xdate()
+
+        plt.ylabel("Count (Assigned Trips)")
+        plt.title("Assigned Trip Sizes Over Time")
+        plt.legend()
+        plt.grid(True)
+        plt.savefig(os.path.join(output_dir, "assigned_trip_sizes.png"))
+        plt.close()
+        print("Generated assigned_trip_sizes.png")
+
+        # 8. Assigned Trip Sizes Distribution (Pie Chart)
+        plt.figure(figsize=(10, 6))
+        sums = [df[col].sum() for col in active_assigned_cols]
+        total_assigned = sum(sums)
+
+        # Create labels with percentages for the legend
+        legend_labels = []
+        for col, s in zip(active_assigned_cols, sums):
+            rank = col.replace("assigned_trips_size_", "")
+            pct = (s / total_assigned * 100) if total_assigned > 0 else 0
+            legend_labels.append(f"Size {rank} ({pct:.2f}%)")
+
+        pie_result = plt.pie(sums, labels=None, startangle=140)
+        wedges = pie_result[0]
+
+        plt.legend(
+            wedges,
+            legend_labels,
+            title="Trip Sizes",
+            loc="center left",
+            bbox_to_anchor=(1, 0, 0.5, 1),
+        )
+        plt.title("Distribution of Assigned Trip Sizes")
+        plt.axis("equal")
+        plt.tight_layout()
+
+        plt.savefig(os.path.join(output_dir, "assigned_trip_sizes_pie.png"))
+        plt.close()
+        print("Generated assigned_trip_sizes_pie.png")
+
+    # 9. Candidate Trip Sizes Distribution (Pie Chart)
+    # Using active_size_cols which was computed in section 6
+    if active_size_cols:
+        plt.figure(figsize=(10, 6))
+        sums = [df[col].sum() for col in active_size_cols]
+        total_candidate = sum(sums)
+
+        # Create labels with percentages for the legend
+        legend_labels = []
+        for col, s in zip(active_size_cols, sums):
+            rank = col.replace("candidate_trips_size_", "")
+            pct = (s / total_candidate * 100) if total_candidate > 0 else 0
+            legend_labels.append(f"Size {rank} ({pct:.2f}%)")
+
+        pie_result = plt.pie(sums, labels=None, startangle=140)
+        wedges = pie_result[0]
+
+        plt.legend(
+            wedges,
+            legend_labels,
+            title="Trip Sizes",
+            loc="center left",
+            bbox_to_anchor=(1, 0, 0.5, 1),
+        )
+        plt.title("Distribution of Candidate Trip Sizes")
+        plt.axis("equal")
+        plt.tight_layout()
+
+        plt.savefig(os.path.join(output_dir, "candidate_trip_sizes_pie.png"))
+        plt.close()
+        print("Generated candidate_trip_sizes_pie.png")
+
+    # 10. Combined Trip Sizes Distribution (Side-by-Side Pie Charts)
+    # Only if both have data
+    if active_assigned_cols and active_size_cols:
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 7))
+
+        # --- Subplot 1: Assigned Trips ---
+        sums1 = [df[col].sum() for col in active_assigned_cols]
+        total1 = sum(sums1)
+        legend_labels1 = []
+        for col, s in zip(active_assigned_cols, sums1):
+            rank = col.replace("assigned_trips_size_", "")
+            pct = (s / total1 * 100) if total1 > 0 else 0
+            legend_labels1.append(f"Size {rank} ({pct:.2f}%)")
+
+        pie_result1 = ax1.pie(sums1, labels=None, startangle=140)
+        wedges1 = pie_result1[0]
+        ax1.legend(
+            wedges1,
+            legend_labels1,
+            title="Sizes",
+            loc="center left",
+            bbox_to_anchor=(0.8, 0, 0.5, 1),
+        )
+        ax1.set_title("Assigned Trip Sizes")
+        ax1.axis("equal")
+
+        # --- Subplot 2: Candidate Trips ---
+        sums2 = [df[col].sum() for col in active_size_cols]
+        total2 = sum(sums2)
+        legend_labels2 = []
+        for col, s in zip(active_size_cols, sums2):
+            rank = col.replace("candidate_trips_size_", "")
+            pct = (s / total2 * 100) if total2 > 0 else 0
+            legend_labels2.append(f"Size {rank} ({pct:.2f}%)")
+
+        pie_result2 = ax2.pie(sums2, labels=None, startangle=140)
+        wedges2 = pie_result2[0]
+        ax2.legend(
+            wedges2,
+            legend_labels2,
+            title="Sizes",
+            loc="center left",
+            bbox_to_anchor=(0.8, 0, 0.5, 1),
+        )
+        ax2.set_title("Candidate Trip Sizes")
+        ax2.axis("equal")
+
+        plt.suptitle("Comparison of Trip Size Distributions")
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, "combined_trip_sizes_pie.png"))
+        plt.close()
+        print("Generated combined_trip_sizes_pie.png")
+
 
 if __name__ == "__main__":
 
-    PATH = Path("reports/herorun1")
+    PATH = Path("reports/herorun30")
     csv_file = PATH / "simulation_stats.csv"
 
     if csv_file.exists():

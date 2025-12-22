@@ -4,7 +4,6 @@ import config.config as config
 from config import BATCH_DURATION, get_logger, NUMBER_OF_VEHICLES
 from config.config import (
     MIN_START_TIME,
-    WARMUP_DURATION,
     OMEGA,
     DELTA,
     MEGA_BATCH_MODE,
@@ -90,7 +89,7 @@ def run_simulation(
             request_iterator=req_iter,
             batch_duration=batch_duration,
             min_start_time=MIN_START_TIME,
-            warmup_duration=WARMUP_DURATION,
+            warmup_duration=0,
             mega_batch_mode=mega_batch_mode,
             mega_batch_size=mega_batch_size,
             max_batches=1,
@@ -148,6 +147,11 @@ if __name__ == "__main__":
             "delta": DELTA,
         },
         {
+            "name": f"Ω,Δ = {900},{1800}",
+            "omega": 900,
+            "delta": 1800,
+        },
+        {
             "name": f"Ω,Δ = {OMEGA * FACTOR},{DELTA * FACTOR}",
             "omega": OMEGA * FACTOR,
             "delta": DELTA * FACTOR,
@@ -182,7 +186,7 @@ if __name__ == "__main__":
                 delta=s.get("delta", DELTA),
                 batch_duration=s.get("batch_duration", BATCH_DURATION),
                 mega_batch_mode=True,
-                mega_batch_size=40,
+                mega_batch_size=BATCH_SIZE,
                 base_output_dir=batch_run_dir,
             )
             if scenario_result:

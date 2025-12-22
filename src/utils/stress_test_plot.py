@@ -60,6 +60,12 @@ def plot_stress_test_comparison(
     if "breakdown" in df.columns and bool(df["breakdown"].notna().all()):
         # Expand the breakdown dict into columns
         breakdown_df = df["breakdown"].apply(pd.Series)
+
+        # Filter out rebal time if present
+        cols_to_drop = [c for c in breakdown_df.columns if "rebal" in str(c).lower()]
+        if cols_to_drop:
+            breakdown_df.drop(columns=cols_to_drop, inplace=True)
+
         # Combine with name
         plot_df = pd.concat([df["name"], breakdown_df], axis=1)
         plot_df.set_index("name", inplace=True)
@@ -98,7 +104,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         path_to_results_folder = sys.argv[1]
     else:
-        path_to_results_folder = "reports/batch_test_good"  # Default fallback
+        path_to_results_folder = "reports/constraint_test"  # Default fallback
 
     print(f"Looking for results in: {path_to_results_folder}")
 
@@ -132,7 +138,7 @@ if __name__ == "__main__":
             plot_stress_test_comparison(
                 all_results,
                 path_to_results_folder,
-                title="Re-generated Runtime Comparison",
+                title="Runtime Comparison",
             )
         else:
             print("No valid JSON result files found.")

@@ -7,7 +7,7 @@ DELTA = 5 * 60  # 5 minutes in seconds
 
 
 # SIM
-BATCH_DURATION = 30  # 30 seconds
+BATCH_DURATION = 20  # 30 seconds
 # data
 NUMBER_OF_VEHICLES = 2500
 VEHICLE_CAPACITY = 4  # vehicle capacity
@@ -28,7 +28,7 @@ MIN_START_TIME = (
 )  # after 2 days 15 hours 7 minutes 35 seconds
 WARMUP_DURATION = 0
 WARMUP_DURATION = 15 * 60
-END_TIME = MIN_START_TIME + WARMUP_DURATION + 3600 * 16
+END_TIME = MIN_START_TIME + WARMUP_DURATION + 3600 * 24 * 2
 
 
 MAX_BATCHES = 5  # no limit by default

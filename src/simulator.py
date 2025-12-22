@@ -1,7 +1,5 @@
-from pathlib import Path
 import time
 from typing import Iterator, Any
-import logging
 
 from config import get_logger
 from config.config import (
@@ -19,7 +17,6 @@ from config.config import (
 from config.paths import PLOT_DIR
 from src.components.batch_controller import BatchController
 from src.interfaces import (
-    VehicleAvailability,
     IAssignmentSolver,
     IRVGraphBuilder,
     IRTVGraphBuilder,
@@ -31,7 +28,6 @@ from src.components.simulation_data_provider import SimulationDataProvider
 from src.interfaces.stats import BatchStatistics
 from src.utils.rtv_plot import plot_rtv_graph
 from src.utils.rv_plot import plot_rv_graph
-from src.utils.stats_logger import SimulationStatsLogger
 
 logger = get_logger(__name__)
 

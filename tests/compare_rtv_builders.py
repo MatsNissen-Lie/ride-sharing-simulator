@@ -2,16 +2,15 @@ import os
 import time
 import logging
 import traceback
-from typing import Any, List, Dict, Type
+from typing import Any, Dict, Type
 
 # Adjust path if necessary, assuming run from root
 import sys
 
 sys.path.append(os.getcwd())
 
-from config import get_logger, BATCH_DURATION, NUMBER_OF_VEHICLES, OMEGA, DELTA
-from config.config import MEGA_BATCH_MODE, MEGA_BATCH_SIZE, MIN_START_TIME
-import config.config as config
+from config import BATCH_DURATION, NUMBER_OF_VEHICLES, OMEGA, DELTA
+from config.config import MIN_START_TIME
 from src.components.batch_controller import BatchController
 from src.components.graph_builder.rtv_builder import RTVGraphBuilder
 from src.components.graph_builder.rtv_builder_min import TripCentricRTVGraphBuilder
@@ -27,7 +26,6 @@ from src.utils.output_manager import SimulationOutputManager
 from src.utils.stress_test_plot import plot_stress_test_comparison as plot_breakdown
 from src.utils.rtv_comparison_plot import plot_stress_test_comparison as plot_rtv
 from src.interfaces.stats import BatchStatistics
-from src.utils.stats_logger import SimulationStatsLogger
 
 # Setup logger
 logging.basicConfig(level=logging.INFO)
@@ -97,7 +95,7 @@ def run_single_comparison(
         db_cache=db_cache,
     )
 
-    stats_logger = SimulationStatsLogger()
+    # stats_logger = SimulationStatsLogger()
     final_stats: BatchStatistics | None = None
 
     try:
@@ -158,6 +156,12 @@ if __name__ == "__main__":
             "omega": OMEGA,
             "delta": DELTA,
             "batch_size": BATCH_SIZE * FACTOR,
+        },
+        {
+            "name": "Pool Size 300",
+            "omega": OMEGA,
+            "delta": DELTA,
+            "batch_size": BATCH_SIZE * 3,
         },
         {
             "name": "Pool Size 400",
