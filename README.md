@@ -1,4 +1,14 @@
+# Ride-sharing code and master's thesis
 
+The new master's thesis starts in [`thesis/main.tex`](thesis/main.tex).
+It contains a title page and an empty document body. Research content will be
+written after the literature review establishes the direction.
+
+Keep code and thesis changes together on each research branch. The earlier
+TIØ4500 specialization project remains in the separate `latex-ride-sharing`
+repository as reference material.
+
+Open `thesis/main.tex` in the Codex LaTeX editor to edit and preview the document.
 
 # important docs
 https://osmnx.readthedocs.io/en/stable/
