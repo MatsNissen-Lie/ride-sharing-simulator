@@ -11,6 +11,19 @@ repository as reference material.
 
 Open `thesis/main.tex` in the Codex LaTeX editor to edit and preview the document.
 
+For VS Code, open this repository folder and use the LaTeX Workshop extension.
+The workspace settings build on save with two `pdflatex` passes and format with
+`latexindent` using `thesis/.latexindent.yaml`. Build output goes to
+`thesis/build/`. This recipe does not require `latexmk`.
+
+The local TeX installation needs the packages used in `thesis/main.tex`. On the
+current BasicTeX setup, these additional packages were installed in the user
+TeX tree:
+
+```sh
+tlmgr --usermode install enumitem csquotes siunitx algorithms algorithmicx titlesec
+```
+
 # important docs
 https://osmnx.readthedocs.io/en/stable/
 https://networkx.org/documentation/stable/developer/index.html
