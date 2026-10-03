@@ -1,8 +1,9 @@
 # Ride-sharing code and master's thesis
 
 The new master's thesis starts in [`thesis/main.tex`](thesis/main.tex).
-It contains a title page and an empty document body. Research content will be
-written after the literature review establishes the direction.
+It reuses the previous project's page layout and typography, with a new title
+page and empty sections. Research content will be written after the literature
+review establishes the direction. The source is self-contained for the editor.
 
 Keep code and thesis changes together on each research branch. The earlier
 TIØ4500 specialization project remains in the separate `latex-ride-sharing`
