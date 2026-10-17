@@ -14,7 +14,7 @@ class DuckDBPathCache:
     Supports Read-Write (Main) and Read-Only (Worker) modes.
     """
 
-    def __init__(self, read_only: bool = False):
+    def __init__(self, read_only: bool = True):
         self.read_only = read_only
 
         db_path = DATA_DIR / "duckDB" / "route_db.duckdb"
@@ -24,7 +24,7 @@ class DuckDBPathCache:
         if not self.read_only:
             (db_path.parent).mkdir(parents=True, exist_ok=True)
 
-        self.connect()
+        self.connect(read_only=self.read_only)
 
     # ---------- connection mgmt ----------
     def connect(self, read_only: bool | None = None) -> None:
@@ -34,7 +34,7 @@ class DuckDBPathCache:
             self.read_only = read_only
 
         config: dict[str, str | bool | int | float | list[str]] = {}
-        if self.read_only:
+        if self.read_only is None or self.read_only:
             # CRITICAL: This allows multiple workers to open the file simultaneously
             config = {"access_mode": "READ_ONLY"}
 
@@ -65,7 +65,7 @@ class DuckDBPathCache:
 
     def reconnect(self) -> None:
         self.close()
-        self.connect()
+        self.connect(read_only=self.read_only)
 
     def _init_schema(self):
         """Idempotent schema creation."""

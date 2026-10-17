@@ -1,6 +1,7 @@
 import itertools
 from typing import Iterable
 import time
+from functools import lru_cache
 import networkx as nx
 import numpy as np
 
@@ -39,7 +40,7 @@ class NetworkXService(INetworkService):
             self.N = 0
 
         # L2: Persistent Storage
-        self._db = db if db is not None else DuckDBPathCache()
+        self._db = db if db is not None else DuckDBPathCache(read_only=True)
 
         # --- NUCLEAR CACHE SETUP ---
         # 4600^2 * 4 bytes = ~85 MB. Cheap!
@@ -195,6 +196,64 @@ class NetworkXService(INetworkService):
     def get_shortest_path_with_travel_time(
         self, origin_node: int, destination_node: int
     ) -> NetworkPathExtended | None:
+        return self._get_cached_path(origin_node, destination_node)
+
+    @lru_cache(maxsize=50_000)
+    def _get_cached_path(
+        self, origin_node: int, destination_node: int
+    ) -> NetworkPathExtended | None:
+        # 1. Check for basic connectivity first (Fast L1 lookup)
+        # using the simple matrix lookup to fail fast if no path exists
+        # or if nodes are invalid
+        direct_time = self.get_travel_time(origin_node, destination_node)
+        if direct_time == float("inf"):
+            return None
+
+        # 2. Compute Path (NetworkX Dijkstra)
+        try:
+            if self.G is None:
+                raise RuntimeError("Underlying graph is not initialized.")
+
+            nodes = nx.shortest_path(
+                self.G, origin_node, destination_node, weight="travel_time"
+            )
+        except nx.NetworkXNoPath:
+            return None
+
+        # 3. Compute Metrics
+        total_time = 0.0
+        total_dist = 0.0
+        edge_times_list: list[float] = []
+        G = self.G
+
+        # Optimize: get edge attributes via G[u][v]
+        # MultiDiGraph stores multiple edges, we need the one with min travel_time
+        # This loop is unavoidable if we need the *sequence* of edge times/dist
+
+        for u, v in zip(nodes, nodes[1:]):
+            # This is the most expensive part after Dijkstra
+            edge_data = G[u][v]
+            # Fast path for single edge
+            if len(edge_data) == 1:
+                edge_attr = next(iter(edge_data.values()))
+            else:
+                edge_attr = min(edge_data.values(), key=lambda a: a["travel_time"])
+
+            t = float(edge_attr["travel_time"])
+            total_time += t
+            total_dist += float(edge_attr.get("length", 0.0))
+            edge_times_list.append(t)
+
+        return NetworkPathExtended(
+            nodes=tuple(nodes),
+            travel_times=tuple(edge_times_list),
+            travel_time=total_time,
+            travel_distance=total_dist,
+        )
+
+    def get_shortest_path_with_travel_time_old(
+        self, origin_node: int, destination_node: int
+    ) -> NetworkPathExtended | None:
         # 1) Single round-trip to cache
         time_s = dist_m = None
         nodes = edge_times = None
@@ -273,8 +332,9 @@ class NetworkXService(INetworkService):
             edge_times_list.append(t)
 
         # 4) Write-through both layers
-        self._db.put_simple(origin_node, destination_node, total_time, total_dist)
-        self._db.put_extended(origin_node, destination_node, nodes, edge_times_list)
+        if not self._db.read_only:
+            self._db.put_simple(origin_node, destination_node, total_time, total_dist)
+            self._db.put_extended(origin_node, destination_node, nodes, edge_times_list)
 
         return NetworkPathExtended(
             nodes=tuple(nodes),
@@ -282,6 +342,42 @@ class NetworkXService(INetworkService):
             travel_time=total_time,
             travel_distance=total_dist,
         )
+
+    def get_travel_time(self, origin: int, destination: int) -> float:
+        """
+        Returns the travel time between two nodes.
+        Returns float('inf') if no path exists.
+        """
+        # 1. Direct Array Access
+        t = float(self._time_matrix[origin, destination])
+
+        # 2. Check for Cache Miss (NaN)
+        if np.isnan(t):
+            if self.is_nuclear:
+                raise RuntimeError(
+                    f"Nuclear cache miss detected. This should not happen. Nodes {origin} -> {destination}"
+                )
+
+            # L2 DuckDB Lookup (Fallback)
+            hit = self._db.get_simple(origin, destination)
+            if hit:
+                time_s, dist_m = hit
+                # Update L1 immediately for next time
+                self._time_matrix[origin, destination] = time_s
+                self._dist_matrix[origin, destination] = dist_m
+
+                if time_s < 0:
+                    return float("inf")
+                return float(time_s)
+
+            # If not in DB, assume no path
+            return float("inf")
+
+        # 3. Check for No Path (inf or negative sentinel)
+        if t == float("inf") or t > 1e9 or t < 0:
+            return float("inf")
+
+        return t
 
     def clear_l1_cache(self) -> None:
         """Clears the manual cache to free memory."""
@@ -292,14 +388,27 @@ class NetworkXService(INetworkService):
         np.fill_diagonal(self._time_matrix, 0.0)
         np.fill_diagonal(self._dist_matrix, 0.0)
 
-    def update_cache(self, time_matrix: np.ndarray) -> None:
+    def update_cache(self, cache: np.ndarray) -> None:
         """Updates the L1 cache with a given time matrix."""
-        if time_matrix.shape != (self.N, self.N):
+        if cache.shape != (self.N, self.N):
             raise ValueError(
-                f"Input time_matrix shape {time_matrix.shape} does not match expected {(self.N, self.N)}"
+                f"Input time_matrix shape {cache.shape} does not match expected {(self.N, self.N)}"
             )
-        self._time_matrix = time_matrix
+        self._time_matrix = cache
 
     def get_l1_cache(self):
         """Returns the current L1 cache."""
         return self._time_matrix
+
+    def get_matrix_and_mapping(self) -> tuple[np.ndarray, dict[int, int]]:
+        """
+        Returns the raw travel time matrix and a mapping from Node ID -> Matrix Index.
+        In this implementation, Node ID == Matrix Index (Identity Mapping).
+        """
+        # Identity mapping for 0..N-1
+        # For performance, we can return a specialized dict-like object or just a dict.
+        # Given the User Request emphasizes explicit robust mapping, we return a dict.
+        # Use cache if N is large?
+        if not hasattr(self, "_identity_mapping"):
+            self._identity_mapping = {i: i for i in range(self.N)}
+        return self._time_matrix, self._identity_mapping

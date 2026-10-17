@@ -1,0 +1,68 @@
+[
+    {
+        "name": "Pool Size 100_RTVGraphBuilder",
+        "scenario": "Pool Size 100",
+        "builder": "RTVGraphBuilder",
+        "total_time": 1.2910962499445304,
+        "breakdown": {
+            "RV Graph": 0.07472379202954471,
+            "RTV Graph": 0.6864279999863356,
+            "Assignment": 0.4807143750367686
+        }
+    },
+    {
+        "name": "Pool Size 100_TripCentricRTVGraphBuilder",
+        "scenario": "Pool Size 100",
+        "builder": "TripCentricRTVGraphBuilder",
+        "total_time": 1.046617041924037,
+        "breakdown": {
+            "RV Graph": 0.09311637503560632,
+            "RTV Graph": 0.5083490000106394,
+            "Assignment": 0.4317740419646725
+        }
+    },
+    {
+        "name": "Pool Size 200_RTVGraphBuilder",
+        "scenario": "Pool Size 200",
+        "builder": "RTVGraphBuilder",
+        "total_time": 5.770342500065453,
+        "breakdown": {
+            "RV Graph": 0.2032256250968203,
+            "RTV Graph": 4.063446499989368,
+            "Assignment": 1.490815042052418
+        }
+    },
+    {
+        "name": "Pool Size 200_TripCentricRTVGraphBuilder",
+        "scenario": "Pool Size 200",
+        "builder": "TripCentricRTVGraphBuilder",
+        "total_time": 5.247543332981877,
+        "breakdown": {
+            "RV Graph": 0.12370258290320635,
+            "RTV Graph": 3.8665740420110524,
+            "Assignment": 1.2444048749748617
+        }
+    },
+    {
+        "name": "Pool Size 400_RTVGraphBuilder",
+        "scenario": "Pool Size 400",
+        "builder": "RTVGraphBuilder",
+        "total_time": 30.433443249901757,
+        "breakdown": {
+            "RV Graph": 0.27586054103448987,
+            "RTV Graph": 25.207957333070226,
+            "Assignment": 4.934594582999125
+        }
+    },
+    {
+        "name": "Pool Size 400_TripCentricRTVGraphBuilder",
+        "scenario": "Pool Size 400",
+        "builder": "TripCentricRTVGraphBuilder",
+        "total_time": 30.38967154198326,
+        "breakdown": {
+            "RV Graph": 0.16103087493684143,
+            "RTV Graph": 25.755742124980316,
+            "Assignment": 4.457620833069086
+        }
+    }
+]

@@ -4,7 +4,8 @@ from collections.abc import Iterable, Iterator
 from typing import Set, Tuple
 import bisect
 
-from config.config import OMEGA, BATCH_DURATION
+from config.config import DELTA, OMEGA, BATCH_DURATION
+from config.logging import get_logger
 from src.interfaces.batch_control import IBatchController
 from src.interfaces import (
     VehicleAvailability,
@@ -16,16 +17,33 @@ from src.interfaces import (
     Vehicle,
 )
 from src.interfaces.data_models import NetworkPathExtended, Route
+from src.interfaces.stats import ControllerStats
+
+logger = get_logger(__name__)
 
 
 class BatchController(IBatchController):
     """Minimal batch controller focusing on MetaRequest conversion."""
 
-    def __init__(self, network: INetworkService, vehicles: Iterable[Vehicle]) -> None:
+    def __init__(
+        self,
+        network: INetworkService,
+        vehicles: Iterable[Vehicle],
+        omega: float = OMEGA,
+        delta: float = DELTA,
+    ) -> None:
         super().__init__(network, vehicles)
         self._id_to_vehicle: dict[str, Vehicle] = {v.id: v for v in self._fleet}
         # Optimized history: separate lists for bisect
         self._batch_end_times: list[float] = []
+
+        # Constraint Parameters
+        self._omega = omega
+        self._delta = delta
+
+        # Stats Aggregators
+        self._current_stats = ControllerStats()
+        self._last_processed_time: float = 0.0
 
     def project_fleet_and_update_requests(
         self, t_now: float
@@ -97,6 +115,15 @@ class BatchController(IBatchController):
 
             # --- Case 2: no usable route metadata → treat as idle-ish ---
             if v.current_route is None or v.route_assignment_time is None:
+                has_route = v.current_route is not None
+                has_assignment = v.route_assignment_time is not None
+                logger.warning(
+                    f"Vehicle {v.id} has incomplete route metadata "
+                    f"(has_route={has_route}, has_assignment={has_assignment}); "
+                    f"treating as idle at last_visited_node. "
+                    f"Passengers: {len(v.passengers_onboard)} {[p.original_request.id for p in v.passengers_onboard]} "
+                    f"Route Stops: {len(v.current_route.stops) if v.current_route else 'None'}"
+                )
                 raise RuntimeError(
                     f"Vehicle {v.id} has no route metadata but is not idle."
                 )
@@ -138,6 +165,47 @@ class BatchController(IBatchController):
                             del self._request_index[stop.request_id]
                     else:
                         target_id = stop.request_id
+
+                        # Find the passenger before removing
+                        passenger = next(
+                            (p for p in onboard if p.original_request.id == target_id),
+                            None,
+                        )
+
+                        # Track stats if this is a new event
+                        if passenger and cur_time > self._last_processed_time:
+                            req = passenger.original_request
+
+                            # Validating constraint
+                            if cur_time > req.latest_dropoff_time + 1e-9:  # tolerance
+                                raise RuntimeError(
+                                    f"HARD CONSTRAINT VIOLATION: Request {req.id} dropped off at {cur_time:.2f} "
+                                    f"but latest_dropoff_time is {req.latest_dropoff_time:.2f}. "
+                                    f"Delay: {cur_time - req.latest_dropoff_time:.2f}s"
+                                )
+
+                            wait_time = passenger.pickup_time - req.request_time
+
+                            direct_travel_time = self._network.get_travel_time(
+                                req.origin_node, req.destination_node
+                            )
+                            # Fallback if path not found (though it should be)
+                            if direct_travel_time == float("inf"):
+                                logger.warning(
+                                    f"Could not calc direct travel time for req {req.id}"
+                                )
+                                direct_travel_time = (
+                                    0.0  # Should not happen in connected graph
+                                )
+
+                            total_delay = (
+                                cur_time - req.request_time - direct_travel_time
+                            )
+
+                            self._current_stats.delivered_count += 1
+                            self._current_stats.sum_wait_time += wait_time
+                            self._current_stats.sum_total_delay += total_delay
+
                         onboard = {
                             p for p in onboard if p.original_request.id != target_id
                         }
@@ -335,7 +403,8 @@ class BatchController(IBatchController):
                     origin_node=meta.origin_node,
                     destination_node=meta.destination_node,
                     request_time=meta.request_time,
-                    earliest_dropoff_time=meta.request_time + travel_time,
+                    latest_pickup_time=meta.request_time + self._omega,
+                    latest_dropoff_time=meta.request_time + travel_time + self._delta,
                 )
             )
         return converted
@@ -423,6 +492,9 @@ class BatchController(IBatchController):
             if batch_requests or snapshots:
                 yield t_window_end, batch_requests, snapshots
 
+            # Mark this time as processed to avoid duplicate stats in future replays
+            self._last_processed_time = t_window_end
+
             if (
                 current is None
             ):  #  and not self._request_index and all(v.is_idle for v in self._fleet):
@@ -442,6 +514,7 @@ class BatchController(IBatchController):
 
         # 3) Convert new meta requests and add to index
         new_requests = self.convert_meta_requests(new_meta)
+        self._current_stats.new_requests_count += len(new_requests)
         for req in new_requests:
             self._request_index[req.id] = req
 
@@ -491,7 +564,9 @@ class BatchController(IBatchController):
         #   current_route / route_assignment_time projection gave them.
 
     def get_rebalancing_candidates(
-        self, assignment_result: AssignmentResult, snapshots: Set[VehicleAvailability]
+        self,
+        assignment_result: AssignmentResult,
+        vehicle_avail_pool: Set[VehicleAvailability],
     ) -> Tuple[list[VehicleAvailability], list[Request]]:
         """
         Identifies the inputs for the Rebalancing LP (Algorithm 4).
@@ -519,7 +594,7 @@ class BatchController(IBatchController):
         assigned_vehicle_ids = {a.vehicle_id for a in assignment_result.assignments}
 
         idle_vehicles = []
-        for v in snapshots:
+        for v in vehicle_avail_pool:
             # Check a: Empty and Stopped
             is_physically_idle = (
                 len(v.passengers_onboard) == 0 and len(v.remaining_stops_to_serve) == 0
@@ -565,16 +640,20 @@ class BatchController(IBatchController):
             origin_node=request.origin_node,
             destination_node=request.destination_node,
             request_time=request.request_time,
-            earliest_dropoff_time=request.earliest_dropoff_time,
-            promised_pickup_time=promised_pickup_time,
+            latest_pickup_time=promised_pickup_time,  # cant go back on a promise
+            latest_dropoff_time=request.latest_dropoff_time,
+            promised_pickup_time=promised_pickup_time,  # we need this info later
         )
 
     def _expire_stale_requests(self, t_now: float) -> None:
-        """Remove all requests that have waited longer than OMEGA."""
+        """Remove all requests that have waited longer than omega."""
         to_remove: list[str] = []
         for req_id, req in self._request_index.items():
-            if t_now - req.request_time > OMEGA:
+            if t_now - req.request_time > self._omega:
                 to_remove.append(req_id)
+                # Capture stats
+                self._current_stats.expired_count += 1
+                self._current_stats.sum_expired_wait += t_now - req.request_time
 
         for req_id in to_remove:
             del self._request_index[req_id]
@@ -616,6 +695,12 @@ class BatchController(IBatchController):
                 raise ValueError(
                     f"Request {req.id} has request_time {req.request_time} after batch time {t_now}"
                 )
+
+    def get_and_reset_metrics(self) -> ControllerStats:
+        """Returns the accumulated delivered stats and clears the buffer."""
+        stats = self._current_stats
+        self._current_stats = ControllerStats()
+        return stats
 
 
 __all__ = ["BatchController"]

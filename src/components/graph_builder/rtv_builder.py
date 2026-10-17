@@ -1,4 +1,4 @@
-from config.config import MAX_REQUESTS
+from config.config import MAX_REQUESTS_ABOVE_CAPACITY
 from old_code.rv_graph_builder import RVGraph
 from src.interfaces import FeasibleRoute
 from collections import defaultdict
@@ -38,7 +38,6 @@ class RTVGraphBuilder(IRTVGraphBuilder):
         rv_graph: RVGraph,
         vehicles: Set[VehicleAvailability],
         requests: set[Request],
-        max_trip_size: int,
     ) -> RTVGraph:
         rtv_graph = RTVGraph()
 
@@ -49,23 +48,22 @@ class RTVGraphBuilder(IRTVGraphBuilder):
 
         requests_by_id: dict[str, Request] = {r.id: r for r in requests}
 
-        # --- STEP 0: PREFETCH / CACHE WARMING ---
-        # Identify all unique nodes involved in this batch
-        unique_nodes = set()
-
-        # 1. Request Origins and Destinations
-        for req in requests:
-            unique_nodes.add(req.origin_node)
-            unique_nodes.add(req.destination_node)
-
-        # 2. Vehicle Locations
-        for veh in vehicles:
-            unique_nodes.add(veh.available_at_node)
-
-        # 3. Trigger the Big Fetch
-        # This will populate the RoutePlanner's internal cache
         if not self._route_planner._network.is_nuclear:
+            # --- STEP 0: PREFETCH / CACHE WARMING ---
+            # Identify all unique nodes involved in this batch
+            unique_nodes = set()
+
+            # 1. Request Origins and Destinations
+            for req in requests:
+                unique_nodes.add(req.origin_node)
+                unique_nodes.add(req.destination_node)
+
+            # 2. Vehicle Locations
+            for veh in vehicles:
+                unique_nodes.add(veh.available_at_node)
             node_list = list(unique_nodes)
+            # 3. Trigger the Big Fetch
+            # This will populate the RoutePlanner's internal cache
             if hasattr(self._route_planner._network, "prefetch_all_pairs"):
                 self._route_planner._network.prefetch_all_pairs(node_list)
             logger.info(
@@ -81,7 +79,6 @@ class RTVGraphBuilder(IRTVGraphBuilder):
                     v_avail=v_avail,
                     rv_graph=rv_graph,
                     requests_by_id=requests_by_id,
-                    max_trip_size=max_trip_size,
                     rtv_graph=rtv_graph,
                 )
         except Exception as e:
@@ -100,131 +97,163 @@ class RTVGraphBuilder(IRTVGraphBuilder):
         v_avail: VehicleAvailability,
         rv_graph: RVGraph,
         requests_by_id: Dict[str, Request],
-        max_trip_size: int,
         rtv_graph: RTVGraph,
     ) -> None:
         """
-        Implements Algorithm 1 for a single vehicle v.
+        Implements Algorithm 1 using Clique Expansion + Lexicographic Ordering.
+        We only iterate over the intersection of neighbors in the RV-graph.
         """
+        from src.components.search_algorithm.dfs_bnb import TripSolver as Original_BnB
+
+        from src.components.search_algorithm.dfs_bnb_memo import (
+            TripSolver as AStarDFSSolver,
+        )
+        from src.components.search_algorithm.bfs_astar import TripSolver as BFSSolver
+        from src.components.search_algorithm.bfs_astar_monotonic import (
+            TripSolver as BfsMono,
+        )
+        from src.components.search_algorithm.bfs_astar_gradient_bad import (
+            TripSolver as BfsGradient,
+        )
+        from src.components.search_algorithm.bfs_astar_real import (
+            TripSolver as BfsReal,
+        )
+
+        TripSolverClass = AStarDFSSolver
+        TripSolverClass = Original_BnB
+        TripSolverClass = BfsMono
+        TripSolverClass = BfsGradient
+        TripSolverClass = BFSSolver
+        TripSolverClass = BfsReal
+
         m = len(v_avail.passengers_onboard)
-        # Capacity check: limit new requests to available seats
-        # Also hard-cap at 4 per Alonso-Mora logic if needed, or use vehicle capacity
-        # available_seats = max(v_avail.capacity - m, MAX_REQUESTS_ABOVE_CAPACITY)
         available_seats = v_avail.capacity - m
-        limit_k = min(max_trip_size, available_seats, MAX_REQUESTS)
+        limit_k = available_seats + MAX_REQUESTS_ABOVE_CAPACITY
 
         if limit_k <= 0:
             return
 
-        # T_k per vehicle: k -> set of TripId
+        # T_by_size: k -> Set[TripId]
         T_by_size: Dict[int, Set[TripId]] = defaultdict(set)
 
-        # --- [Step 1] Trips of size 1 ---
-        # Use RV-graph R-V edges
-        relevant_requests = rv_graph.get_requests_for_vehicle(v_id)
+        # Cache valid single requests for this vehicle for fast intersection
+        # This represents "Nodes in the RV-graph that are also valid for this vehicle"
+        valid_singles = set()
 
+        # --- [Step 1] Trips of size 1 ---
+        relevant_requests = rv_graph.get_requests_for_vehicle(v_id)
         for r_id in relevant_requests:
             trip: TripId = frozenset({r_id})
             rv_route = rv_graph.rv_details.get((r_id, v_id))
-
             if rv_route:
                 T_by_size[1].add(trip)
                 rtv_graph.add_trip_for_vehicle(trip, v_id, rv_route)
+                valid_singles.add(r_id)
 
         if limit_k == 1 or not T_by_size[1]:
             return
 
-        # --- [Step 2] Trips of size 2 ---
-        # Only pairs {r1}, {r2} where both are valid individually AND shareable
-        single_trips = list(T_by_size[1])
+        # --- [Step 2] We keep it seperate from the general Apriori Loop because we have the RV-graph ---
+        # Sort valid_singles for deterministic ordering (optional but good for consistency)
+        sorted_singles = sorted(list(valid_singles))
 
-        for i in range(len(single_trips)):
-            for j in range(i + 1, len(single_trips)):
-                t1 = single_trips[i]
-                t2 = single_trips[j]
-                # Unpack single IDs
-                r1_id = next(iter(t1))
-                r2_id = next(iter(t2))
+        for r1 in sorted_singles:
+            # Get all neighbors of r1 from the RV-graph
+            neighbors = rv_graph.request_request.get(r1, set())
+            # we need to ensure that it is also for the correct vehicle
 
-                # Pruning: Check R-R edge in RVGraph
-                if r2_id not in rv_graph.request_request.get(r1_id, set()):
-                    continue
+            # Intersect neighbors with valid_singles to ensure the other request is also serviceable
+            # We enforce r1 < r2 to avoid duplicates ({A,B} vs {B,A}) and self-loops
+            potential_r2 = [r2 for r2 in neighbors if r2 in valid_singles and r1 < r2]
 
-                # Candidate trip
-                trip_2: TripId = frozenset({r1_id, r2_id})
+            for r2 in potential_r2:
+                # We know r1 and r2 are neighbors (graph) and valid singles (vehicle).
+                # We just need to check if they can fit together in this specific vehicle.
+                candidate_trip = frozenset({r1, r2})
 
-                # Feasibility check
-                reqs = {requests_by_id[r1_id], requests_by_id[r2_id]}
-                result = self._route_planner.check_feasibility(reqs, vehicle=v_avail)
+                reqs = {requests_by_id[r] for r in candidate_trip}
+                # result = self._route_planner.check_feasibility(reqs, vehicle=v_avail)
+                # result = TripSolver.solve(
+                #     reqs, v_avail, self._route_planner._network
+                # )
+                result = TripSolverClass.solve(
+                    reqs, v_avail, self._route_planner._network.get_l1_cache()
+                )
 
                 if result.is_feasible:
-                    feasible = cast(FeasibleRoute, result)
-                    T_by_size[2].add(trip_2)
-                    rtv_graph.add_trip_for_vehicle(trip_2, v_id, feasible)
+                    T_by_size[2].add(candidate_trip)
+                    rtv_graph.add_trip_for_vehicle(
+                        candidate_trip, v_id, cast(FeasibleRoute, result)
+                    )
 
-        if limit_k == 2 or not T_by_size[2]:
-            return
-
-        # TODO: THINK I HAVE BEEN THINKING ABOUT HOW WE BUILD TRIPS.
-        # Right now we build trips per vehicle, but we could build trips globally
-        # and then assign them to vehicles that can serve them.
-        # Do we reuse the information from smaller trips across vehicles?
-        # DO WE reuse the TRIPS OF SIZE n-1 when building trips of size n
-
-        # --- [Step 3] Trips of size k >= 3 ---
+        # --- [Step 3] General Apriori Loop for k >= 3 ---
         for k in range(3, limit_k + 1):
-            prev_trips = T_by_size[k - 1]
-            if not prev_trips:
+            if not T_by_size[k - 1]:
                 break
 
-            candidates: Set[TripId] = set()
+            # Convert previous trips to sorted lists for consistent indexing
+            # (Assuming T_by_size[k-1] contains frozensets or tuples)
+            prev_trips_list = sorted([sorted(list(t)) for t in T_by_size[k - 1]])
 
-            # Generate candidates: T_{k-1} U {r}
-            for base_trip in prev_trips:
-                for single_trip in T_by_size[1]:
-                    r_new = next(iter(single_trip))
+            n = len(prev_trips_list)
 
-                    # If r is already in the trip, skip
-                    if r_new in base_trip:
-                        continue
+            for i in range(n):
+                trip_a = prev_trips_list[i]
 
-                    # Construct new trip
-                    new_trip = base_trip | {r_new}
+                for j in range(i + 1, n):
+                    trip_b = prev_trips_list[j]
 
-                    # Optimization: We rely on the 'candidates' set to deduplicate.
-                    # However, before adding to candidates, we can perform the
-                    # Sub-trip Lemma check RIGHT HERE to fail fast,
-                    # or keep it in the second loop as you have it.
-                    # Keeping it separate (as you have) is often cleaner for debugging.
-                    candidates.add(new_trip)
+                    # OPTIMIZATION:
+                    # Two trips of size k-1 are candidates to merge ONLY if
+                    # their first k-2 elements are identical.
+                    # Since the list is sorted, if the prefix doesn't match,
+                    # we can break the inner loop immediately (for this block).
 
-            if not candidates:
-                break
-
-            for trip in candidates:
-                # Sub-trip Lemma Check:
-                # We must verify that ALL subsets of size k-1 are valid valid trips.
-                is_valid_candidate = True
-
-                for r_removed in trip:
-                    # OPTIMIZATION: We know at least one subset is valid (the one that generated this candidate).
-                    # If you want to be strictly rigorous, check them all.
-                    # But practically, usually checking the *other* subsets is what catches invalid trips.
-
-                    sub_trip = trip - {r_removed}
-                    if sub_trip not in prev_trips:
-                        is_valid_candidate = False
+                    # Check prefix (all elements except the last one)
+                    if trip_a[:-1] != trip_b[:-1]:
                         break
 
-                if not is_valid_candidate:
-                    continue
+                    # 2. Identify the new elements being combined
+                    # For k=2: trip_a=[r_x], trip_b=[r_y]. We are combining r_x and r_y.
+                    r_x = trip_a[-1]
+                    r_y = trip_b[-1]
 
-                # Feasibility Check (Expensive)
-                # Only done if the structural (graph) checks pass
-                reqs = {requests_by_id[r] for r in trip}
-                result = self._route_planner.check_feasibility(reqs, vehicle=v_avail)
+                    # Create the candidate trip of size k
+                    # (trip_b[-1] is guaranteed to be > trip_a[-1] because of sorting)
+                    candidate_trip = frozenset(trip_a + [trip_b[-1]])
 
-                if result.is_feasible:
-                    feasible = cast(FeasibleRoute, result)
-                    T_by_size[k].add(trip)
-                    rtv_graph.add_trip_for_vehicle(trip, v_id, feasible)
+                    # 3. Sub-trip Lemma (Lemma 2 from Paper)
+                    # We constructed this candidate from two existing sub-trips (trip_a and trip_b).
+                    # Now we must ensure ALL other (k-2) sub-trips of size k-1 exist in T_{k-1}.
+
+                    is_valid_structure = True
+                    prefix = trip_a[:-1]
+
+                    # We need to verify that merging r_x and r_y into the prefix
+                    # doesn't violate any other subset constraints.
+                    for idx in range(len(prefix)):
+                        # Remove one element from the prefix
+                        sub_prefix = prefix[:idx] + prefix[idx + 1 :]
+                        # Check if the remaining prefix + {rx, ry} was a valid trip in the previous round
+                        check_subtrip = frozenset(sub_prefix + [r_x, r_y])
+
+                        if check_subtrip not in T_by_size[k - 1]:
+                            is_valid_structure = False
+                            break
+
+                    if not is_valid_structure:
+                        continue
+
+                    # 4. Feasibility Check (Constraint Satisfaction)
+                    # This is the heavy calculation - only performed if structural integrity passes
+                    reqs = {requests_by_id[r] for r in candidate_trip}
+
+                    result = TripSolverClass.solve(
+                        reqs, v_avail, self._route_planner._network.get_l1_cache()
+                    )
+
+                    if result.is_feasible:
+                        T_by_size[k].add(candidate_trip)
+                        rtv_graph.add_trip_for_vehicle(
+                            candidate_trip, v_id, cast(FeasibleRoute, result)
+                        )

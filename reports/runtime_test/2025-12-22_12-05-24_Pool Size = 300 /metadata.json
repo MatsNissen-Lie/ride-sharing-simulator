@@ -1,0 +1,7 @@
+{
+    "OMEGA": 180,
+    "DELTA": 300,
+    "MEGA_BATCH_MODE": true,
+    "MEGA_BATCH_SIZE": 300,
+    "NUMBER_OF_VEHICLES": 2500
+}

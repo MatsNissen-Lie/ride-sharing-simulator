@@ -1,5 +1,7 @@
 """Minimal single-vehicle route planner used during prototyping."""
 
+from dataclasses import dataclass, field
+from typing import List, Optional
 from config import DELTA, OMEGA, get_logger
 
 from src.interfaces import (
@@ -9,14 +11,37 @@ from src.interfaces import (
     Request,
     Stop,
     Route,
-    Passenger,
     INetworkService,
     VehicleAvailability,
     ISingleVehicleRoutePlanner,
 )
 
-
 logger = get_logger(__name__)
+
+
+@dataclass(order=True)
+class SearchNode:
+    """Represents a state in the A* search tree."""
+
+    f_score: float  # Priority (g + h)
+    g_score: float = field(compare=False)  # Actual cost so far (cumulative delay)
+    time: float = field(compare=False)  # Current time at this node
+    load: int = field(compare=False)  # Current passenger count
+    mask: int = field(compare=False)  # Bitmask of visited stops
+    curr_node_idx: int = field(compare=False)  # Index of the stop we are currently at
+    parent: Optional["SearchNode"] = field(compare=False, default=None)
+
+    def get_path(self, stops: list[Stop]) -> list[Stop]:
+        """Reconstructs the path by backtracking."""
+        path = []
+        curr = self
+        while curr.parent is not None:
+            # We skip the root/dummy start node in the path list
+            # providing the stop indices align with the stops list
+            if curr.curr_node_idx >= 0:
+                path.append(stops[curr.curr_node_idx])
+            curr = curr.parent
+        return path[::-1]
 
 
 class RoutePlanner(ISingleVehicleRoutePlanner):
@@ -47,16 +72,18 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
 
         # --- CASE 2: General Vehicle + N Requests (RV & RTV) ---
         # Whether it is 1 request (RV) or 3 requests (RTV), the logic is identical.
-        return self._handle_rtv_dfs(vehicle, requests_to_add, find_best_route)
+        _ = find_best_route  # Currently unused
+        return self._handle_rtv_check(vehicle, requests_to_add)
 
-    def _handle_rtv_dfs(
+    def _handle_rtv_check(
         self,
         availability: VehicleAvailability,
         requests_to_add: set[Request],
-        find_best_route: bool,
+        # find_best_route: bool,
     ) -> FeasibilityResult:
         """
         Unified DFS Branch-and-Bound solver for RV and RTV.
+        Objective: Minimize Total Passenger Delay.
         """
         # --- 1. SETUP ---
         start_node = availability.available_at_node
@@ -94,6 +121,9 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
         s_is_pick = [s.is_pickup for s in stops]
         s_req_id = [s.request_id for s in stops]
 
+        # Pre-calculate Request Times (Needed for Delay Cost calculation)
+        req_times = [all_reqs[rid].request_time for rid in s_req_id]
+
         # Time Windows
         t_earliest = []
         t_latest = []
@@ -110,6 +140,10 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
                 limit = getattr(
                     r, "earliest_dropoff_time", None
                 )  # pre-calculated direct arrival
+                if limit is None:
+                    raise ValueError(
+                        f"Earliest dropoff time not set for request {r.id}"
+                    )
                 t_latest.append((limit + DELTA) if limit else float("inf"))
 
         # Precedence: Pickup index for every dropoff index (if applicable)
@@ -163,22 +197,21 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
                     # C. Time
                     travel = tt.get((u_node, s_node[i]), float("inf"))
                     arr = u_time + travel
-                    # Wait if early (not applicable for dropoffs usually, but logic holds)
+                    # Wait if early await strict wait time logic?
+                    # Original logic was: act_arr = max(arr, t_earliest[i])
                     act_arr = max(arr, t_earliest[i])
 
                     if act_arr > t_latest[i]:
                         continue
 
                     # D. Cost Function (Objective: Minimize Total Delay)
-                    # Cost = Cumulative Travel Time + Wait Time?
-                    # Standard: Sum of (Arrival_Dropoff - Request_Time)
-                    # Your generic metric: Sum of Travel Times + Lateness Penalty
+                    # Only add to cost when a passenger is dropped off.
+                    added_cost = 0.0
+                    if not s_is_pick[i]:
+                        # Cost = Arrival Time - Request Time
+                        added_cost = act_arr - req_times[i]
 
-                    # Simple accumulation:
-                    new_cost = cost + travel
-                    # Add wait time at pickup (if driver arrives early)
-                    if act_arr > arr:
-                        new_cost += act_arr - arr
+                    new_cost = cost + added_cost
 
                     path.append(i)
                     solve(s_node[i], act_arr, new_load, mask | (1 << i), new_cost, path)
@@ -200,152 +233,7 @@ class RoutePlanner(ISingleVehicleRoutePlanner):
             cost=best_cost,
         )
 
-    def _simulate_route(
-        self,
-        start_node: int,
-        start_time: float,
-        passengers_onboard: frozenset[Passenger],
-        all_requests_map: dict[str, Request],
-        stops_to_visit: list[Stop],
-        capacity: int,
-        travel_time_cache: dict[tuple[int, int], float],
-        is_rr_check: bool = False,
-    ) -> FeasibilityResult:
-        """
-        A general-purpose route simulator that checks all constraints.
-        """
-        current_node = start_node
-        current_time = start_time
-        # Start with passengers already in the car
-        current_occupancy = len(passengers_onboard)
-
-        # Keep track of who has been picked up
-        picked_up_req_ids = {p.original_request.id for p in passengers_onboard}
-
-        pickup_times = {
-            p.original_request.id: p.pickup_time for p in passengers_onboard
-        }
-        dropoff_times = {}
-        total_travel_time = 0.0
-        stop_times = []
-
-        for stop in stops_to_visit:
-            # 1. Travel to the next stop
-            travel_time_key = (current_node, stop.node)
-            travel_time = travel_time_cache.get(travel_time_key)
-            if travel_time is None:
-                # Cache miss: This is expected if find_best_route=False
-                if current_node == stop.node:
-                    travel_time = 0.0
-                else:
-                    # Do the "expensive" network call on-demand
-                    path = self._network.get_shortest_path(current_node, stop.node)
-                    if path is None:
-                        return Infeasible(
-                            reason=f"No path between nodes {current_node} and {stop.node}"
-                        )
-                    travel_time = path.travel_time
-
-                # Store it in the cache in case this route uses
-                # the same edge again (unlikely, but good practice)
-                travel_time_cache[travel_time_key] = travel_time
-
-            stop_times.append(current_time)
-
-            current_time += travel_time
-            current_node = stop.node
-            total_travel_time += travel_time
-
-            req = all_requests_map[stop.request_id]
-
-            if stop.is_pickup:
-                # Enforce causality: cannot pick up before request is made
-                if current_time < req.request_time and not is_rr_check:
-                    raise ValueError(
-                        f"Attempting to pick up request {req.id} before it was made."
-                    )
-                elif is_rr_check:
-                    # In R-R checks, we allow waiting at the pickup node
-                    current_time = max(current_time, req.request_time)
-
-                # 2. Check Wait Time (Omega)
-                wait_time = current_time - req.request_time
-                max_wait_allowed = OMEGA
-                if req.promised_pickup_time is not None:
-                    max_wait_allowed = req.promised_pickup_time - req.request_time
-                    if wait_time > max_wait_allowed + 1e-6:
-                        return Infeasible(
-                            reason=f"Rematch would worsen wait for {req.id}"
-                        )
-                if wait_time > OMEGA:
-                    return Infeasible(reason=f"Violates max wait for {req.id}")
-
-                pickup_times[req.id] = current_time
-                picked_up_req_ids.add(req.id)
-                current_occupancy += 1
-
-                # 3. Check Capacity
-                if current_occupancy > capacity:
-                    return Infeasible(reason="Violates capacity")
-
-            else:  # Is dropoff
-                # Check if this passenger was ever picked up (sanity check)
-                if req.id not in picked_up_req_ids:
-                    return Infeasible(reason=f"Dropoff before pickup for {req.id}")
-
-                dropoff_times[req.id] = current_time
-                current_occupancy -= 1
-
-                # 4. Check Total Delay (Delta)
-                # This check applies to EVERYONE (new and old passengers)
-                if req.earliest_dropoff_time is None:
-                    raise ValueError(
-                        f"Earliest dropoff time not set for request {req.id}"
-                    )
-                total_delay = current_time - req.earliest_dropoff_time
-                if total_delay > DELTA:
-                    return Infeasible(reason=f"Violates max delay for {req.id}")
-
-        # If we got here, the route is feasible
-        # Cost is the sum of delays for *all* passengers dropped off
-        total_cost = 0.0
-        for r_id, drop_time in dropoff_times.items():
-            req = all_requests_map[r_id]
-            total_cost += drop_time - req.earliest_dropoff_time
-
-        final_route = Route(
-            stops=tuple(stops_to_visit),
-            total_travel_time=total_travel_time,
-            total_travel_distance=0,  # Not calculated
-            total_delay_cost=total_cost,
-        )
-
-        return FeasibleRoute(route=final_route, cost=total_cost)
-
     def _build_travel_time_cache(self, nodes: set[int]) -> dict[tuple[int, int], float]:
         """Pre-calculates all-pairs travel times for a small set of nodes."""
         # assume all nodes pares are primed in the cache
         return self._network.get_travel_times_l1_cache_subset(nodes)
-
-    @staticmethod
-    def _build_stops(request_a: Request, request_b: Request) -> tuple[Stop, ...]:
-        return (
-            Stop(node=request_a.origin_node, is_pickup=True, request_id=request_a.id),
-            Stop(
-                node=request_a.destination_node,
-                is_pickup=False,
-                request_id=request_a.id,
-            ),
-            Stop(node=request_b.origin_node, is_pickup=True, request_id=request_b.id),
-            Stop(
-                node=request_b.destination_node,
-                is_pickup=False,
-                request_id=request_b.id,
-            ),
-        )
-
-
-if __name__ == "__main__":
-    from src.demos.route_planner_demo import run_demo
-
-    run_demo()

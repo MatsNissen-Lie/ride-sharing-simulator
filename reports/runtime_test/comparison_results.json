@@ -1,0 +1,42 @@
+[
+    {
+        "name": "Pool Size = 100",
+        "total_time": 1.3290061668958515,
+        "breakdown": {
+            "RV Graph": 0.08299887494649738,
+            "RTV Graph": 0.7123763340059668,
+            "Assignment": 0.47243195795454085,
+            "Rebalancing": 0.0
+        }
+    },
+    {
+        "name": "Pool Size = 200 ",
+        "total_time": 6.604095624992624,
+        "breakdown": {
+            "RV Graph": 0.1681037499802187,
+            "RTV Graph": 4.923404417000711,
+            "Assignment": 1.4989127499284223,
+            "Rebalancing": 0.0
+        }
+    },
+    {
+        "name": "Pool Size = 300 ",
+        "total_time": 17.50221266702283,
+        "breakdown": {
+            "RV Graph": 0.1277554170228541,
+            "RTV Graph": 13.841543624992482,
+            "Assignment": 3.5174767919816077,
+            "Rebalancing": 0.0
+        }
+    },
+    {
+        "name": "Pool Size = 400 ",
+        "total_time": 37.49584545905236,
+        "breakdown": {
+            "RV Graph": 0.17692574998363853,
+            "RTV Graph": 31.326188625069335,
+            "Assignment": 5.977257709018886,
+            "Rebalancing": 0.0
+        }
+    }
+]

@@ -19,3 +19,9 @@ rich_riders/
 
 *.duckdb
 *.duckdb*
+
+/Sections/
+.pytest_cache/
+
+# Preserve the exact vehicle samples used by the historical experiments.
+!/data/vehicles/*.parquet

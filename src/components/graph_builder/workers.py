@@ -3,7 +3,9 @@
 import numpy as np
 from src.components.network_service import NetworkXService
 from src.database.simple_db import DuckDBPathCache
-from src.components.route_planner import RoutePlanner
+
+# from src.components.route_planner import RoutePlanner
+from src.components.search_algorithm.bfs_astar_real import TripSolver
 from src.interfaces import Request, VehicleAvailability, FeasibleRoute
 
 
@@ -69,12 +71,15 @@ def process_rv_chunk(tasks: list[RVTask]) -> list[tuple[str, str, FeasibleRoute]
     if _network_service is None:
         raise RuntimeError("Worker not initialized")
 
-    planner = RoutePlanner(_network_service)
+    # planner = RoutePlanner(_network_service)
+    time_matrix = _network_service.get_l1_cache()
 
     results = []
     for task in tasks:
-        res = planner.check_feasibility(
-            {task.req}, vehicle=task.vehicle, find_best_route=True
+        res = TripSolver.solve(
+            requests=[task.req],
+            vehicle=task.vehicle,
+            time_matrix=time_matrix,
         )
         if res.is_feasible:
             results.append((task.req.id, task.vehicle.vehicle_id, res))

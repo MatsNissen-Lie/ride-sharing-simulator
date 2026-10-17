@@ -9,6 +9,7 @@ from src.interfaces import (
     Vehicle,
     VehicleAvailability,
 )
+from src.interfaces.data_models import Route
 from src.interfaces.services import INetworkService
 
 
@@ -95,5 +96,26 @@ class IBatchController(ABC):
         - Move picked riders to onboard; remove completed.
         - For assigned-but-unpicked requests, update persistent promise:
             promised[id] = min(old_promise, scheduled_pickup_time).
+        """
+        ...
+    @abstractmethod
+    def get_rebalancing_candidates(
+        self,
+        assignment_result: AssignmentResult,
+        vehicle_avail_pool: set[VehicleAvailability],
+    ) -> tuple[list[VehicleAvailability], list[Request]]:
+        """
+        Identify idle vehicles and unassigned requests for rebalancing.
+        """
+        ...
+
+    @abstractmethod
+    def apply_rebalancing(
+        self,
+        rebalancing_routes: dict[str, Route],
+        t_now: float,
+    ) -> None:
+        """
+        Apply rebalancing outcomes to the fleet.
         """
         ...

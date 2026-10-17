@@ -14,6 +14,9 @@ from src.interfaces.graphs import RTVGraph, TripId
 
 logger = get_logger(__name__)
 
+if __name__ != "__main__":
+    logger.setLevel("WARNING")
+
 
 class GurobiAssignmentSolver(IAssignmentSolver):
     """
@@ -151,6 +154,14 @@ class GurobiAssignmentSolver(IAssignmentSolver):
 
                 # Identify unassigned requests
                 unassigned_reqs = {r for r in requests if r.id not in assigned_req_ids}
+
+                # mao status from int to str for logging
+                status_dict = {
+                    GRB.OPTIMAL: "OPTIMAL",
+                    GRB.TIME_LIMIT: "TIME_LIMIT",
+                    GRB.SUBOPTIMAL: "SUBOPTIMAL",
+                }
+                status = status_dict.get(status, str(status))
 
                 logger.info(
                     f"Solver finished. Status: {status}. "

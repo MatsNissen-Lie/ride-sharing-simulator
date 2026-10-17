@@ -6,8 +6,15 @@ page and empty sections. Research content will be written after the literature
 review establishes the direction. The source is self-contained for the editor.
 
 Keep code and thesis changes together on each research branch. The earlier
-TIØ4500 specialization project remains in the separate `latex-ride-sharing`
-repository as reference material.
+TIØ4500 specialization project is preserved in
+[`archive/previous-project-2025/`](archive/previous-project-2025/README.md).
+That archive includes its LaTeX source, figures, compiled PDF, feedback, and a
+file inventory. The original December 2025 simulation code is merged into this
+repository, including the local configuration and plotting edits.
+
+The historical simulation results and plots are in [`reports/`](reports/).
+Exact vehicle samples are in [`data/vehicles/`](data/vehicles/).
+See the archive README for the data requirements and validation results.
 
 Open `thesis/main.tex` in the Codex LaTeX editor to edit and preview the document.
 

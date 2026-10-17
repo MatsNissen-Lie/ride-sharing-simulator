@@ -115,7 +115,7 @@ class RVGraphBuilder(IRVGraphBuilder):
         # valid_rr_indices is a tuple of arrays: (row_indices, col_indices)
         rr_idx_i, rr_idx_j = np.where(rr_mask)
 
-        logger.info(
+        logger.debug(
             f"RR Pruning: Found {len(rr_idx_i)} candidate pairs out of {n_req * (n_req - 1) // 2} possible."
         )
 
@@ -152,7 +152,7 @@ class RVGraphBuilder(IRVGraphBuilder):
             # Get indices
             rv_idx_v, rv_idx_r = np.where(rv_mask)
 
-            logger.info(
+            logger.debug(
                 f"RV Pruning: Found {len(rv_idx_v)} candidate pairs out of {n_veh * n_req} possible."
             )
 
