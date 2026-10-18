@@ -21,6 +21,8 @@ from src.interfaces.stats import ControllerStats
 
 logger = get_logger(__name__)
 
+PROMISE_TOLERANCE = 1e-3  # seconds
+
 
 class BatchController(IBatchController):
     """Minimal batch controller focusing on MetaRequest conversion."""
@@ -644,7 +646,9 @@ class BatchController(IBatchController):
             origin_node=request.origin_node,
             destination_node=request.destination_node,
             request_time=request.request_time,
-            latest_pickup_time=promised_pickup_time,  # cant go back on a promise
+            # Can't go back on a promise. The slack absorbs float noise: re-planning
+            # recomputes the same arrival time, which may come out a hair later.
+            latest_pickup_time=promised_pickup_time + PROMISE_TOLERANCE,
             latest_dropoff_time=request.latest_dropoff_time,
             promised_pickup_time=promised_pickup_time,  # we need this info later
         )

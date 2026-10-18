@@ -101,4 +101,19 @@ def test_assigned_request_gets_promised_pickup_time(network):
     (promised,) = requests
     expected = 10.0 + network.get_travel_time(0, 35)
     assert promised.promised_pickup_time == pytest.approx(expected)
-    assert promised.latest_pickup_time == pytest.approx(expected)
+    assert promised.latest_pickup_time == pytest.approx(expected, abs=1e-2)
+
+
+def test_promised_rider_stays_feasible_for_the_same_vehicle(network):
+    """Re-planning recomputes the promised arrival from the travel-time matrix,
+    which can differ from the replayed path in the last digits."""
+    from src.components.trip_solver import TripSolver
+
+    controller = make_controller(network, [0])
+    (req,) = controller.prepare_batch(10.0, [MetaRequest("r", 35, 0, 5.0)])[0]
+    assign(controller, 10.0, "v0", req)
+    (promised,), (snapshot,) = controller.prepare_batch(20.0, [])
+
+    matrix = network.get_l1_cache().copy()
+    matrix[snapshot.available_at_node, promised.origin_node] += 1e-7  # float noise
+    assert TripSolver.solve([promised], snapshot, matrix).is_feasible
