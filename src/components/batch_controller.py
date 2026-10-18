@@ -100,13 +100,14 @@ class BatchController(IBatchController):
         for v in self._fleet:
             # --- Case 1: idle vehicle ---
             if v.is_idle:
+                # An idle vehicle may still be arriving at its node (last_visited_time > t_now).
                 v.last_visited_time = max(v.last_visited_time, t_now)
                 snapshots.add(
                     VehicleAvailability(
                         vehicle_id=v.id,
                         capacity=v.capacity,
                         available_at_node=v.last_visited_node,
-                        available_from_time=t_now,
+                        available_from_time=v.last_visited_time,
                         passengers_onboard=frozenset(),
                         remaining_stops_to_serve=(),
                     )
@@ -177,7 +178,7 @@ class BatchController(IBatchController):
                             req = passenger.original_request
 
                             # Validating constraint
-                            if cur_time > req.latest_dropoff_time + 1e-9:  # tolerance
+                            if cur_time > req.latest_dropoff_time + 1e-6:  # float tolerance
                                 raise RuntimeError(
                                     f"HARD CONSTRAINT VIOLATION: Request {req.id} dropped off at {cur_time:.2f} "
                                     f"but latest_dropoff_time is {req.latest_dropoff_time:.2f}. "
@@ -298,12 +299,13 @@ class BatchController(IBatchController):
             if route_finished:
                 # We have served all stops by or before vehicle_t_now → route is done
                 v.last_visited_node = cur_node
-                v.last_visited_time = cur_time
+                available_from = max(vehicle_t_now, cur_time)
+                # The vehicle waits at its last stop until the batch time.
+                v.last_visited_time = available_from
                 v.passengers_onboard = onboard
                 v.current_route = None
                 v.route_assignment_time = None
 
-                available_from = max(vehicle_t_now, cur_time)
                 if available_from < t_now:
                     raise ValueError(
                         f"Vehicle {v.id} projected available_from_time {available_from} is before batch time {t_now}"
@@ -357,9 +359,9 @@ class BatchController(IBatchController):
 
         t = leg_start_time
 
-        # If t_now is before the leg even starts, just behave as if we started at t
-        # and snap on the first edge that finishes.
-        # (No special case needed: the loop below handles t_now <= t just fine.)
+        # The vehicle has not left the leg's first node yet: it stays there.
+        if t >= t_now:
+            return path.nodes[0], t
 
         for i, dt in enumerate(path.travel_times):
             # travel_times is length len(nodes) - 1 by contract
@@ -552,9 +554,11 @@ class BatchController(IBatchController):
             #    by _project_fleet (called before optimization).
             #    So vehicle.last_visited_time IS the available_from_time.
 
-            # 2) Attach the new route starting from that availability time
+            # 2) Attach the new route starting from that availability time.
+            #    The planner routed from available_from_time (>= t_now); starting
+            #    the replay at t_now would let the vehicle skip the rest of its leg.
             vehicle.current_route = assignment.route
-            vehicle.route_assignment_time = t_now
+            vehicle.route_assignment_time = vehicle.last_visited_time
 
         # NOTE:
         # - result.unassigned_requests are left in self._request_index.

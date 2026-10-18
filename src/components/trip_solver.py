@@ -1,3 +1,17 @@
+"""Exact single-vehicle routing: the travel(v, T) function of Alonso-Mora et al.
+
+Given a vehicle snapshot and a set of new requests, find the stop order that
+drops off every onboard passenger and serves every new request within their
+pickup and drop-off deadlines, minimising total delay. A* over (location,
+visited-stop mask) with an admissible bound from direct travel times.
+
+Cost (SI Appendix, Eq. 7 and footnote 1): the delay of a rider is
+t_d - t*, where t* = request_time + tau(o, d) is the earliest possible
+drop-off. A trip's cost is the total delay of onboard passengers and new
+requests, minus the onboard passengers' delay if the vehicle took no new
+requests. It is therefore the marginal delay the trip adds.
+"""
+
 from collections.abc import Iterable
 import heapq
 import numpy as np
@@ -15,6 +29,41 @@ from src.interfaces.data_models import FeasibilityResult, Infeasible
 logger = get_logger(__name__)
 INF = float("inf")
 
+_BASELINE_CACHE_SIZE = 50_000
+_baseline_cache: dict[tuple, float] = {}
+
+
+def onboard_baseline_delay(vehicle: VehicleAvailability, time_matrix: np.ndarray) -> float:
+    """Minimum total delay of the vehicle's current passengers with no new requests."""
+    if not vehicle.passengers_onboard:
+        return 0.0
+    # Request equality is by id only, so key on the fields the search reads.
+    key = (
+        id(time_matrix),
+        vehicle.available_at_node,
+        vehicle.available_from_time,
+        frozenset(
+            (r.id, r.origin_node, r.destination_node, r.request_time, r.latest_dropoff_time)
+            for r in (p.original_request for p in vehicle.passengers_onboard)
+        ),
+    )
+    cached = _baseline_cache.get(key)
+    if cached is not None:
+        return cached
+    result = TripSolver.solve_absolute((), vehicle, time_matrix)
+    if result.is_feasible:
+        value = result.cost  # type: ignore[attr-defined]
+    else:
+        logger.warning(
+            "Vehicle %s cannot drop off its passengers in time; baseline set to 0.",
+            vehicle.vehicle_id,
+        )
+        value = 0.0
+    if len(_baseline_cache) >= _BASELINE_CACHE_SIZE:
+        _baseline_cache.clear()
+    _baseline_cache[key] = value
+    return value
+
 
 class TripSolver:
     """
@@ -27,6 +76,24 @@ class TripSolver:
         vehicle: VehicleAvailability,
         time_matrix: np.ndarray,
     ) -> FeasibilityResult:
+        """Optimal route for `vehicle` serving `requests`; cost is the marginal delay."""
+        result = TripSolver.solve_absolute(requests, vehicle, time_matrix)
+        if not result.is_feasible:
+            return result
+        baseline = onboard_baseline_delay(vehicle, time_matrix)
+        cost = result.cost - baseline  # type: ignore[attr-defined]
+        route = result.route  # type: ignore[attr-defined]
+        return FeasibleRoute(
+            route=Route(route.stops, route.total_travel_time, 0.0, cost), cost=cost
+        )
+
+    @staticmethod
+    def solve_absolute(
+        requests: Iterable[Request],
+        vehicle: VehicleAvailability,
+        time_matrix: np.ndarray,
+    ) -> FeasibilityResult:
+        """Optimal route; cost is the total delay of onboard and new riders."""
 
         # --- 1. SETUP LOCAL CONTEXT ---
         v_node = vehicle.available_at_node
@@ -46,7 +113,7 @@ class TripSolver:
             node_indices.append(r.destination_node)
             is_pickup.append(False)
             hard_latest.append(r.latest_dropoff_time)
-            req_times.append(r.request_time)
+            req_times.append(r.request_time + time_matrix[r.origin_node, r.destination_node])
             req_ids_ordered.append(r.id)
 
         n_onboard = len(node_indices)
@@ -56,10 +123,11 @@ class TripSolver:
         prereqs = [0] * n_onboard
 
         for r in requests:
+            t_star = r.request_time + time_matrix[r.origin_node, r.destination_node]
             node_indices.append(r.origin_node)
             is_pickup.append(True)
             hard_latest.append(r.latest_pickup_time)
-            req_times.append(r.request_time)
+            req_times.append(t_star)
             prereqs.append(0)
             req_ids_ordered.append(r.id)
 
@@ -69,7 +137,7 @@ class TripSolver:
             node_indices.append(r.destination_node)
             is_pickup.append(False)
             hard_latest.append(r.latest_dropoff_time)
-            req_times.append(r.request_time)
+            req_times.append(t_star)
             prereqs.append(1 << pk_local_idx)
             req_ids_ordered.append(r.id)
             current_static_idx += 1
@@ -214,7 +282,7 @@ class TripSolver:
                         )
                     )
                 return FeasibleRoute(
-                    route=Route(tuple(final_stops), g, 0.0, 0.0), cost=g
+                    route=Route(tuple(final_stops), c_time - v_start, 0.0, g), cost=g
                 )
 
             state_key = (u_idx, mask)

@@ -21,14 +21,12 @@ from .services import (
     IRTVGraphBuilder,
     IRVGraphBuilder,
     IRebalancingSolver,
-    ISingleVehicleRoutePlanner,
     RTVGraph,
     RVGraph,
 )
 
 __all__ = [
     # SERVICES
-    "ISingleVehicleRoutePlanner",
     "IRebalancingSolver",
     "IAssignmentSolver",
     "IRTVGraphBuilder",

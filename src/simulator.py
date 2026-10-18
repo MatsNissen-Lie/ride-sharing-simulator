@@ -3,13 +3,7 @@ from typing import Iterator, Any
 
 from config import get_logger
 from config.config import (
-    DELTA,
-    MIN_REQUESTS_TO_PROCESS,
-    OMEGA,
     PLOT_RTV_GRAPH,
-    MAX_BATCHES,
-    MEGA_BATCH_MODE,
-    MEGA_BATCH_SIZE,
     BATCH_DURATION,
     END_TIME,
     WARMUP_DURATION,
@@ -21,7 +15,6 @@ from src.interfaces import (
     IRVGraphBuilder,
     IRTVGraphBuilder,
     INetworkService,
-    Request,
     MetaRequest,
 )
 from src.components.simulation_data_provider import SimulationDataProvider
@@ -61,89 +54,30 @@ class Simulator:
         min_start_time: float,
         batch_duration: int = BATCH_DURATION,
         warmup_duration: float = WARMUP_DURATION,
-        mega_batch_mode: bool = MEGA_BATCH_MODE,
-        mega_batch_size: int = MEGA_BATCH_SIZE,
-        max_batches: int | float = MAX_BATCHES,
+        max_batches: int | None = None,
+        end_time: float = END_TIME,
     ) -> Iterator[BatchStatistics]:
         logger.info("🚀 Simulation starting...")
 
         batch_count = 0
-        self.mega_pool: list[Request] = []
 
-        # No try/finally block needed here as we yield control back to caller
         for batch in self.controller.iter_batches(
             request_iterator, batch_duration, min_start_time=min_start_time
         ):
             t_now, all_requests_in_pool, vehicle_avail_pool = batch
 
-            if t_now >= END_TIME:
-                logger.info(f"🛑 Reached end time ({END_TIME}). Stopping simulation.")
+            if t_now >= end_time:
+                logger.info(f"🛑 Reached end time ({end_time}). Stopping simulation.")
+                break
+
+            batch_count += 1
+            if max_batches is not None and batch_count > max_batches:
+                logger.info(f"🛑 Reached max batches limit ({max_batches}).")
                 break
 
             batch_datetime = self.provider.get_simulation_clock().from_relative_seconds(
                 t_now
             )
-
-            if (
-                len(all_requests_in_pool) < MIN_REQUESTS_TO_PROCESS
-                and not mega_batch_mode
-            ):
-                continue
-
-            if mega_batch_mode:
-                # Accumulate requests
-                for req in all_requests_in_pool:
-                    if req not in self.mega_pool:
-                        self.mega_pool.append(req)
-
-                if len(self.mega_pool) < mega_batch_size:
-                    logger.info(
-                        f"🧬 Accumulating requests... [{len(self.mega_pool)}/{mega_batch_size}]"
-                    )
-                    continue  # Skip processing until we reach the threshold
-
-                # filter so we have exactly mega_batch_size requests
-                self.mega_pool = self.mega_pool[:mega_batch_size]
-
-                # Threshold reached: "Refresh" timestamps and inject back
-                logger.info(
-                    f"🧬 MEGA BATCH threshold reached! Refreshing {len(self.mega_pool)} requests..."
-                )
-
-                refreshed_requests = set()
-                for req in self.mega_pool:
-                    # Logic: shift request time to be within the current batch window
-                    # We use % BATCH_DURATION to keep the relative offset
-                    offset = req.request_time % BATCH_DURATION
-                    new_req_time = t_now - BATCH_DURATION + offset
-
-                    # Recalculate dropoff based on original duration
-                    original_duration = (
-                        req.latest_dropoff_time - DELTA - req.request_time
-                    )
-
-                    new_req = Request(
-                        id=req.id,
-                        origin_node=req.origin_node,
-                        destination_node=req.destination_node,
-                        request_time=new_req_time,
-                        latest_pickup_time=new_req_time + OMEGA,
-                        latest_dropoff_time=new_req_time + original_duration + DELTA,
-                    )
-                    refreshed_requests.add(new_req)
-                    # Inject into controller to bypass expiration
-                    self.controller._request_index[new_req.id] = new_req
-
-                # Override the current batch connection
-                all_requests_in_pool = refreshed_requests
-                self.mega_pool = []  # Reset for next mega batch (or we could break)
-
-            batch_count += 1
-            if max_batches is not None and batch_count > max_batches:
-                logger.info(
-                    f"🛑 Reached max batches limit ({max_batches}). Stopping simulation at batch {batch_count}."
-                )
-                break
 
             start_loop_time = time.perf_counter()
             logger.info("--- Batch %d starting at t=%.2f ---", batch_count, t_now)

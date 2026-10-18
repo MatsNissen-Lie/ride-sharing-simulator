@@ -16,6 +16,36 @@ The historical simulation results and plots are in [`reports/`](reports/).
 Exact vehicle samples are in [`data/vehicles/`](data/vehicles/).
 See the archive README for the data requirements and validation results.
 
+## Running the simulation
+
+The baseline is the Alonso-Mora et al. (2017) batch assignment: RV graph, RTV
+graph, assignment ILP and rebalancing, replayed on the Manhattan street graph.
+
+One-time data preparation (gitignored outputs):
+
+```sh
+# NYC TLC trips for a month, e.g. January 2025, into data/riders/
+curl -o data/riders/fhvhv_tripdata_2025-01.parquet https://d37ci6vzurychx.cloudfront.net/trip-data/fhvhv_tripdata_2025-01.parquet
+curl -o data/riders/yellow_tripdata_2025-01.parquet https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2025-01.parquet
+uv run python -m src.state_representation.generate_rider_locations_multi  # snap trips to street nodes
+uv run python scripts/compute_all_sp_fast.py                             # all-pairs travel times
+```
+
+Run (defaults in `config/config.py`; results go to `reports/<timestamp>_sim_standard/`):
+
+```sh
+uv run python main.py                    # trip-centric RTV builder, Gurobi
+uv run python main.py --rtv vehicle      # vehicle-centric RTV builder (paper's Algorithm 1)
+uv run python main.py --solver highs     # no Gurobi licence needed
+uv run python main.py --hours 1 --fleet 1000
+```
+
+Tests compare each component with brute force on a small synthetic network:
+
+```sh
+uv run python -m pytest -q tests
+```
+
 Open `thesis/main.tex` in the Codex LaTeX editor to edit and preview the document.
 
 For VS Code, open this repository folder and use the LaTeX Workshop extension.

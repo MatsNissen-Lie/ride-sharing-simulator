@@ -18,22 +18,20 @@ trade off optimality for runtime.
 
 The central class exported by this module is :class:`RVGraphBuilder`, which
 implements the :class:`IRVGraphBuilder` interface from ``src.interfaces``.
-It relies on a provided :class:`RoutePlanner` to evaluate feasibility of
-pairings. The resulting graph is returned as an instance of
+Occupied vehicles are checked with the exact trip solver; empty and
+one-passenger vehicles and request pairs use vectorised closed forms. The resulting graph is returned as an instance of
 :class:`RVGraph` defined below.
 """
 
 import numpy as np
 from typing import cast
-from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from config import get_logger
 from config.config import DELTA, OMEGA
 
 
-from src.components.search_algorithm.bfs_astar_real import TripSolver as AstarTripSolver
+from src.components.trip_solver import TripSolver
 from src.interfaces import (
-    ISingleVehicleRoutePlanner,
     VehicleAvailability,
     IRVGraphBuilder,
     Request,
@@ -44,11 +42,6 @@ from src.interfaces import (
 from src.interfaces.graphs import RVGraph
 from src.interfaces.services import INetworkService
 
-from src.components.graph_builder.workers import (
-    process_rv_chunk,
-    RVTask,
-    init_worker,
-)
 
 logger = get_logger("rv_graph_builder")
 
@@ -60,15 +53,11 @@ if __name__ != "__main__":
 class RVGraphBuilder(IRVGraphBuilder):
     def __init__(
         self,
-        route_planner: ISingleVehicleRoutePlanner,
         network: INetworkService,
         omega: float = OMEGA,
         delta: float = DELTA,
     ) -> None:
-        super().__init__(route_planner)
-        self._network = network
-        self._route_planner = None
-        self._route_solver = AstarTripSolver
+        super().__init__(network)
         self._omega = omega
         self._delta = delta
 
@@ -100,10 +89,13 @@ class RVGraphBuilder(IRVGraphBuilder):
         req_times = np.array([r.request_time for r in req_list])
 
         # B. Vectorized Pruning
-        # Condition: Time(i,j) <= Omega OR Time(j,i) <= Omega
-        # Note: We only look at upper triangle (k=1) to avoid duplicates (i,j) vs (j,i)
+        # Necessary condition: whichever origin is visited first, the second
+        # pickup is no earlier than t_first + tau(o_first, o_second), and must
+        # happen by t_second + Omega. Upper triangle only (pairs are unordered).
+        t_gap = req_times[None, :] - req_times[:, None]  # t_j - t_i
         rr_mask = np.triu(
-            (rr_matrix <= self._omega) | (rr_matrix.T <= self._omega), k=1
+            (rr_matrix <= self._omega + t_gap) | (rr_matrix.T <= self._omega - t_gap),
+            k=1,
         )
 
         rr_idx_i, rr_idx_j = np.where(rr_mask)
@@ -148,9 +140,10 @@ class RVGraphBuilder(IRVGraphBuilder):
                 veh_locs, req_origins.tolist()
             )  # (V, R)
 
-            # We use the raw difference for the check first
+            # Pickup deadline (request_time + Omega, or the promised pickup time)
             raw_diff = (v_times_arr + rv_matrix) - r_times_arr
-            rv_mask = raw_diff <= self._omega
+            r_latest_pickup = np.array([r.latest_pickup_time for r in req_list])
+            rv_mask = (v_times_arr + rv_matrix) <= r_latest_pickup[None, :]
 
             # Indices of ALL feasible pairs
             v_idx, r_idx = np.where(rv_mask)
@@ -185,7 +178,7 @@ class RVGraphBuilder(IRVGraphBuilder):
                 # --- CASE 2+: COMPLEX (m >= 2) ---
                 mask_high = occupancy >= 2
                 if np.any(mask_high):
-                    self._process_rv_occupied_parallel(
+                    self._solve_rv_occupied(
                         v_idx[mask_high], r_idx[mask_high], veh_list, req_list, graph
                     )
 
@@ -313,8 +306,9 @@ class RVGraphBuilder(IRVGraphBuilder):
         delay_vals: np.ndarray,
         graph: RVGraph,
     ):
-        """
-        Builds edges for empty vehicles immediately without workers.
+        """Edges for empty vehicles: drive to the pickup, then straight to the drop-off.
+
+        Cost is the rider's delay, which for a direct ride equals the pickup wait.
         """
         if len(v_idxs) == 0:
             return
@@ -352,7 +346,7 @@ class RVGraphBuilder(IRVGraphBuilder):
             )
             graph.add_rv_edge(r.id, v.vehicle_id, route)
 
-    def _process_rv_occupied_parallel(
+    def _solve_rv_occupied(
         self,
         v_idxs: np.ndarray,
         r_idxs: np.ndarray,
@@ -360,68 +354,13 @@ class RVGraphBuilder(IRVGraphBuilder):
         req_list: list[Request],
         graph: RVGraph,
     ):
-        if len(v_idxs) == 0:
-            return
-
-        # 1. Create Task List
-        occupied_tasks = [
-            RVTask(veh_list[v], req_list[r]) for v, r in zip(v_idxs, r_idxs)
-        ]
-
-        count = len(occupied_tasks)
-
-        # --- PATH A: SEQUENTIAL (Low Volume) ---
-        # 12000 is a safe crossover point where overhead usually breaks even
-        if count < 12000 or True:
-            logger.info(f"RV Occupied: Processing {count} tasks sequentially.")
-
-            # 1. Calculation Phase (Pure, Parallelizable logic if needed)
-            # We explicitly check feasibility for all tasks first
-            results = [
-                (
-                    task.req.id,
-                    task.vehicle.vehicle_id,
-                    self._route_solver.solve(
-                        requests=[task.req],
-                        vehicle=task.vehicle,
-                        time_matrix=self._network.get_l1_cache(),
-                    ),
-                )
-                for task in occupied_tasks
-            ]
-
-            # 2. Mutation Phase (Side Effects)
-            # Filter and insert
-            for req_id, veh_id, result in results:
-                if result.is_feasible:
-                    graph.add_rv_edge(req_id, veh_id, cast(FeasibleRoute, result))
-            return
-
-        # --- PATH B: PARALLEL (High Volume) ---
-        # this is tooo slow
-        logger.warning(f"RV Occupied: Processing {count} tasks in Parallel Pool.")
-        l1_cache_copy = self._network.get_l1_cache()
-        chunk_size = 400
-
-        def rv_chunk_generator():
-            for i in range(0, count, chunk_size):
-                yield occupied_tasks[i : i + chunk_size]
-
-        with ProcessPoolExecutor(
-            max_workers=12, initializer=init_worker, initargs=(l1_cache_copy,)
-        ) as executor:
-            future_to_chunk = {
-                executor.submit(process_rv_chunk, chunk): chunk
-                for chunk in rv_chunk_generator()
-            }
-            for future in as_completed(future_to_chunk):
-                try:
-                    results = future.result()
-                    for req_id, veh_id, feasible_route in results:
-                        graph.add_rv_edge(req_id, veh_id, feasible_route)
-                except Exception as exc:
-                    logger.error(f"RV Worker exception: {exc}")
-                    raise exc
+        """Exact trip solver for vehicles with two or more passengers."""
+        time_matrix = self._network.get_l1_cache()
+        for v, r in zip(v_idxs, r_idxs):
+            vehicle, req = veh_list[v], req_list[r]
+            result = TripSolver.solve([req], vehicle, time_matrix)
+            if result.is_feasible:
+                graph.add_rv_edge(req.id, vehicle.vehicle_id, cast(FeasibleRoute, result))
 
     def _solve_rv_matrix_m1(
         self,
@@ -460,6 +399,7 @@ class RVGraphBuilder(IRVGraphBuilder):
         r_dests = np.array([req_list[i].destination_node for i in r_idxs])
         r_times = np.array([req_list[i].request_time for i in r_idxs])
         r_dead = np.array([req_list[i].latest_dropoff_time for i in r_idxs])
+        r_lp = np.array([req_list[i].latest_pickup_time for i in r_idxs])
 
         # 2. FETCH TRAVEL TIMES
         mat = self._network.get_l1_cache()
@@ -479,28 +419,32 @@ class RVGraphBuilder(IRVGraphBuilder):
         t_d_d1 = get_v(r_dests, d1_loc)
 
         # 3. PERMUTATIONS (3 Valid)
+        # Cost = new rider's delay (a_d - t*) + passenger's extra delay versus
+        # driving straight to d1 (a_d1 - (v_time + t_v_d1)).
+        r_star = r_times + t_p_d
+        d1_direct = v_time + t_v_d1
         costs = np.full((3, len(v_idxs)), np.inf)
 
         # -- Perm 0: P -> D -> D1 --
         a_p = np.maximum(v_time + t_v_p, r_times)
         a_d = a_p + t_p_d
         a_d1 = a_d + t_d_d1
-        mask0 = (a_p - r_times <= self._omega) & (a_d1 <= d1_dead) & (a_d <= r_dead)
-        costs[0, mask0] = (a_d1 - v_time)[mask0]
+        mask0 = (a_p <= r_lp) & (a_d1 <= d1_dead) & (a_d <= r_dead)
+        costs[0, mask0] = ((a_d - r_star) + (a_d1 - d1_direct))[mask0]
 
         # -- Perm 1: P -> D1 -> D --
         a_p = np.maximum(v_time + t_v_p, r_times)
         a_d1 = a_p + t_p_d1
         a_d = a_d1 + t_d1_d
-        mask1 = (a_p - r_times <= self._omega) & (a_d1 <= d1_dead) & (a_d <= r_dead)
-        costs[1, mask1] = (a_d - v_time)[mask1]
+        mask1 = (a_p <= r_lp) & (a_d1 <= d1_dead) & (a_d <= r_dead)
+        costs[1, mask1] = ((a_d - r_star) + (a_d1 - d1_direct))[mask1]
 
         # -- Perm 2: D1 -> P -> D --
         a_d1 = v_time + t_v_d1
         a_p = np.maximum(a_d1 + t_d1_p, r_times)
         a_d = a_p + t_p_d
-        mask2 = (a_d1 <= d1_dead) & (a_p - r_times <= self._omega) & (a_d <= r_dead)
-        costs[2, mask2] = (a_d - v_time)[mask2]
+        mask2 = (a_d1 <= d1_dead) & (a_p <= r_lp) & (a_d <= r_dead)
+        costs[2, mask2] = ((a_d - r_star) + (a_d1 - d1_direct))[mask2]
 
         # 4. REDUCE
         best_costs = np.min(costs, axis=0)

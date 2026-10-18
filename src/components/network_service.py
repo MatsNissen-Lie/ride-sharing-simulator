@@ -53,11 +53,11 @@ class NetworkXService(INetworkService):
                 f"NetworkXService: Node count {self.N} is too large for nuclear cache."
             )
 
-        # 1. Time Matrix (Float32 for speed/size)
-        self._time_matrix = np.full((self.N, self.N), np.nan, dtype=np.float32)
+        # 1. Time Matrix (float64 so planned and replayed times agree)
+        self._time_matrix = np.full((self.N, self.N), np.nan, dtype=np.float64)
 
         # 2. Distance Matrix (Optional, if you need it for costs)
-        self._dist_matrix = np.full((self.N, self.N), np.nan, dtype=np.float32)
+        self._dist_matrix = np.full((self.N, self.N), np.nan, dtype=np.float64)
 
         # Lets make it nuclear by default
         if not prefetch:

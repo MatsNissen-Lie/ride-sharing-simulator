@@ -4,7 +4,6 @@ import numpy as np
 
 from src.interfaces.data_models import (
     AssignmentResult,
-    FeasibilityResult,
     NetworkPath,
     NetworkPathExtended,
     RebalancingResult,
@@ -103,37 +102,6 @@ class INetworkService(ABC):
 
 
 # ---------------------------------------------------------------------------
-#  II. The Core "Engine": Single-Vehicle Routing (DARP)
-# ---------------------------------------------------------------------------
-
-
-class ISingleVehicleRoutePlanner(ABC):
-    """
-    Solves the single-vehicle DARP.
-    This encapsulates the 'travel(v, R_v)' function.
-    """
-
-    def __init__(self, network_service: INetworkService):
-        self._network = network_service
-        pass
-
-    @abstractmethod
-    def check_feasibility(
-        self,
-        requests_to_add: set[Request],
-        vehicle: VehicleAvailability | None = None,
-    ) -> FeasibilityResult:
-        """
-        Solves the DARP for a single vehicle.
-        Attempts to find an optimal route (a permutation of stops) that serves:
-        1. All passengers already onboard (vehicle.passengers_onboard)
-        2. All new requests (requests_to_add)
-        passwhile respecting all constraints.
-        """
-        pass
-
-
-# ---------------------------------------------------------------------------
 #  III. The Four-Step Assignment Pipeline: Abstract Interfaces
 # ---------------------------------------------------------------------------
 
@@ -149,9 +117,8 @@ class ISingleVehicleRoutePlanner(ABC):
 
 class IRVGraphBuilder(ABC):
 
-    def __init__(self, route_planner: ISingleVehicleRoutePlanner):
-        self._route_planner = route_planner
-        pass
+    def __init__(self, network: INetworkService):
+        self._network = network
 
     @abstractmethod
     def build_graph(
@@ -160,23 +127,19 @@ class IRVGraphBuilder(ABC):
         """
         Constructs the RV-graph by checking two types of pairwise shareability:
 
-        1. Request-Request (r1, r2): Creates a virtual empty vehicle 'v_virtual'
-           and checks if self._route_planner.check_feasibility(
-               v_virtual, {r1, r2}
-           ) is feasible.
+        1. Request-Request (r1, r2): whether an ideal virtual vehicle at o_r1
+           or o_r2 could serve both requests within their constraints.
 
-        2. Request-Vehicle (r, v): Checks if self._route_planner.check_feasibility(
-               v, {r}
-           ) is feasible, given v's current state (passengers, location).
+        2. Request-Vehicle (r, v): whether travel(v, {r}) is feasible given
+           v's current state (passengers, location).
         """
         pass
 
 
 class IRTVGraphBuilder(ABC):
 
-    def __init__(self, route_planner: ISingleVehicleRoutePlanner):
-        self._route_planner = route_planner
-        pass
+    def __init__(self, network: INetworkService):
+        self._network = network
 
     @abstractmethod
     def build_graph(
@@ -194,7 +157,7 @@ class IRTVGraphBuilder(ABC):
 
         2. For each candidate Trip T and each Vehicle v:
            a. Check feasibility:
-              result = self._route_planner.check_feasibility(v, T.requests)
+              result = TripSolver.solve(T.requests, v, time_matrix)
 
            b. If result.is_feasible:
               i.  Add an edge e(T, v) to the RTVGraph.

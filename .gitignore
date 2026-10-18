@@ -25,3 +25,7 @@ rich_riders/
 
 # Preserve the exact vehicle samples used by the historical experiments.
 !/data/vehicles/*.parquet
+.env
+
+# New simulation runs (historical runs above stay tracked)
+reports/20*_sim_standard/

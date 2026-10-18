@@ -14,6 +14,9 @@ from src.interfaces.graphs import RTVGraph, TripId
 
 logger = get_logger(__name__)
 
+# Optimality tolerance in objective units (seconds of delay).
+MIP_ABS_GAP = 1e-3
+
 if __name__ != "__main__":
     logger.setLevel("WARNING")
 
@@ -43,7 +46,10 @@ class GurobiAssignmentSolver(IAssignmentSolver):
             # Silence console output (set to 1 for debugging)
             model.setParam(GRB.Param.OutputFlag, 0)
             model.setParam(GRB.Param.TimeLimit, solver_timeout)
-            model.setParam(GRB.Param.MIPGap, 0.01)  # 1% gap is usually sufficient
+            # The objective is dominated by 1e5-per-request penalties, so a relative
+            # gap hides real delay differences (1% could even hide extra rejections).
+            model.setParam(GRB.Param.MIPGap, 0.0)
+            model.setParam(GRB.Param.MIPGapAbs, MIP_ABS_GAP)
 
             # ------------------------------------------------------
             # 2. Decision Variables
@@ -161,10 +167,10 @@ class GurobiAssignmentSolver(IAssignmentSolver):
                     GRB.TIME_LIMIT: "TIME_LIMIT",
                     GRB.SUBOPTIMAL: "SUBOPTIMAL",
                 }
-                status = status_dict.get(status, str(status))
+                status_name = status_dict.get(status, str(status))
 
                 logger.info(
-                    f"Solver finished. Status: {status}. "
+                    f"Solver finished. Status: {status_name}. "
                     f"Assigned {len(assignments)} vehicles, {len(assigned_req_ids)} requests."
                 )
 
@@ -178,11 +184,6 @@ class GurobiAssignmentSolver(IAssignmentSolver):
             else:
                 raise RuntimeError(
                     f"Gurobi failed to find solution. Status code: {status}"
-                )
-                logger.error(f"Gurobi failed to find solution. Status code: {status}")
-                # Fallback: return all unassigned
-                return AssignmentResult(
-                    assignments=set(), unassigned_requests=requests, is_optimal=False
                 )
 
     def _calculate_penalty(self, request: Request, current_time: float) -> float:
@@ -263,3 +264,88 @@ class GurobiAssignmentSolver(IAssignmentSolver):
                 y_vars[r.id].Start = 1.0
             else:
                 y_vars[r.id].Start = 0.0
+
+
+class HighsAssignmentSolver(GurobiAssignmentSolver):
+    """
+    The same assignment ILP solved with HiGHS (scipy.optimize.milp).
+
+    Open-source fallback for machines without a full Gurobi licence. HiGHS
+    takes no MIP start, so the greedy warm start is not used.
+    """
+
+    def solve(
+        self,
+        rtv_graph: RTVGraph,
+        requests: set[Request],
+        vehicles: set[VehicleAvailability],
+        solver_timeout: float,
+        current_time: float,
+    ) -> AssignmentResult:
+        import numpy as np
+        from scipy.optimize import Bounds, LinearConstraint, milp
+        from scipy.sparse import coo_matrix
+
+        edges = list(rtv_graph.trip_vehicle_details.keys())
+        req_list = list(requests)
+        req_index = {r.id: k for k, r in enumerate(req_list)}
+        veh_index = {v.vehicle_id: k for k, v in enumerate(vehicles)}
+        n_x, n_y = len(edges), len(req_list)
+        if n_y == 0:
+            return AssignmentResult(set(), set(), 0.0, True)
+
+        cost = np.empty(n_x + n_y)
+        rows, cols = [], []  # request rows first, then vehicle rows
+        for e, (trip, v_id) in enumerate(edges):
+            cost[e] = rtv_graph.trip_vehicle_details[(trip, v_id)].cost
+            for r_id in trip:
+                rows.append(req_index[r_id])
+                cols.append(e)
+            rows.append(n_y + veh_index[v_id])
+            cols.append(e)
+        for k, req in enumerate(req_list):
+            cost[n_x + k] = self._calculate_penalty(req, current_time)
+            rows.append(k)
+            cols.append(n_x + k)
+
+        n_rows = n_y + len(veh_index)
+        a = coo_matrix(
+            (np.ones(len(rows)), (rows, cols)), shape=(n_rows, n_x + n_y)
+        ).tocsr()
+        lower = np.concatenate([np.ones(n_y), np.zeros(len(veh_index))])
+        upper = np.ones(n_rows)
+        result = milp(
+            c=cost,
+            constraints=LinearConstraint(a, lower, upper),
+            integrality=np.ones(n_x + n_y),
+            bounds=Bounds(0, 1),
+            options={"time_limit": solver_timeout, "mip_rel_gap": 0.0},
+        )
+        if result.x is None:
+            raise RuntimeError(f"HiGHS failed to find a solution: {result.message}")
+
+        assignments: set[Assignment] = set()
+        assigned_req_ids: set[str] = set()
+        for e, (trip, v_id) in enumerate(edges):
+            if result.x[e] > 0.5:
+                route_info = rtv_graph.get_route(trip, v_id)
+                assignments.add(
+                    Assignment(
+                        vehicle_id=v_id,
+                        trip_id=trip,
+                        route=route_info.route,
+                        cost=route_info.cost,
+                    )
+                )
+                assigned_req_ids.update(trip)
+
+        logger.info(
+            f"HiGHS finished: {result.message} "
+            f"Assigned {len(assignments)} vehicles, {len(assigned_req_ids)} requests."
+        )
+        return AssignmentResult(
+            assignments=assignments,
+            unassigned_requests={r for r in requests if r.id not in assigned_req_ids},
+            total_cost=float(result.fun),
+            is_optimal=result.status == 0,
+        )
