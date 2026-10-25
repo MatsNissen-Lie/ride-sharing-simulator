@@ -6,7 +6,7 @@ DELTA = 5 * 60  # maximum delay (waiting + in-vehicle), relative to t*
 
 # Simulation
 BATCH_DURATION = 10  # seconds between assignments
-NUMBER_OF_VEHICLES = 2500
+NUMBER_OF_VEHICLES = 1500
 VEHICLE_CAPACITY = 4
 
 # Trips may hold more requests than free seats when riders are served in sequence.
