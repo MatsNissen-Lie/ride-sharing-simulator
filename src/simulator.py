@@ -188,7 +188,7 @@ class Simulator:
             )
 
             rebalancing_duration = 0.0
-            if idle_vehicles and unassigned_requests:
+            if idle_vehicles:
                 logger.debug(
                     f"Rebalancing: {len(idle_vehicles)} idle vehicles, "
                     f"{len(unassigned_requests)} unassigned requests."
@@ -198,6 +198,7 @@ class Simulator:
                 rebalancing_routes = self.rebalancing_solver.solve(
                     idle_vehicles=idle_vehicles,
                     unassigned_requests=unassigned_requests,
+                    t_now=t_now,
                 )
                 rebal_end_time = time.perf_counter()
                 rebalancing_duration = rebal_end_time - rebal_start_time

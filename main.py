@@ -1,5 +1,6 @@
 import argparse
 import os
+from datetime import datetime
 
 import config.config as config
 from config import BATCH_DURATION, get_logger
@@ -14,6 +15,7 @@ from src.components.graph_builder.rtv_vehicle_centric import (
 )
 from src.components.graph_builder.rv_builder import RVGraphBuilder
 from src.components.network_service import NetworkXService
+from src.components.oracle_rebalance_solver import OracleRebalancingSolver
 from src.components.rebalance_solver import RebalancingSolver
 from src.components.simulation_data_provider import SimulationDataProvider
 from src.database.simple_db import DuckDBPathCache
@@ -53,6 +55,27 @@ def parse_args() -> argparse.Namespace:
         "--fleet", type=int, default=config.NUMBER_OF_VEHICLES, help="Fleet size."
     )
     parser.add_argument(
+        "--start",
+        type=datetime.fromisoformat,
+        default=None,
+        help="Start of warm-up, local time, e.g. 2025-01-16T17:45 (default: MIN_START_TIME).",
+    )
+    parser.add_argument(
+        "--rebalancing",
+        choices=["reactive", "oracle"],
+        default="reactive",
+        help="Reactive (paper) or perfect-information benchmark.",
+    )
+    parser.add_argument(
+        "--horizon",
+        type=float,
+        default=10.0,
+        help="Oracle look-ahead in minutes.",
+    )
+    parser.add_argument(
+        "--name", default="sim_standard", help="Suffix for the run folder in reports/."
+    )
+    parser.add_argument(
         "--hours",
         type=float,
         default=None,
@@ -69,25 +92,41 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def make_rebalancing_solver(args, provider, network, start_time, end_time):
+    if args.rebalancing == "reactive":
+        return RebalancingSolver(network)
+    horizon = args.horizon * 60
+    future = provider.request_origins_between(start_time, end_time + horizon)
+    return OracleRebalancingSolver(
+        network, future["t"].to_numpy(), future["origin"].to_numpy(), horizon
+    )
+
+
 def main():
     args = parse_args()
-    end_time = config.END_TIME
+    provider = SimulationDataProvider()
+    start_time = config.MIN_START_TIME
+    if args.start is not None:
+        start_time = (args.start - provider.first_request_time()).total_seconds()
+    end_time = start_time + config.END_TIME - config.MIN_START_TIME
     if args.hours is not None:
-        end_time = config.MIN_START_TIME + config.WARMUP_DURATION + args.hours * 3600
+        end_time = start_time + config.WARMUP_DURATION + args.hours * 3600
 
-    output_manager = SimulationOutputManager(base_dir="reports", run_name="sim_standard")
+    output_manager = SimulationOutputManager(base_dir="reports", run_name=args.name)
     metadata = {k: getattr(config, k) for k in dir(config) if k.isupper()}
     metadata |= {
         "rtv_builder": args.rtv,
         "assignment_solver": args.solver,
         "NUMBER_OF_VEHICLES": args.fleet,
+        "MIN_START_TIME": start_time,
         "END_TIME": end_time,
+        "rebalancing": args.rebalancing,
+        "oracle_horizon_min": args.horizon,
     }
     output_manager.save_metadata(metadata)
     csv_path = os.path.join(output_manager.get_run_dir(), "simulation_stats.csv")
 
     logger.info("Initializing components...")
-    provider = SimulationDataProvider()
     db_cache = DuckDBPathCache(read_only=args.read_only)
     network_service = NetworkXService(provider.graph, db=db_cache)
 
@@ -97,7 +136,9 @@ def main():
         rv_builder=RVGraphBuilder(network_service),
         rtv_builder=RTV_BUILDERS[args.rtv](network_service),
         assignment_solver=ASSIGNMENT_SOLVERS[args.solver](),
-        rebalancing_solver=RebalancingSolver(network_service),
+        rebalancing_solver=make_rebalancing_solver(
+            args, provider, network_service, start_time, end_time
+        ),
         network_service=network_service,
         db_cache=db_cache,
         read_only=args.read_only,
@@ -108,7 +149,7 @@ def main():
         for stats in simulator.run(
             request_iterator=provider.iter_requests(),
             batch_duration=BATCH_DURATION,
-            min_start_time=config.MIN_START_TIME,
+            min_start_time=start_time,
             warmup_duration=config.WARMUP_DURATION,
             max_batches=args.max_batches,
             end_time=end_time,

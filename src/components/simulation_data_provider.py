@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable, Iterator
 
@@ -115,6 +115,28 @@ class SimulationDataProvider:
         if isinstance(value, datetime):
             return value
         raise TypeError("pickup_datetime must be a datetime value")
+
+    def first_request_time(self) -> datetime:
+        """Pickup time of the first request; simulation time 0."""
+        path = next(iter(self.iter_request_files()))
+        df = pl.read_parquet(path, columns=["pickup_datetime"], n_rows=1)
+        return self._ensure_datetime(df["pickup_datetime"][0])
+
+    def request_origins_between(self, start: float, end: float) -> pl.DataFrame:
+        """Requests with start <= time < end (simulation seconds): columns t, origin."""
+        t0 = self.first_request_time()
+        lo = t0 + timedelta(seconds=start)
+        hi = t0 + timedelta(seconds=end)
+        frames = [
+            pl.scan_parquet(path)
+            .filter(pl.col("pickup_datetime").is_between(lo, hi, closed="left"))
+            .select(
+                ((pl.col("pickup_datetime") - t0).dt.total_microseconds() / 1e6).alias("t"),
+                pl.col("orig_node").cast(pl.Int64).alias("origin"),
+            )
+            for path in self.iter_request_files()
+        ]
+        return pl.concat(frames).collect().sort("t")
 
     # ------------------------------------------------------------------
     # Vehicles

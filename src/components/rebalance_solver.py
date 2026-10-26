@@ -27,7 +27,7 @@ class RebalancingSolver:
         self,
         idle_vehicles: list[VehicleAvailability],
         unassigned_requests: list[Request],
-        # solver_timeout: float = None,  # Deprecated/Unused for Scipy
+        t_now: float | None = None,
     ) -> dict[str, Route]:
 
         n_vehicles = len(idle_vehicles)
