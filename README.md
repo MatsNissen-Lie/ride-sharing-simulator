@@ -40,6 +40,19 @@ uv run python main.py --solver highs     # no Gurobi licence needed
 uv run python main.py --hours 1 --fleet 1000
 ```
 
+From Python (e.g. for experiment grids):
+
+```python
+from src.experiment import ExperimentConfig, run_experiment
+run_experiment(ExperimentConfig(fleet=750, rebalancing="oracle", hours=1))
+```
+
+Each pipeline step is a swappable component behind an interface in
+`src/interfaces/services.py`: `IObjective`, `ITripSolver`, `IRVGraphBuilder`,
+`IRTVGraphBuilder`, `IAssignmentSolver` and `IRebalancingSolver`. To try a new
+variant, implement the interface and register it by name in `src/experiment.py`;
+it is then selectable from `ExperimentConfig` and the command line.
+
 Tests compare each component with brute force on a small synthetic network:
 
 ```sh

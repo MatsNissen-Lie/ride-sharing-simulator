@@ -18,6 +18,7 @@ import numpy as np
 
 from config import get_logger
 from src.interfaces import (
+    ITripSolver,
     VehicleAvailability,
     Request,
     FeasibleRoute,
@@ -30,70 +31,67 @@ logger = get_logger(__name__)
 INF = float("inf")
 
 _BASELINE_CACHE_SIZE = 50_000
-_baseline_cache: dict[tuple, float] = {}
 
 
-def onboard_baseline_delay(vehicle: VehicleAvailability, time_matrix: np.ndarray) -> float:
-    """Minimum total delay of the vehicle's current passengers with no new requests."""
-    if not vehicle.passengers_onboard:
-        return 0.0
-    # Request equality is by id only, so key on the fields the search reads.
-    key = (
-        id(time_matrix),
-        vehicle.available_at_node,
-        vehicle.available_from_time,
-        frozenset(
-            (r.id, r.origin_node, r.destination_node, r.request_time, r.latest_dropoff_time)
-            for r in (p.original_request for p in vehicle.passengers_onboard)
-        ),
-    )
-    cached = _baseline_cache.get(key)
-    if cached is not None:
-        return cached
-    result = TripSolver.solve_absolute((), vehicle, time_matrix)
-    if result.is_feasible:
-        value = result.cost  # type: ignore[attr-defined]
-    else:
-        logger.warning(
-            "Vehicle %s cannot drop off its passengers in time; baseline set to 0.",
-            vehicle.vehicle_id,
-        )
-        value = 0.0
-    if len(_baseline_cache) >= _BASELINE_CACHE_SIZE:
-        _baseline_cache.clear()
-    _baseline_cache[key] = value
-    return value
+class AStarTripSolver(ITripSolver):
+    """Exact travel(v, T) minimising delay, by A* search over stop orders."""
 
+    # The RV builder's vectorised edges for empty and one-passenger vehicles
+    # reproduce this solver exactly (tests/test_graph_builders.py).
+    matches_rv_closed_forms = True
 
-class TripSolver:
-    """
-    A* BFS Solver using Priority Queue.
-    """
+    def __init__(self, time_matrix: np.ndarray):
+        self._matrix = time_matrix
+        self._baseline_cache: dict[tuple, float] = {}
 
-    @staticmethod
     def solve(
-        requests: Iterable[Request],
-        vehicle: VehicleAvailability,
-        time_matrix: np.ndarray,
+        self, requests: Iterable[Request], vehicle: VehicleAvailability
     ) -> FeasibilityResult:
         """Optimal route for `vehicle` serving `requests`; cost is the marginal delay."""
-        result = TripSolver.solve_absolute(requests, vehicle, time_matrix)
+        result = self.solve_absolute(requests, vehicle)
         if not result.is_feasible:
             return result
-        baseline = onboard_baseline_delay(vehicle, time_matrix)
-        cost = result.cost - baseline  # type: ignore[attr-defined]
+        cost = result.cost - self.onboard_baseline_delay(vehicle)  # type: ignore[attr-defined]
         route = result.route  # type: ignore[attr-defined]
         return FeasibleRoute(
             route=Route(route.stops, route.total_travel_time, 0.0, cost), cost=cost
         )
 
-    @staticmethod
+    def onboard_baseline_delay(self, vehicle: VehicleAvailability) -> float:
+        """Minimum total delay of the vehicle's current passengers with no new requests."""
+        if not vehicle.passengers_onboard:
+            return 0.0
+        # Request equality is by id only, so key on the fields the search reads.
+        key = (
+            vehicle.available_at_node,
+            vehicle.available_from_time,
+            frozenset(
+                (r.id, r.origin_node, r.destination_node, r.request_time, r.latest_dropoff_time)
+                for r in (p.original_request for p in vehicle.passengers_onboard)
+            ),
+        )
+        cached = self._baseline_cache.get(key)
+        if cached is not None:
+            return cached
+        result = self.solve_absolute((), vehicle)
+        if result.is_feasible:
+            value = result.cost  # type: ignore[attr-defined]
+        else:
+            logger.warning(
+                "Vehicle %s cannot drop off its passengers in time; baseline set to 0.",
+                vehicle.vehicle_id,
+            )
+            value = 0.0
+        if len(self._baseline_cache) >= _BASELINE_CACHE_SIZE:
+            self._baseline_cache.clear()
+        self._baseline_cache[key] = value
+        return value
+
     def solve_absolute(
-        requests: Iterable[Request],
-        vehicle: VehicleAvailability,
-        time_matrix: np.ndarray,
+        self, requests: Iterable[Request], vehicle: VehicleAvailability
     ) -> FeasibilityResult:
         """Optimal route; cost is the total delay of onboard and new riders."""
+        time_matrix = self._matrix
 
         # --- 1. SETUP LOCAL CONTEXT ---
         v_node = vehicle.available_at_node

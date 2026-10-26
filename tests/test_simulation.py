@@ -12,9 +12,10 @@ from src.components.graph_builder.rtv_vehicle_centric import (
     VehicleCentricRTVGraphBuilder,
 )
 from src.components.graph_builder.rv_builder import RVGraphBuilder
-from src.components.rebalance_solver import RebalancingSolver
+from src.components.rebalance_solver import ReactiveRebalancingSolver
 from src.interfaces import Vehicle
 from src.interfaces.data_models import MetaRequest
+from src.components.trip_solver import AStarTripSolver
 from src.simulator import Simulator
 from src.utils.sim_clock import SimulationClock
 
@@ -51,13 +52,14 @@ def run(network, rtv_builder, solver, seed=0, n_vehicles=5, n_requests=150, hori
         MetaRequest(f"r{k}", *rng.sample(range(network.N), 2), t) for k, t in enumerate(times)
     ]
     controller = CheckedController(network, fleet)
+    trip_solver = AStarTripSolver(network.get_l1_cache())
     sim = Simulator(
         provider=Provider(),  # type: ignore[arg-type]
         controller=controller,
-        rv_builder=RVGraphBuilder(network),
-        rtv_builder=rtv_builder(network),
+        rv_builder=RVGraphBuilder(network, trip_solver),
+        rtv_builder=rtv_builder(trip_solver),
         assignment_solver=solver(),
-        rebalancing_solver=RebalancingSolver(network),
+        rebalancing_solver=ReactiveRebalancingSolver(network),
         network_service=network,
         db_cache=None,
         read_only=True,
@@ -83,7 +85,7 @@ class CrossCheckedBuilder(TripCentricRTVGraphBuilder):
 
     def build_graph(self, rv_graph, vehicles, requests):
         trip = super().build_graph(rv_graph, vehicles, requests)
-        veh = VehicleCentricRTVGraphBuilder(self._network).build_graph(
+        veh = VehicleCentricRTVGraphBuilder(self._trip_solver).build_graph(
             rv_graph, vehicles, requests
         )
         assert trip.trip_vehicle_details.keys() == veh.trip_vehicle_details.keys()

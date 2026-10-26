@@ -15,6 +15,7 @@ from src.interfaces import (
     IRVGraphBuilder,
     IRTVGraphBuilder,
     INetworkService,
+    IRebalancingSolver,
     MetaRequest,
 )
 from src.components.simulation_data_provider import SimulationDataProvider
@@ -33,7 +34,7 @@ class Simulator:
         rv_builder: IRVGraphBuilder,
         rtv_builder: IRTVGraphBuilder,
         assignment_solver: IAssignmentSolver,
-        rebalancing_solver: Any,  # Using Any for now as interface might not be strictly defined in imports
+        rebalancing_solver: IRebalancingSolver,
         network_service: INetworkService,
         db_cache: Any,  # Using Any to avoid circular imports or strict typing if not needed here
         read_only: bool = False,

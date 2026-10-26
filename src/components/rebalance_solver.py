@@ -3,16 +3,17 @@ from scipy.optimize import linear_sum_assignment
 
 from config import get_logger
 from src.interfaces import (
-    VehicleAvailability,
-    Request,
     INetworkService,
+    IRebalancingSolver,
+    Request,
+    VehicleAvailability,
 )
 from src.interfaces.data_models import Route, Stop
 
 logger = get_logger(__name__)
 
 
-class RebalancingSolver:
+class ReactiveRebalancingSolver(IRebalancingSolver):
     """
     Implements Algorithm 4 (Rebalancing) using Scipy and Vectorized Matrix Lookups.
 
@@ -27,7 +28,7 @@ class RebalancingSolver:
         self,
         idle_vehicles: list[VehicleAvailability],
         unassigned_requests: list[Request],
-        t_now: float | None = None,
+        t_now: float,
     ) -> dict[str, Route]:
 
         n_vehicles = len(idle_vehicles)

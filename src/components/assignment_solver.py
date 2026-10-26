@@ -1,34 +1,90 @@
+"""The assignment ILP with interchangeable solver backends.
+
+min  sum c_{T,v} x_{T,v} + sum chi_r y_r
+s.t. sum_{T contains r} x_{T,v} + y_r = 1   for every request r
+     sum_T x_{T,v} <= 1                     for every vehicle v
+
+c and chi come from an IObjective, so the same backends serve any objective.
+"""
+
 import gurobipy as gp
+import numpy as np
 from gurobipy import GRB
 
 from config import get_logger
+from src.components.objectives import DelayObjective
 from src.interfaces import (
     AssignmentResult,
+    IAssignmentSolver,
+    IObjective,
     Request,
     VehicleAvailability,
-    IAssignmentSolver,
 )
 from src.interfaces.data_models import Assignment
 from src.interfaces.graphs import RTVGraph, TripId
 
-
 logger = get_logger(__name__)
-
-# Optimality tolerance in objective units (seconds of delay).
-MIP_ABS_GAP = 1e-3
 
 if __name__ != "__main__":
     logger.setLevel("WARNING")
 
+# Optimality tolerance in objective units. The objective is dominated by large
+# per-request penalties, so a relative gap would hide real cost differences.
+MIP_ABS_GAP = 1e-3
 
-class GurobiAssignmentSolver(IAssignmentSolver):
-    """
-    Implementation of the Assignment Solver using Gurobi Optimizer.
-    """
 
-    def __init__(self, penalty_base: float = 1e5, penalty_growth_rate: float = 10.0):
-        self._penalty_base = penalty_base
-        self._penalty_growth_rate = penalty_growth_rate
+class AssignmentSolverBase(IAssignmentSolver):
+    """Shared model data and result extraction; backends implement `solve`."""
+
+    def __init__(self, objective: IObjective | None = None):
+        self._objective = objective or DelayObjective()
+
+    def _edge_costs(
+        self,
+        rtv_graph: RTVGraph,
+        requests: set[Request],
+        vehicles: set[VehicleAvailability],
+    ) -> dict[tuple[TripId, str], float]:
+        req_map = {r.id: r for r in requests}
+        veh_map = {v.vehicle_id: v for v in vehicles}
+        return {
+            (trip, v_id): self._objective.trip_cost(
+                route, veh_map[v_id], [req_map[r] for r in sorted(trip)]
+            )
+            for (trip, v_id), route in rtv_graph.trip_vehicle_details.items()
+        }
+
+    def _result(
+        self,
+        rtv_graph: RTVGraph,
+        requests: set[Request],
+        chosen: list[tuple[TripId, str]],
+        total_cost: float,
+        is_optimal: bool,
+    ) -> AssignmentResult:
+        assignments: set[Assignment] = set()
+        assigned_req_ids: set[str] = set()
+        for trip, v_id in chosen:
+            route_info = rtv_graph.get_route(trip, v_id)
+            assignments.add(
+                Assignment(
+                    vehicle_id=v_id,
+                    trip_id=trip,
+                    route=route_info.route,
+                    cost=route_info.cost,
+                )
+            )
+            assigned_req_ids.update(trip)
+        return AssignmentResult(
+            assignments=assignments,
+            unassigned_requests={r for r in requests if r.id not in assigned_req_ids},
+            total_cost=total_cost,
+            is_optimal=is_optimal,
+        )
+
+
+class GurobiAssignmentSolver(AssignmentSolverBase):
+    """Gurobi with a greedy warm start (Algorithm 2 in the SI Appendix)."""
 
     def solve(
         self,
@@ -38,240 +94,83 @@ class GurobiAssignmentSolver(IAssignmentSolver):
         solver_timeout: float,
         current_time: float,
     ) -> AssignmentResult:
+        costs = self._edge_costs(rtv_graph, requests, vehicles)
 
-        # 1. Setup Model
-        # Use a context manager to dispose of the model properly
         with gp.Model("RideSharing_Assignment") as model:
-
-            # Silence console output (set to 1 for debugging)
             model.setParam(GRB.Param.OutputFlag, 0)
             model.setParam(GRB.Param.TimeLimit, solver_timeout)
-            # The objective is dominated by 1e5-per-request penalties, so a relative
-            # gap hides real delay differences (1% could even hide extra rejections).
             model.setParam(GRB.Param.MIPGap, 0.0)
             model.setParam(GRB.Param.MIPGapAbs, MIP_ABS_GAP)
 
-            # ------------------------------------------------------
-            # 2. Decision Variables
-            # ------------------------------------------------------
-
-            # x[trip, vehicle_id] -> binary
-            x_vars: dict[tuple[TripId, str], gp.Var] = {}
-
-            # y[request_id] -> binary (1 if unassigned)
-            y_vars: dict[str, gp.Var] = {}
-
-            # Create x_vars for all feasible edges e(T, v)
-            # rtv_graph.trip_vehicle_details keys are (TripId, vehicle_id)
-            for trip, v_id in rtv_graph.trip_vehicle_details.keys():
-                cost = rtv_graph.trip_vehicle_details[(trip, v_id)].cost
-                # Name is helpful for debugging .lp files
-                name = f"x_{hash(trip)}_{v_id}"
-                x_vars[(trip, v_id)] = model.addVar(
-                    vtype=GRB.BINARY, obj=cost, name=name
+            x_vars: dict[tuple[TripId, str], gp.Var] = {
+                key: model.addVar(vtype=GRB.BINARY, obj=cost, name=f"x_{hash(key[0])}_{key[1]}")
+                for key, cost in costs.items()
+            }
+            y_vars: dict[str, gp.Var] = {
+                req.id: model.addVar(
+                    vtype=GRB.BINARY,
+                    obj=self._objective.unserved_penalty(req, current_time),
+                    name=f"y_{req.id}",
                 )
+                for req in requests
+            }
 
-            # Create y_vars for all requests
-            for req in requests:
-                # Calculate dynamic penalty chi_r
-                penalty = self._calculate_penalty(req, current_time)
-                y_vars[req.id] = model.addVar(
-                    vtype=GRB.BINARY, obj=penalty, name=f"y_{req.id}"
-                )
-
-            # ------------------------------------------------------
-            # 3. Constraints
-            # ------------------------------------------------------
-
-            # C1: Assign each vehicle at most once
-            # sum(x_{T,v}) <= 1  forall v
             for v in vehicles:
-                # Get all trips this vehicle can serve
-                possible_trips = rtv_graph.get_trips_for_vehicle(v.vehicle_id)
-
-                # Construct expression: sum(x[t, v.id] for t in possible_trips)
-                # We filter x_vars keys to ensure the var exists (it should)
                 vars_for_v = [
                     x_vars[(t, v.vehicle_id)]
-                    for t in possible_trips
+                    for t in rtv_graph.get_trips_for_vehicle(v.vehicle_id)
                     if (t, v.vehicle_id) in x_vars
                 ]
-
                 if vars_for_v:
-                    model.addConstr(
-                        gp.quicksum(vars_for_v) <= 1, name=f"veh_{v.vehicle_id}"
-                    )
+                    model.addConstr(gp.quicksum(vars_for_v) <= 1, name=f"veh_{v.vehicle_id}")
 
-            # C2: Assign each request at most once (or set y=1)
-            # sum(x_{T,v} for T containing r) + y_r = 1
             for req in requests:
-                # Get all trips containing this request
-                trips_with_r = rtv_graph.get_trips_for_request(req.id)
-
-                # Gather all x variables for these trips (across all vehicles)
-                vars_for_r = []
-                for t in trips_with_r:
-                    # A trip might be servable by multiple vehicles
-                    possible_vs = rtv_graph.get_vehicles_for_trip(t)
-                    for v_id in possible_vs:
-                        if (t, v_id) in x_vars:
-                            vars_for_r.append(x_vars[(t, v_id)])
-
+                vars_for_r = [
+                    x_vars[(t, v_id)]
+                    for t in rtv_graph.get_trips_for_request(req.id)
+                    for v_id in rtv_graph.get_vehicles_for_trip(t)
+                    if (t, v_id) in x_vars
+                ]
                 model.addConstr(
                     gp.quicksum(vars_for_r) + y_vars[req.id] == 1, name=f"req_{req.id}"
                 )
 
-            # ------------------------------------------------------
-            # 4. Warm Start (Greedy Heuristic)
-            # ------------------------------------------------------
-            self._apply_greedy_warm_start(model, rtv_graph, requests, x_vars, y_vars)
-
-            # ------------------------------------------------------
-            # 5. Optimize
-            # ------------------------------------------------------
+            self._apply_greedy_warm_start(costs, requests, x_vars, y_vars)
             model.optimize()
 
-            # ------------------------------------------------------
-            # 6. Extract Result
-            # ------------------------------------------------------
             status = model.Status
-            if status in (GRB.OPTIMAL, GRB.TIME_LIMIT, GRB.SUBOPTIMAL):
-                # Extract assignments
-                assignments: set[Assignment] = set()
-                assigned_req_ids: set[str] = set()
+            if status not in (GRB.OPTIMAL, GRB.TIME_LIMIT, GRB.SUBOPTIMAL):
+                raise RuntimeError(f"Gurobi failed to find solution. Status code: {status}")
+            chosen = [key for key, var in x_vars.items() if var.X > 0.5]
+            logger.info(f"Gurobi finished with status {status}; {len(chosen)} trips assigned.")
+            return self._result(
+                rtv_graph, requests, chosen, model.ObjVal, status == GRB.OPTIMAL
+            )
 
-                # Check x vars
-                for (trip, v_id), var in x_vars.items():
-                    # Gurobi vars are float, check against tolerance
-                    if var.X > 0.5:
-                        # Get the full route details
-                        route_info = rtv_graph.get_route(trip, v_id)
-                        if route_info:
-                            assignments.add(
-                                Assignment(
-                                    vehicle_id=v_id,
-                                    trip_id=trip,
-                                    route=route_info.route,
-                                    cost=route_info.cost,
-                                )
-                            )
-                            for r_id in trip:
-                                assigned_req_ids.add(r_id)
-
-                # Identify unassigned requests
-                unassigned_reqs = {r for r in requests if r.id not in assigned_req_ids}
-
-                # mao status from int to str for logging
-                status_dict = {
-                    GRB.OPTIMAL: "OPTIMAL",
-                    GRB.TIME_LIMIT: "TIME_LIMIT",
-                    GRB.SUBOPTIMAL: "SUBOPTIMAL",
-                }
-                status_name = status_dict.get(status, str(status))
-
-                logger.info(
-                    f"Solver finished. Status: {status_name}. "
-                    f"Assigned {len(assignments)} vehicles, {len(assigned_req_ids)} requests."
-                )
-
-                return AssignmentResult(
-                    assignments=assignments,
-                    unassigned_requests=unassigned_reqs,
-                    total_cost=model.ObjVal,
-                    is_optimal=(status == GRB.OPTIMAL),
-                )
-
-            else:
-                raise RuntimeError(
-                    f"Gurobi failed to find solution. Status code: {status}"
-                )
-
-    def _calculate_penalty(self, request: Request, current_time: float) -> float:
-        """
-        Calculates the dynamic penalty chi_r.
-
-        Logic:
-        - Base penalty (ensure it's higher than any feasible trip cost).
-        - Time component: penalty grows as the request waits longer.
-        - If 'promised_pickup_time' exists (re-assigned request), implies
-          it was already assigned once, so we might boost priority further.
-        """
-        wait_time = current_time - request.request_time
-
-        penalty = self._penalty_base + (wait_time * self._penalty_growth_rate)
-
-        # Optional: Massive boost for requests that were dropped (promised time set)
-        # to prevent the system from "flicking" passengers between assigned/unassigned
-        if request.promised_pickup_time is not None:
-            penalty *= 2.0
-
-        return penalty
-
+    @staticmethod
     def _apply_greedy_warm_start(
-        self,
-        model: gp.Model,
-        rtv_graph: RTVGraph,
+        costs: dict[tuple[TripId, str], float],
         requests: set[Request],
         x_vars: dict[tuple[TripId, str], gp.Var],
         y_vars: dict[str, gp.Var],
     ) -> None:
-        """
-        Implements Algorithm 2 (Greedy Assignment) from Alonso-Mora et al.
-        to provide an initial feasible solution (MIP Start) to Gurobi.
-        """
-        # 1. Collect all candidate assignments (edges in RTV)
-        # Format: (cost, trip_size, trip, vehicle_id)
-        candidates = []
-        for (trip, v_id), route_info in rtv_graph.trip_vehicle_details.items():
-            # Sorting criteria:
-            # 1. Decreasing trip size (prioritize pooling)
-            # 2. Increasing cost (minimize delay)
-            # To use standard sort, we negate size.
-            candidates.append((route_info.cost, -len(trip), trip, v_id))
-
-        # Sort candidates
-        # Primary key: cost (asc), Secondary key: -size (asc) -> size desc
-        # Note: The paper suggests "decreasing size" first.
-        # Let's prioritize Size then Cost as per paper.
-        candidates.sort(key=lambda x: (x[1], x[0]))
-
+        """Largest trips first, then cheapest, as long as vehicle and requests are free."""
         assigned_requests: set[str] = set()
         assigned_vehicles: set[str] = set()
-
-        # 2. Greedy Selection
-        for cost, neg_size, trip, v_id in candidates:
-
-            # Check vehicle availability
-            if v_id in assigned_vehicles:
+        for (trip, v_id), _ in sorted(costs.items(), key=lambda kv: (-len(kv[0][0]), kv[1])):
+            if v_id in assigned_vehicles or any(r in assigned_requests for r in trip):
                 continue
-
-            # Check request availability (all reqs in trip must be free)
-            if any(r_id in assigned_requests for r_id in trip):
-                continue
-
-            # Make assignment
             assigned_vehicles.add(v_id)
-            for r_id in trip:
-                assigned_requests.add(r_id)
-
-            # Tell Gurobi to start with this variable = 1
-            if (trip, v_id) in x_vars:
-                x_vars[(trip, v_id)].Start = 1.0
-
-        # 3. Set unassigned y variables
+            assigned_requests.update(trip)
+            x_vars[(trip, v_id)].Start = 1.0
         for r in requests:
-            if r.id not in assigned_requests:
-                y_vars[r.id].Start = 1.0
-            else:
-                y_vars[r.id].Start = 0.0
+            y_vars[r.id].Start = 0.0 if r.id in assigned_requests else 1.0
 
 
-class HighsAssignmentSolver(GurobiAssignmentSolver):
+class HighsAssignmentSolver(AssignmentSolverBase):
     """
-    The same assignment ILP solved with HiGHS (scipy.optimize.milp).
-
-    Open-source fallback for machines without a full Gurobi licence. HiGHS
-    takes no MIP start, so the greedy warm start is not used.
+    HiGHS through scipy.optimize.milp: open-source, no licence needed.
+    HiGHS takes no MIP start, so there is no greedy warm start.
     """
 
     def solve(
@@ -282,41 +181,38 @@ class HighsAssignmentSolver(GurobiAssignmentSolver):
         solver_timeout: float,
         current_time: float,
     ) -> AssignmentResult:
-        import numpy as np
         from scipy.optimize import Bounds, LinearConstraint, milp
         from scipy.sparse import coo_matrix
 
-        edges = list(rtv_graph.trip_vehicle_details.keys())
         req_list = list(requests)
+        if not req_list:
+            return AssignmentResult(set(), set(), 0.0, True)
+        costs = self._edge_costs(rtv_graph, requests, vehicles)
+        edges = list(costs)
         req_index = {r.id: k for k, r in enumerate(req_list)}
         veh_index = {v.vehicle_id: k for k, v in enumerate(vehicles)}
         n_x, n_y = len(edges), len(req_list)
-        if n_y == 0:
-            return AssignmentResult(set(), set(), 0.0, True)
 
         cost = np.empty(n_x + n_y)
         rows, cols = [], []  # request rows first, then vehicle rows
         for e, (trip, v_id) in enumerate(edges):
-            cost[e] = rtv_graph.trip_vehicle_details[(trip, v_id)].cost
+            cost[e] = costs[(trip, v_id)]
             for r_id in trip:
                 rows.append(req_index[r_id])
                 cols.append(e)
             rows.append(n_y + veh_index[v_id])
             cols.append(e)
         for k, req in enumerate(req_list):
-            cost[n_x + k] = self._calculate_penalty(req, current_time)
+            cost[n_x + k] = self._objective.unserved_penalty(req, current_time)
             rows.append(k)
             cols.append(n_x + k)
 
         n_rows = n_y + len(veh_index)
-        a = coo_matrix(
-            (np.ones(len(rows)), (rows, cols)), shape=(n_rows, n_x + n_y)
-        ).tocsr()
+        a = coo_matrix((np.ones(len(rows)), (rows, cols)), shape=(n_rows, n_x + n_y)).tocsr()
         lower = np.concatenate([np.ones(n_y), np.zeros(len(veh_index))])
-        upper = np.ones(n_rows)
         result = milp(
             c=cost,
-            constraints=LinearConstraint(a, lower, upper),
+            constraints=LinearConstraint(a, lower, np.ones(n_rows)),
             integrality=np.ones(n_x + n_y),
             bounds=Bounds(0, 1),
             options={"time_limit": solver_timeout, "mip_rel_gap": 0.0},
@@ -324,28 +220,6 @@ class HighsAssignmentSolver(GurobiAssignmentSolver):
         if result.x is None:
             raise RuntimeError(f"HiGHS failed to find a solution: {result.message}")
 
-        assignments: set[Assignment] = set()
-        assigned_req_ids: set[str] = set()
-        for e, (trip, v_id) in enumerate(edges):
-            if result.x[e] > 0.5:
-                route_info = rtv_graph.get_route(trip, v_id)
-                assignments.add(
-                    Assignment(
-                        vehicle_id=v_id,
-                        trip_id=trip,
-                        route=route_info.route,
-                        cost=route_info.cost,
-                    )
-                )
-                assigned_req_ids.update(trip)
-
-        logger.info(
-            f"HiGHS finished: {result.message} "
-            f"Assigned {len(assignments)} vehicles, {len(assigned_req_ids)} requests."
-        )
-        return AssignmentResult(
-            assignments=assignments,
-            unassigned_requests={r for r in requests if r.id not in assigned_req_ids},
-            total_cost=float(result.fun),
-            is_optimal=result.status == 0,
-        )
+        chosen = [edges[e] for e in range(n_x) if result.x[e] > 0.5]
+        logger.info(f"HiGHS finished: {result.message} {len(chosen)} trips assigned.")
+        return self._result(rtv_graph, requests, chosen, float(result.fun), result.status == 0)

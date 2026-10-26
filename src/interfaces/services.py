@@ -4,9 +4,11 @@ import numpy as np
 
 from src.interfaces.data_models import (
     AssignmentResult,
+    FeasibleRoute,
+    FeasibilityResult,
+    Route,
     NetworkPath,
     NetworkPathExtended,
-    RebalancingResult,
     Request,
     VehicleAvailability,
 )
@@ -102,44 +104,63 @@ class INetworkService(ABC):
 
 
 # ---------------------------------------------------------------------------
-#  III. The Four-Step Assignment Pipeline: Abstract Interfaces
+#  III. The assignment pipeline: swappable components
+#
+#  Each batch:  RV graph -> RTV graph -> assignment ILP -> rebalancing.
+#  An IObjective decides what an assignment costs; an ITripSolver implements
+#  travel(v, T). Implementations are chosen in src/experiment.py.
 # ---------------------------------------------------------------------------
 
-# A type alias for a graph object, e.g., networkx.Graph
-# Nodes are Request and Vehicle objects.
-# RVGraph = Any  # TODO
 
-# A type alias for a bipartite graph object (e.g., networkx.Graph)
-# One set of nodes is 'Trip' objects (which are sets of Requests)
-# The other set of nodes is 'Vehicle' objects.
-# RTVGraph = Any  # TODO
+class ITripSolver(ABC):
+    """travel(v, T): the best feasible route for a vehicle serving a set of requests."""
+
+    @abstractmethod
+    def solve(
+        self, requests: Iterable[Request], vehicle: VehicleAvailability
+    ) -> FeasibilityResult:
+        """
+        FeasibleRoute if every onboard passenger and new request can be served
+        within their pickup and drop-off deadlines, else Infeasible. The route's
+        cost is the solver's own ranking criterion; the assignment uses
+        IObjective.trip_cost.
+        """
+
+
+class IObjective(ABC):
+    """What the assignment ILP minimises: trip costs and penalties for unserved requests."""
+
+    @abstractmethod
+    def trip_cost(
+        self,
+        route: FeasibleRoute,
+        vehicle: VehicleAvailability,
+        requests: list[Request],
+    ) -> float:
+        """Cost c_{T,v} of vehicle v serving trip T along `route`."""
+
+    @abstractmethod
+    def unserved_penalty(self, request: Request, current_time: float) -> float:
+        """Cost chi_r of leaving request r unassigned in this batch."""
 
 
 class IRVGraphBuilder(ABC):
-
-    def __init__(self, network: INetworkService):
-        self._network = network
+    """Pairwise shareability: request-request and request-vehicle edges."""
 
     @abstractmethod
     def build_graph(
         self, requests: set[Request], vehicles: set[VehicleAvailability]
     ) -> RVGraph:
         """
-        Constructs the RV-graph by checking two types of pairwise shareability:
-
         1. Request-Request (r1, r2): whether an ideal virtual vehicle at o_r1
            or o_r2 could serve both requests within their constraints.
-
         2. Request-Vehicle (r, v): whether travel(v, {r}) is feasible given
            v's current state (passengers, location).
         """
-        pass
 
 
 class IRTVGraphBuilder(ABC):
-
-    def __init__(self, network: INetworkService):
-        self._network = network
+    """Feasible trips (request sets) and the vehicles that can serve them."""
 
     @abstractmethod
     def build_graph(
@@ -147,32 +168,16 @@ class IRTVGraphBuilder(ABC):
         rv_graph: RVGraph,
         vehicles: set[VehicleAvailability],
         requests: set[Request],
-        # max_trip_size: int,
     ) -> RTVGraph:
         """
-        Builds the RTV-graph:
-
-        1. Finds all cliques of size <= max_trip_size in the 'Request'
-           subgraph of rv_graph. Each clique is a candidate 'Trip' T.
-
-        2. For each candidate Trip T and each Vehicle v:
-           a. Check feasibility:
-              result = TripSolver.solve(T.requests, v, time_matrix)
-
-           b. If result.is_feasible:
-              i.  Add an edge e(T, v) to the RTVGraph.
-              ii. Store result.cost and result.route as attributes
-                  of that edge.
-
-        (This implementation can be optimized by checking subtrips first).
+        Every trip T with an edge e(T, v) for each vehicle v where travel(v, T)
+        is feasible. Candidates come from cliques of the RV graph; by the
+        sub-trip lemma a trip is only checked if all its sub-trips are feasible.
         """
-        pass
 
 
 class IAssignmentSolver(ABC):
-    """
-    Interface for the optimization module that assigns vehicles to trips.
-    """
+    """The assignment ILP (SI Appendix, Section 4.4)."""
 
     @abstractmethod
     def solve(
@@ -181,61 +186,25 @@ class IAssignmentSolver(ABC):
         requests: set[Request],
         vehicles: set[VehicleAvailability],
         solver_timeout: float,
-        current_time: float,  # <-- Added as requested
+        current_time: float,
     ) -> AssignmentResult:
         """
-        Formulates and solves the ILP described in Section 4.4 (Optimal Assignment).
-
-        This method maps the RTVGraph data to the following mathematical model:
-
-        Sets and Parameters:
-        - R_t: Set of open requests (from `requests`).
-        - V: Set of available vehicles (from `vehicles`).
-        - E_{TV}: Feasible edges e(T, v) (from `rtv_graph`).
-        - c_{T,v}: Cost of assigning vehicle v to trip T (from `rtv_graph`).
-        - chi_r: Penalty for not serving request r (dynamic).
-
-        Decision Variables:
-        - x_{T,v} (binary): 1 if vehicle v is assigned to trip T, 0 otherwise.
-        - y_r (binary): 1 if request r is NOT served in this batch, 0 otherwise.
-
-        Objective Function:
-        - min sum(c_{T,v} * x_{T,v}) + sum(chi_r * y_r)
-
-        Constraints:
-        1. Assign each request at most once:
-           sum(x_{T,v} | r in T) + y_r = 1    for all r in R_t
-
-        2. Assign each vehicle at most once:
-           sum(x_{T,v}) <= 1                  for all v in V
-
-        Requirements:
-        - Must provide a 'warm start' (typically a greedy assignment).
-        - Must adhere to `solver_timeout` to ensure 'anytime' performance constraints.
+        min  sum c_{T,v} x_{T,v} + sum chi_r y_r
+        s.t. sum_{T contains r} x_{T,v} + y_r = 1   for every request r
+             sum_T x_{T,v} <= 1                     for every vehicle v
+        with c and chi from the solver's IObjective, x and y binary, stopping at
+        `solver_timeout` seconds.
         """
-        pass
 
 
 class IRebalancingSolver(ABC):
-
-    def __init__(self, network_service: INetworkService):
-        self._network = network_service
-        pass
+    """Where idle vehicles drive after the assignment."""
 
     @abstractmethod
     def solve(
-        self, idle_vehicles: set[VehicleAvailability], unassigned_requests: set[Request]
-    ) -> RebalancingResult:
-        """
-        Formulates and solves the LP from SI Appendix, Algorithm 4:
-
-        - Objective: min sum(travel_time(v, r) * y_vr)
-          - (Uses network_service to get simple travel times)
-
-        - Variables: y_vr (binary/continuous) for each (v, r) pair.
-
-        - Constraints (Standard assignment problem):
-          - sum_r(y_vr) <= 1 (Vehicle v assigned to at most one request)
-          - sum_v(y_vr) <= 1 (Request r assigned to at most one vehicle)
-        """
-        pass
+        self,
+        idle_vehicles: list[VehicleAvailability],
+        unassigned_requests: list[Request],
+        t_now: float,
+    ) -> dict[str, Route]:
+        """Rebalancing route per vehicle id; vehicles left out stay where they are."""

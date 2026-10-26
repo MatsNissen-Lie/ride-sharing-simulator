@@ -12,8 +12,7 @@ from typing import cast
 
 from config import get_logger
 from config.config import MAX_REQUESTS_ABOVE_CAPACITY
-from src.components.trip_solver import TripSolver
-from src.interfaces import FeasibleRoute, Request, VehicleAvailability
+from src.interfaces import FeasibleRoute, ITripSolver, Request, VehicleAvailability
 from src.interfaces.graphs import RTVGraph, RVGraph, TripId
 from src.interfaces.services import IRTVGraphBuilder
 
@@ -23,6 +22,9 @@ logger = get_logger(__name__)
 class VehicleCentricRTVGraphBuilder(IRTVGraphBuilder):
     """Builds trips per vehicle, following the paper's Algorithm 1."""
 
+    def __init__(self, trip_solver: ITripSolver) -> None:
+        self._trip_solver = trip_solver
+
     def build_graph(
         self,
         rv_graph: RVGraph,
@@ -31,10 +33,9 @@ class VehicleCentricRTVGraphBuilder(IRTVGraphBuilder):
     ) -> RTVGraph:
         rtv_graph = RTVGraph()
         requests_by_id = {r.id: r for r in requests}
-        time_matrix = self._network.get_l1_cache()
         for vehicle in vehicles:
             self._build_trips_for_vehicle(
-                vehicle, rv_graph, requests_by_id, rtv_graph, time_matrix
+                vehicle, rv_graph, requests_by_id, rtv_graph
             )
         return rtv_graph
 
@@ -44,7 +45,6 @@ class VehicleCentricRTVGraphBuilder(IRTVGraphBuilder):
         rv_graph: RVGraph,
         requests_by_id: dict[str, Request],
         rtv_graph: RTVGraph,
-        time_matrix,
     ) -> None:
         v_id = vehicle.vehicle_id
         limit_k = (
@@ -77,7 +77,7 @@ class VehicleCentricRTVGraphBuilder(IRTVGraphBuilder):
                     continue
                 trip = frozenset({r1, r2})
                 reqs = [requests_by_id[r] for r in sorted(trip)]
-                result = TripSolver.solve(reqs, vehicle, time_matrix)
+                result = self._trip_solver.solve(reqs, vehicle)
                 if result.is_feasible:
                     trips_by_size[2].add(trip)
                     rtv_graph.add_trip_for_vehicle(
@@ -105,7 +105,7 @@ class VehicleCentricRTVGraphBuilder(IRTVGraphBuilder):
                     trip_list = trip_a + [r_y]
                     trip = frozenset(trip_list)
                     reqs = [requests_by_id[r] for r in trip_list]
-                    result = TripSolver.solve(reqs, vehicle, time_matrix)
+                    result = self._trip_solver.solve(reqs, vehicle)
                     if result.is_feasible:
                         trips_by_size[k].add(trip)
                         rtv_graph.add_trip_for_vehicle(

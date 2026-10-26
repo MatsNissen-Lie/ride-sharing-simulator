@@ -17,7 +17,7 @@ import numpy as np
 from scipy.optimize import linear_sum_assignment
 
 from config import OMEGA, get_logger
-from src.interfaces import INetworkService, Request, VehicleAvailability
+from src.interfaces import INetworkService, IRebalancingSolver, Request, VehicleAvailability
 from src.interfaces.data_models import Route, Stop
 
 logger = get_logger(__name__)
@@ -25,7 +25,7 @@ logger = get_logger(__name__)
 UNREACHABLE = 1e9
 
 
-class OracleRebalancingSolver:
+class OracleRebalancingSolver(IRebalancingSolver):
     def __init__(
         self,
         network: INetworkService,
@@ -44,9 +44,9 @@ class OracleRebalancingSolver:
         self,
         idle_vehicles: list[VehicleAvailability],
         unassigned_requests: list[Request],
-        t_now: float | None = None,
+        t_now: float,
     ) -> dict[str, Route]:
-        if not idle_vehicles or t_now is None:
+        if not idle_vehicles:
             return {}
 
         lo = bisect.bisect_right(self._times, t_now)

@@ -30,10 +30,10 @@ from config import get_logger
 from config.config import DELTA, OMEGA
 
 
-from src.components.trip_solver import TripSolver
 from src.interfaces import (
     VehicleAvailability,
     IRVGraphBuilder,
+    ITripSolver,
     Request,
     Stop,
     Route,
@@ -54,10 +54,15 @@ class RVGraphBuilder(IRVGraphBuilder):
     def __init__(
         self,
         network: INetworkService,
+        trip_solver: ITripSolver,
         omega: float = OMEGA,
         delta: float = DELTA,
     ) -> None:
-        super().__init__(network)
+        self._network = network
+        self._trip_solver = trip_solver
+        # Vectorised edges for empty and one-passenger vehicles are only valid
+        # when they reproduce the trip solver; otherwise use it for every edge.
+        self._closed_forms = getattr(trip_solver, "matches_rv_closed_forms", False)
         self._omega = omega
         self._delta = delta
 
@@ -157,7 +162,7 @@ class RVGraphBuilder(IRVGraphBuilder):
                 )
 
                 # --- CASE 0: EMPTY (m=0) ---
-                mask_0 = occupancy == 0
+                mask_0 = (occupancy == 0) & self._closed_forms
                 if np.any(mask_0):
                     self._solve_rv_matrix_empty(
                         v_idx[mask_0],
@@ -169,14 +174,14 @@ class RVGraphBuilder(IRVGraphBuilder):
                     )
 
                 # --- CASE 1: 1 PASSENGER (m=1) ---
-                mask_1 = occupancy == 1
+                mask_1 = (occupancy == 1) & self._closed_forms
                 if np.any(mask_1):
                     self._solve_rv_matrix_m1(
                         v_idx[mask_1], r_idx[mask_1], veh_list, req_list, graph
                     )
 
                 # --- CASE 2+: COMPLEX (m >= 2) ---
-                mask_high = occupancy >= 2
+                mask_high = ~(mask_0 | mask_1)
                 if np.any(mask_high):
                     self._solve_rv_occupied(
                         v_idx[mask_high], r_idx[mask_high], veh_list, req_list, graph
@@ -354,11 +359,10 @@ class RVGraphBuilder(IRVGraphBuilder):
         req_list: list[Request],
         graph: RVGraph,
     ):
-        """Exact trip solver for vehicles with two or more passengers."""
-        time_matrix = self._network.get_l1_cache()
+        """Exact trip solver for the edges without a closed form."""
         for v, r in zip(v_idxs, r_idxs):
             vehicle, req = veh_list[v], req_list[r]
-            result = TripSolver.solve([req], vehicle, time_matrix)
+            result = self._trip_solver.solve([req], vehicle)
             if result.is_feasible:
                 graph.add_rv_edge(req.id, vehicle.vehicle_id, cast(FeasibleRoute, result))
 

@@ -273,10 +273,3 @@ class AssignmentResult:
     unassigned_requests: set[Request]
     total_cost: float
     is_optimal: bool
-
-
-@dataclass(frozen=True)
-class RebalancingResult:
-    """The output of the rebalancing LP."""
-
-    assignments: list[Tuple[VehicleAvailability, int]]  # (vehicle, target_node)

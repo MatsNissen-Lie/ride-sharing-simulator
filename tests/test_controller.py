@@ -107,7 +107,7 @@ def test_assigned_request_gets_promised_pickup_time(network):
 def test_promised_rider_stays_feasible_for_the_same_vehicle(network):
     """Re-planning recomputes the promised arrival from the travel-time matrix,
     which can differ from the replayed path in the last digits."""
-    from src.components.trip_solver import TripSolver
+    from src.components.trip_solver import AStarTripSolver
 
     controller = make_controller(network, [0])
     (req,) = controller.prepare_batch(10.0, [MetaRequest("r", 35, 0, 5.0)])[0]
@@ -116,4 +116,4 @@ def test_promised_rider_stays_feasible_for_the_same_vehicle(network):
 
     matrix = network.get_l1_cache().copy()
     matrix[snapshot.available_at_node, promised.origin_node] += 1e-7  # float noise
-    assert TripSolver.solve([promised], snapshot, matrix).is_feasible
+    assert AStarTripSolver(matrix).solve([promised], snapshot).is_feasible

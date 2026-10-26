@@ -1,3 +1,5 @@
+> Historical design notes from an earlier version of the simulator. The current interfaces are in `services.py` (see the README, "Running the simulation").
+
 # A Minimalist Architectural Framework for the Alonso-Mora et al. High-Capacity Ride-Sharing Algorithm
 
 This report outlines a minimalist, object-oriented structure for implementing the high-capacity ride-sharing algorithm presented by Alonso-Mora et al. [1]. The focus is on defining stable data classes and abstract interfaces that isolate system components, manage complexity, and map directly to the paper's methodology. The architecture is designed to be scalable, testable, and robust, respecting the data basis of street networks and ride requests [2].

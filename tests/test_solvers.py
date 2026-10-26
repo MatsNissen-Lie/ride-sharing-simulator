@@ -7,7 +7,8 @@ import numpy as np
 import pytest
 
 from src.components.assignment_solver import GurobiAssignmentSolver, HighsAssignmentSolver
-from src.components.rebalance_solver import RebalancingSolver
+from src.components.objectives import DelayObjective
+from src.components.rebalance_solver import ReactiveRebalancingSolver
 from src.interfaces import FeasibleRoute, Route
 from src.interfaces.graphs import RTVGraph
 from tests.conftest import make_request, random_vehicle
@@ -45,7 +46,7 @@ def brute_force_objective(graph, requests, solver, t_now):
             used_r |= trip
             cost += route.cost
         if ok:
-            cost += sum(solver._calculate_penalty(r, t_now) for r in requests if r.id not in used_r)
+            cost += sum(DelayObjective().unserved_penalty(r, t_now) for r in requests if r.id not in used_r)
             best = min(best, cost)
     return best
 
@@ -79,7 +80,7 @@ def test_rebalancing_minimises_total_travel_time(network, seed):
         make_request(network, f"r{k}", *rng.sample(range(network.N), 2), T_NOW)
         for k in range(rng.choice([2, 4, 6]))
     ]
-    routes = RebalancingSolver(network).solve(vehicles, requests)
+    routes = ReactiveRebalancingSolver(network).solve(vehicles, requests, t_now=T_NOW)
 
     assert len(routes) == min(len(vehicles), len(requests))
     by_id = {v.vehicle_id: v for v in vehicles}

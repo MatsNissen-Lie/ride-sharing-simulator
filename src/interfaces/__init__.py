@@ -2,7 +2,6 @@
 
 from .data_models import (
     VehicleAvailability,
-    RebalancingResult,
     FeasibilityResult,
     AssignmentResult,
     FeasibleRoute,
@@ -21,6 +20,8 @@ from .services import (
     IRTVGraphBuilder,
     IRVGraphBuilder,
     IRebalancingSolver,
+    IObjective,
+    ITripSolver,
     RTVGraph,
     RVGraph,
 )
@@ -28,6 +29,8 @@ from .services import (
 __all__ = [
     # SERVICES
     "IRebalancingSolver",
+    "IObjective",
+    "ITripSolver",
     "IAssignmentSolver",
     "IRTVGraphBuilder",
     "INetworkService",
@@ -36,7 +39,6 @@ __all__ = [
     "RVGraph",
     # DATA MODELS
     "VehicleAvailability",
-    "RebalancingResult",
     "FeasibilityResult",
     "AssignmentResult",
     "FeasibleRoute",

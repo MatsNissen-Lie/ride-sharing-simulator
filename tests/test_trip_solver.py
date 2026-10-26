@@ -4,7 +4,7 @@ import random
 
 import pytest
 
-from src.components.trip_solver import TripSolver
+from src.components.trip_solver import AStarTripSolver
 from tests.conftest import brute_force_route, random_requests, random_vehicle
 
 
@@ -20,7 +20,7 @@ def test_trip_solver_matches_brute_force(network):
         requests = random_requests(network, rng, n_new, t_now)
         feasible, cost, _ = brute_force_route(requests, vehicle, matrix)
 
-        result = TripSolver.solve(requests, vehicle, matrix)
+        result = AStarTripSolver(matrix).solve(requests, vehicle)
 
         assert result.is_feasible == feasible
         if feasible:
@@ -36,7 +36,7 @@ def test_route_respects_constraints(network):
     for _ in range(200):
         vehicle = random_vehicle(network, rng, "v", 10_000.0, rng.choice([0, 1, 2]))
         requests = random_requests(network, rng, 2, 10_000.0)
-        result = TripSolver.solve(requests, vehicle, matrix)
+        result = AStarTripSolver(matrix).solve(requests, vehicle)
         if not result.is_feasible:
             continue
         checked += 1
@@ -68,4 +68,4 @@ def test_promised_pickup_time_is_a_hard_deadline(network):
     (req,) = random_requests(network, rng, 1, 10_000.0)
     t_pickup = vehicle.available_from_time + matrix[vehicle.available_at_node, req.origin_node]
     tight = type(req)(**{**req.__dict__, "latest_pickup_time": t_pickup - 1})
-    assert not TripSolver.solve([tight], vehicle, matrix).is_feasible
+    assert not AStarTripSolver(matrix).solve([tight], vehicle).is_feasible

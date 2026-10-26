@@ -11,8 +11,7 @@ from typing import cast
 
 from config import get_logger
 from config.config import MAX_REQUESTS_ABOVE_CAPACITY
-from src.components.trip_solver import TripSolver
-from src.interfaces import FeasibleRoute, Request, VehicleAvailability
+from src.interfaces import FeasibleRoute, ITripSolver, Request, VehicleAvailability
 from src.interfaces.graphs import RTVGraph, RVGraph, TripId
 from src.interfaces.services import IRTVGraphBuilder
 
@@ -21,6 +20,9 @@ logger = get_logger(__name__)
 
 class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
     """Builds trips globally and tracks candidate vehicles per trip."""
+
+    def __init__(self, trip_solver: ITripSolver) -> None:
+        self._trip_solver = trip_solver
 
     def build_graph(
         self,
@@ -31,7 +33,6 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
         rtv_graph = RTVGraph()
         req_map = {r.id: r for r in requests}
         veh_map = {v.vehicle_id: v for v in vehicles}
-        time_matrix = self._network.get_l1_cache()
 
         def trip_limit(vehicle: VehicleAvailability) -> int:
             seats = vehicle.capacity - len(vehicle.passengers_onboard)
@@ -63,7 +64,7 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
                 vehicle = veh_map[vid]
                 if trip_limit(vehicle) < 2:
                     continue
-                result = TripSolver.solve(reqs, vehicle, time_matrix)
+                result = self._trip_solver.solve(reqs, vehicle)
                 if result.is_feasible:
                     rtv_graph.add_trip_for_vehicle(
                         trip, vid, cast(FeasibleRoute, result)
@@ -104,7 +105,7 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
                         vehicle = veh_map[vid]
                         if trip_limit(vehicle) < k:
                             continue
-                        result = TripSolver.solve(reqs, vehicle, time_matrix)
+                        result = self._trip_solver.solve(reqs, vehicle)
                         if result.is_feasible:
                             rtv_graph.add_trip_for_vehicle(
                                 trip, vid, cast(FeasibleRoute, result)
