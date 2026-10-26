@@ -28,4 +28,4 @@ rich_riders/
 .env
 
 # New simulation runs (historical runs above stay tracked)
-reports/20*_sim_standard/
+reports/20*/
