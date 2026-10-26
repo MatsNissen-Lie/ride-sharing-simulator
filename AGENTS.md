@@ -5,6 +5,8 @@
 - MINIMAL CODE IS GOOD CODE.
 - FOCUS ON A NARROW SCOPE AND DO THAT WELL. AVOID BIG CHANGES THAT TOUCH MANY PARTS OF THE CODEBASE.
 - PRESENT THE MASTER DEVELOPER WITH A PLAN IF THE SCOPE OF WORK IS MEDIUM OR LARGER. READ FILES CAREFULLY BEFORE SUGGESTING A PLAN.
+- KEEP THE CODE MODULAR: every pipeline component (RV/RTV builder, trip solver, assignment solver, rebalancing, objective) sits behind an interface so it can be swapped to run experiments. New behaviour goes in a new implementation of an interface, not in flags inside an existing one.
+- Keep the thesis roadmap in `research/ROADMAP.md` up to date: record decisions and experiment results there.
 
 ## Core Directive: 
 This project exclusively uses uv for all Python package management and script execution.
