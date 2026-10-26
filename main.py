@@ -1,4 +1,6 @@
 import argparse
+import os
+import sys
 from datetime import datetime
 
 from src.experiment import (
@@ -70,4 +72,10 @@ def parse_args() -> ExperimentConfig:
 
 
 if __name__ == "__main__":
+    # Sets of requests and vehicles iterate in hash order, which decides solver
+    # tie-breaks. Python randomises string hashing per process, so fix the seed
+    # to make runs reproducible.
+    if os.environ.get("PYTHONHASHSEED") != "0":
+        os.environ["PYTHONHASHSEED"] = "0"
+        os.execv(sys.executable, [sys.executable, *sys.argv])
     run_experiment(parse_args())
