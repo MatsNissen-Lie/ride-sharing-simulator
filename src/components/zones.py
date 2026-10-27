@@ -30,6 +30,15 @@ class ZoneIndex:
         self._zone_of_node[joined["node"].to_numpy()] = joined["LocationID"].to_numpy()
         self.zone_ids = np.unique(joined["LocationID"].to_numpy())
 
+        # Representative node per zone: the zone's node closest to a point
+        # inside the zone (used as a rebalancing destination).
+        inside = zones.set_index("LocationID").geometry.representative_point()
+        self.center_node: dict[int, int] = {}
+        for zone_id in self.zone_ids:
+            members = joined[joined["LocationID"] == zone_id]
+            d = members.geometry.distance(inside.loc[zone_id])
+            self.center_node[int(zone_id)] = int(members["node"].iloc[int(np.argmin(d.to_numpy()))])
+
     def zone(self, node: int) -> int:
         return int(self._zone_of_node[node])
 

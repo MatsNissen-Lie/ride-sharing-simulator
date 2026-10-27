@@ -56,3 +56,12 @@ def test_partial_slots_are_prorated_and_test_day_excluded():
     t = 8 * 3600
     assert model.expected_requests(t, t + 300) == pytest.approx({1: 1 / 3})
     assert model.expected_requests(t - 450, t + 450) == pytest.approx({1: 0.5})
+
+
+def test_zone_centres_lie_in_their_zone():
+    from src.components.zones import ZoneIndex
+    from src.state_representation.manhatten_fast import load_graph
+
+    zones = ZoneIndex(load_graph())
+    assert len(zones.zone_ids) > 50
+    assert all(zones.zone(node) == zone for zone, node in zones.center_node.items())

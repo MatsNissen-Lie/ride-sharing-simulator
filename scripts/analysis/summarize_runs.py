@@ -45,6 +45,8 @@ def summarize(run_dir: Path) -> dict:
             "km_loaded": round(df["vehicle_km_loaded"].sum()),
             "km_empty": round(df["vehicle_km_empty"].sum()),
         }
+        if "vehicles_rebalanced" in df.columns:
+            row["rebalanced"] = int(df["vehicles_rebalanced"].sum())
         for c in COST_SCENARIOS:
             row[f"profit@{c}"] = round(row["revenue"] - c * km)
     return row

@@ -105,6 +105,7 @@ class BatchStatistics:
     revenue: float = 0.0
     vehicle_km_loaded: float = 0.0
     vehicle_km_empty: float = 0.0
+    vehicles_rebalanced: int = 0  # rebalancing moves started in this batch
 
     def to_dict(self) -> dict:
         return self.__dict__

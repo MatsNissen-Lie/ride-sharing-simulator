@@ -8,7 +8,7 @@ To add a component, implement its interface and register a factory below.
 
 import os
 from dataclasses import asdict, dataclass, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
@@ -21,7 +21,10 @@ from src.components.graph_builder.rtv_vehicle_centric import VehicleCentricRTVGr
 from src.components.graph_builder.rv_builder import RVGraphBuilder
 from src.components.network_service import NetworkXService
 from src.components.objectives import DelayObjective, ProfitObjective
+from src.components.demand import HistoricalDemandModel
+from src.components.demand_rebalance_solver import DemandRebalancingSolver
 from src.components.oracle_rebalance_solver import OracleRebalancingSolver
+from src.components.zones import ZoneIndex
 from src.components.pricing import LinearFareModel
 from src.components.rebalance_solver import ReactiveRebalancingSolver
 from src.components.simulation_data_provider import SimulationDataProvider
@@ -59,6 +62,7 @@ class ExperimentConfig:
     assignment_solver: str = "gurobi"
     rebalancing: str = "reactive"
     oracle_horizon_min: float = 10.0
+    demand_horizon_min: float = 15.0  # look-ahead of the demand rebalancer
     travel_time_factor: float = config.TRAVEL_TIME_FACTOR
     read_only: bool = False
 
@@ -102,9 +106,22 @@ def _oracle(ctx: Context) -> IRebalancingSolver:
     )
 
 
+def _demand(ctx: Context) -> IRebalancingSolver:
+    t0 = ctx.provider.first_request_time()
+    simulated_day = (t0 + timedelta(seconds=ctx.start_time)).date()
+    zones = ZoneIndex(ctx.provider.graph)
+    model = HistoricalDemandModel.fit(
+        ctx.provider.request_table(), zones, t0, exclude={simulated_day}
+    )
+    return DemandRebalancingSolver(
+        ctx.network, zones, model, horizon=ctx.config.demand_horizon_min * 60
+    )
+
+
 REBALANCERS: dict[str, Callable[[Context], IRebalancingSolver]] = {
     "reactive": lambda ctx: ReactiveRebalancingSolver(ctx.network),
     "oracle": _oracle,
+    "demand": _demand,
 }
 
 

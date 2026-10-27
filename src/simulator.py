@@ -189,6 +189,7 @@ class Simulator:
             )
 
             rebalancing_duration = 0.0
+            vehicles_rebalanced = 0
             if idle_vehicles:
                 logger.debug(
                     f"Rebalancing: {len(idle_vehicles)} idle vehicles, "
@@ -210,6 +211,7 @@ class Simulator:
                     rebalancing_duration,
                 )
 
+                vehicles_rebalanced = len(rebalancing_routes)
                 if rebalancing_routes:
                     self.controller.apply_rebalancing(rebalancing_routes, t_now)
                     logger.debug(
@@ -274,6 +276,7 @@ class Simulator:
                 revenue=c_stats.revenue,
                 vehicle_km_loaded=c_stats.km_loaded,
                 vehicle_km_empty=c_stats.km_empty,
+                vehicles_rebalanced=vehicles_rebalanced,
             )
 
             if c_stats.delivered_count > 0:

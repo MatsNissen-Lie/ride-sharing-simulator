@@ -122,6 +122,13 @@ class SimulationDataProvider:
         df = pl.read_parquet(path, columns=["pickup_datetime"], n_rows=1)
         return self._ensure_datetime(df["pickup_datetime"][0])
 
+    def request_table(self) -> pl.DataFrame:
+        """All requests in the rider files: pickup_datetime and orig_node."""
+        return pl.concat(
+            pl.read_parquet(path, columns=["pickup_datetime", "orig_node"])
+            for path in self.iter_request_files()
+        )
+
     def request_origins_between(self, start: float, end: float) -> pl.DataFrame:
         """Requests with start <= time < end (simulation seconds): columns t, origin."""
         t0 = self.first_request_time()
