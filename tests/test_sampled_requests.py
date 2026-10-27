@@ -14,8 +14,11 @@ from src.components.graph_builder.rtv_trip_centric import TripCentricRTVGraphBui
 from src.components.objectives import DelayObjective
 from src.components.rebalance_solver import NoRebalancingSolver
 from src.components.request_sampler import HistoricalRequestSampler
-from src.components.sampled_assignment_solver import SampledRequestsAssignmentSolver
-from src.interfaces import IRequestSampler
+from src.components.sampled_assignment_solver import (
+    SampledChainAssignmentSolver,
+    SampledRequestsAssignmentSolver,
+)
+from src.interfaces import IRequestSampler, Passenger, Stop, VehicleAvailability
 from tests.conftest import make_request, random_requests, random_vehicle
 from tests.test_joint_assignment import Zones, idle, instance
 from tests.test_simulation import CheckedController, run
@@ -205,3 +208,42 @@ def test_no_virtual_requests_simulation_matches_the_paper(network, seed):
                       rebalancer=NoRebalancingSolver())
     assert [b.requests_delivered for b in combined] == [b.requests_delivered for b in plain]
     assert [b.avg_total_delay for b in combined] == [b.avg_total_delay for b in plain]
+
+
+def chain(network, requests=(), **kwargs):
+    kwargs = {"horizon": 300.0, "weight": 0.05} | kwargs
+    return SampledChainAssignmentSolver(DelayObjective(), network, Zones(), FixedSampler(requests), **kwargs)
+
+
+def test_vehicle_ending_its_plan_near_a_virtual_rider_spares_a_move(network):
+    """A busy vehicle that drops off next to the virtual rider claims it; the free one stays."""
+    rider = make_request(network, "p", 14, 21, T_NOW - 100)
+    busy = VehicleAvailability("busy", 4, 20, T_NOW, frozenset({Passenger(rider, T_NOW - 60)}),
+                               (Stop(21, False, "p"),))
+    vehicles = {busy, idle("free", 0)}
+    q = virtual(network, 1, 21, dt=120)
+    rtv = instance(network, vehicles, [])
+    assert set(sampled(network, [q]).solve(rtv, set(), vehicles, 30, T_NOW).rebalancing) == {"free"}
+    assert chain(network, [q]).solve(rtv, set(), vehicles, 30, T_NOW).rebalancing == {}
+
+
+def test_chain_commits_only_the_real_trip(network):
+    vehicles = {idle("a", 0), idle("c", 27)}
+    rider = make_request(network, "r", 1, 21, T_NOW)
+    q = virtual(network, 1, 21, dt=200)
+    rtv = instance(network, vehicles, [rider])
+    result = chain(network, [q]).solve(rtv, {rider}, vehicles, 30, T_NOW)
+    (a,) = result.assignments
+    assert a.trip_id == frozenset({"r"}) and a.route == rtv.get_route(frozenset({"r"}), a.vehicle_id).route
+    assert result.rebalancing == {} and result.unassigned_requests == set()
+    assert set(sampled(network, [q]).solve(rtv, {rider}, vehicles, 30, T_NOW).rebalancing) == {"c"}
+
+
+@pytest.mark.parametrize("seed", range(3))
+def test_chain_without_virtual_requests_is_the_papers_ilp(network, seed):
+    rng = random.Random(seed)
+    vehicles = {random_vehicle(network, rng, f"v{k}", T_NOW, rng.choice([0, 0, 1, 2])) for k in range(4)}
+    requests = set(random_requests(network, rng, 6, T_NOW))
+    rtv = instance(network, vehicles, requests)
+    plain = HighsAssignmentSolver().solve(rtv, requests, vehicles, 30, T_NOW)
+    assert chain(network).solve(rtv, requests, vehicles, 30, T_NOW).total_cost == pytest.approx(plain.total_cost)

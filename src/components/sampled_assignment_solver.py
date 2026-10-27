@@ -2,6 +2,7 @@
 
 import numpy as np
 
+from config import get_logger
 from src.components.joint_assignment_solver import JointAssignmentSolver, ZeroValue
 from src.components.request_sampler import VIRTUAL_PREFIX
 from src.components.zones import ZoneIndex
@@ -17,6 +18,8 @@ from src.interfaces import (
     VehicleAvailability,
 )
 from src.interfaces.graphs import RTVGraph, TripId
+
+logger = get_logger(__name__)
 
 
 def is_virtual(request_id: str) -> bool:
@@ -120,6 +123,10 @@ class SampledRequestsAssignmentSolver(JointAssignmentSolver):
         used = {r for trip, _ in options for r in trip}
         virtual = {q for q in self.virtual if q.id in used}
         result = super().solve(graph, requests | virtual, vehicles, solver_timeout, current_time)
+        logger.info(
+            f"Virtual riders: {len(self.virtual)} sampled, {len(virtual)} with options, "
+            f"{len(options)} options; {len(result.rebalancing)} vehicles sent to one."
+        )
         return AssignmentResult(
             assignments=result.assignments,
             unassigned_requests={r for r in result.unassigned_requests if not is_virtual(r.id)},
@@ -131,7 +138,10 @@ class SampledRequestsAssignmentSolver(JointAssignmentSolver):
     def _virtual_options(
         self, rtv_graph: RTVGraph, vehicles: set[VehicleAvailability]
     ) -> dict[tuple[TripId, str], tuple[FeasibleRoute, float]]:
-        """Columns that serve virtual riders: ({q}, v) -> (route to o_q, cost)."""
+        """
+        Columns that serve virtual riders: (trip, v) -> (route, cost on top of
+        the trip's real part). Here: ({q}, v) for free vehicles.
+        """
         free = sorted(
             (
                 v
@@ -178,8 +188,13 @@ class SampledRequestsAssignmentSolver(JointAssignmentSolver):
         return np.array([self._objective.unserved_penalty(q, self._t_now) for q in self.virtual])
 
     def _edge_costs(self, rtv_graph, requests, vehicles):
+        """Real trips as in the joint ILP; a virtual option adds its cost to that of its real part."""
         real = {r for r in requests if not is_virtual(r.id)}
-        return super()._edge_costs(self._real_graph, real, vehicles) | self._virtual_costs
+        costs = super()._edge_costs(self._real_graph, real, vehicles)
+        for (trip, v_id), extra in self._virtual_costs.items():
+            real_part = frozenset(r for r in trip if not is_virtual(r))
+            costs[(trip, v_id)] = (costs[(real_part, v_id)] if real_part else 0.0) + extra
+        return costs
 
     def _result(self, rtv_graph, requests, chosen, total_cost, is_optimal, rebalancing=None):
         """Commit real trips; a free vehicle chosen for a virtual rider moves to its origin."""
@@ -207,3 +222,50 @@ class SampledRequestsAssignmentSolver(JointAssignmentSolver):
     def _moves(self, vehicles, current_time):
         """No zone moves: with V = 0 they would only cut moves to virtual riders short."""
         return []
+
+
+class SampledChainAssignmentSolver(SampledRequestsAssignmentSolver):
+    """
+    Also lets every option claim a virtual rider after it: after the trip T of
+    an RTV edge, or after its current plan for a vehicle carrying riders. The
+    chain says where the option leaves the vehicle; (T + q, v) costs
+
+        c'_{T,v} + w * (move_cost(end of T -> o_q) + wait_q)
+
+    (the move and the wait happen only if q turns up, so both get weight w).
+    Only the `n_chain` cheapest virtual riders per option are kept. A chosen
+    chain commits only its real part, so a vehicle that claims a virtual rider
+    after its current plan just keeps that plan.
+    """
+
+    def __init__(self, *args, n_chain: int = 3, chunk: int = 2000, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._n_chain = n_chain
+        self._chunk = chunk
+
+    def _virtual_options(self, rtv_graph, vehicles):
+        options = super()._virtual_options(rtv_graph, vehicles)
+        veh = {v.vehicle_id: v for v in vehicles}
+        bases = [(trip, v_id, fr.route.stops) for (trip, v_id), fr in rtv_graph.trip_vehicle_details.items()]
+        bases += [(frozenset(), v.vehicle_id, v.remaining_stops_to_serve) for v in vehicles if v.passengers_onboard]
+        if not bases or not self.virtual:
+            return options
+        ends = [self._end_state(veh[v_id], stops) for _, v_id, stops in bases]
+        nodes, times = [n for n, _ in ends], np.array([t for _, t in ends])
+        pickups = [q.origin_node for q in self.virtual]
+        deadline = self._deadlines()
+        k = min(self._n_chain, len(pickups))
+        for lo in range(0, len(bases), self._chunk):
+            rows = slice(lo, lo + self._chunk)
+            travel = self._network.get_travel_time_matrix(nodes[rows], pickups)
+            dist = self._network.get_distance_matrix()[np.ix_(nodes[rows], pickups)]
+            arrival = times[rows, None] + travel
+            extra = self._weight * (self._objective.rebalancing_cost(travel, dist) + self._wait(arrival))
+            extra[~(arrival <= deadline[None, :])] = np.inf
+            for i, best in enumerate(np.argpartition(extra, k - 1, axis=1)[:, :k]):
+                trip, v_id, stops = bases[lo + i]
+                for j in best[np.isfinite(extra[i, best])]:
+                    q = self.virtual[j]
+                    route = Route((*stops, Stop(q.origin_node, True, q.id)), 0.0, 0.0, 0.0)
+                    options[(trip | {q.id}, v_id)] = (FeasibleRoute(route, 0.0), float(extra[i, j]))
+        return options

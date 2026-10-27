@@ -30,7 +30,10 @@ from src.components.zones import ZoneIndex
 from src.components.pricing import LinearFareModel
 from src.components.rebalance_solver import NoRebalancingSolver, ReactiveRebalancingSolver
 from src.components.request_sampler import HistoricalRequestSampler
-from src.components.sampled_assignment_solver import SampledRequestsAssignmentSolver
+from src.components.sampled_assignment_solver import (
+    SampledChainAssignmentSolver,
+    SampledRequestsAssignmentSolver,
+)
 from src.components.simulation_data_provider import SimulationDataProvider
 from src.components.trip_solver import AStarTripSolver
 from src.database.simple_db import DuckDBPathCache
@@ -139,6 +142,14 @@ ASSIGNMENT_SOLVERS: dict[str, Callable[[Context, IObjective], IAssignmentSolver]
         objective, ctx.network, ctx.zones, VEHICLE_VALUES[ctx.config.vehicle_value](ctx)
     ),
     "sampled": lambda ctx, objective: SampledRequestsAssignmentSolver(
+        objective,
+        ctx.network,
+        ctx.zones,
+        REQUEST_SAMPLERS[ctx.config.request_sampler](ctx),
+        horizon=ctx.config.sample_horizon_min * 60,
+        weight=ctx.config.virtual_weight,
+    ),
+    "sampled-chain": lambda ctx, objective: SampledChainAssignmentSolver(
         objective,
         ctx.network,
         ctx.zones,
