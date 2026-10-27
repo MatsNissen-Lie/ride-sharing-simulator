@@ -30,6 +30,7 @@ from src.components.zones import ZoneIndex
 from src.components.pricing import LinearFareModel
 from src.components.rebalance_solver import NoRebalancingSolver, ReactiveRebalancingSolver
 from src.components.simulation_data_provider import SimulationDataProvider
+from src.components.transport_rebalance_solver import TransportRebalancingSolver
 from src.components.trip_solver import AStarTripSolver
 from src.database.simple_db import DuckDBPathCache
 from src.interfaces import (
@@ -148,6 +149,9 @@ REBALANCERS: dict[str, Callable[[Context], IRebalancingSolver]] = {
     "reactive": lambda ctx: ReactiveRebalancingSolver(ctx.network),
     "oracle": _oracle,
     "demand": _demand,
+    "transport": lambda ctx: TransportRebalancingSolver(
+        ctx.network, ctx.zones, ctx.demand, horizon=ctx.config.demand_horizon_min * 60
+    ),
     "none": lambda ctx: NoRebalancingSolver(),
 }
 
