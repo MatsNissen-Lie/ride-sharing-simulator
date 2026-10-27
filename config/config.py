@@ -6,8 +6,9 @@ DELTA = 5 * 60  # maximum delay (waiting + in-vehicle), relative to t*
 
 # Traffic: simulated travel time = free-flow (OSM speed limit) time x this factor.
 # Calibrated on Jan 2025 Manhattan trips (actual / free-flow time, median):
-# ~1.8 at 04:00, 2.4 at 07:00, 2.7-3.0 from 08:00 to 19:00. 2.9 matches the
-# weekday evening peak used in the experiments. 1.0 = free flow (runs before 2026-10-27).
+# ~1.9 at 04:00, 2.3 at 07:00, 2.7-3.0 from 08:00 to 19:00 (2.91 at 18:00), so 2.9
+# matches the weekday evening peak used in the experiments. 1.0 = free flow (runs
+# before 2026-10-27). Recompute: scripts/analysis/travel_time_factor.py
 TRAVEL_TIME_FACTOR = 2.9
 
 # Simulation
