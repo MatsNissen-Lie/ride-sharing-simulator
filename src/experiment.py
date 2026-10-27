@@ -24,7 +24,7 @@ from src.components.joint_assignment_solver import JointAssignmentSolver, ZeroVa
 from src.components.network_service import NetworkXService
 from src.components.objectives import DelayObjective, ProfitObjective
 from src.components.demand import HistoricalDemandModel
-from src.components.fleet_mpc import FleetMpcValue, ZoneTrips
+from src.components.fleet_mpc import FleetMpcValue, MpcRebalancingSolver, ZoneTrips
 from src.components.demand_rebalance_solver import DemandRebalancingSolver
 from src.components.oracle_rebalance_solver import OracleRebalancingSolver
 from src.components.zones import ZoneIndex
@@ -105,6 +105,11 @@ class Context:
             exclude={simulated_day},
         )
 
+    @cached_property
+    def vehicle_value(self) -> IVehicleValue:
+        """One instance, shared by the joint solver and rebalancers that follow its plan."""
+        return VEHICLE_VALUES[self.config.vehicle_value](self)
+
 
 OBJECTIVES: dict[str, Callable[[Context], IObjective]] = {
     "delay": lambda ctx: DelayObjective(),
@@ -120,6 +125,13 @@ RTV_BUILDERS: dict[str, Callable[[ITripSolver], IRTVGraphBuilder]] = {
     "trip": TripCentricRTVGraphBuilder,
     "vehicle": VehicleCentricRTVGraphBuilder,
 }
+
+
+# Riders served per vehicle per average trip time in highs + none on the tuning day
+# Tue 2025-01-14 (scripts/analysis/pooling_factor.py): 1.66.
+MPC_POOLING = 1.6
+
+
 def _mpc(ctx: Context, **kwargs) -> IVehicleValue:
     """Fleet MPC values; a rider is worth the delay objective's unserved penalty or the mean fare."""
     objective = OBJECTIVES[ctx.config.objective](ctx)
@@ -134,13 +146,15 @@ def _mpc(ctx: Context, **kwargs) -> IVehicleValue:
 
 VEHICLE_VALUES: dict[str, Callable[[Context], IVehicleValue]] = {
     "zero": lambda ctx: ZeroValue(),
-    "mpc": _mpc,
+    "mpc": lambda ctx: _mpc(ctx, pooling=MPC_POOLING),
+    "mpc_p1": lambda ctx: _mpc(ctx, pooling=1.0),
+    "mpc_half": lambda ctx: _mpc(ctx, pooling=MPC_POOLING, weight=0.5),
 }
 ASSIGNMENT_SOLVERS: dict[str, Callable[[Context, IObjective], IAssignmentSolver]] = {
     "gurobi": lambda ctx, objective: GurobiAssignmentSolver(objective),
     "highs": lambda ctx, objective: HighsAssignmentSolver(objective),
     "joint": lambda ctx, objective: JointAssignmentSolver(
-        objective, ctx.network, ctx.zones, VEHICLE_VALUES[ctx.config.vehicle_value](ctx)
+        objective, ctx.network, ctx.zones, ctx.vehicle_value
     ),
 }
 
@@ -164,6 +178,7 @@ REBALANCERS: dict[str, Callable[[Context], IRebalancingSolver]] = {
     "oracle": _oracle,
     "demand": _demand,
     "none": lambda ctx: NoRebalancingSolver(),
+    "mpc": lambda ctx: MpcRebalancingSolver(ctx.network, ctx.zones, ctx.vehicle_value),
 }
 
 

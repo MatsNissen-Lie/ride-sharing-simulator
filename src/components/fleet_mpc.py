@@ -22,8 +22,11 @@ from src.interfaces import (
     IDemandModel,
     INetworkService,
     IObjective,
+    IRebalancingSolver,
     IVehicleValue,
     Request,
+    Route,
+    Stop,
     VehicleAvailability,
 )
 
@@ -44,10 +47,11 @@ def fleet_lp_values(
     reward: float,
     pooling: float = 1.0,
     eps_supply: float = 1e-3,
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray]:
     """
-    Fluid fleet LP over Z zones and K steps; returns the dual value (Z, K) of
-    one more free vehicle in zone i at the start of step k, as a saving.
+    Fluid fleet LP over Z zones and K steps. Returns the dual value (Z, K) of
+    one more free vehicle in zone i at the start of step k, as a saving, and
+    the planned empty moves (Z, Z) from zone i to zone j in step 0.
 
         max  sum_ijk pooling * reward * x_ijk - sum_ijk move_cost_ij * m_ijk
         s.t. sum_j x_ijk + sum_j m_ijk + w_ik - w_i,k-1
@@ -129,7 +133,10 @@ def fleet_lp_values(
                   method="highs-ipm")
     if res.status != 0:
         raise RuntimeError(f"Fleet LP failed: {res.message}")
-    return -res.eqlin.marginals.reshape(n_steps, n_zones).T
+    moves = np.zeros((n_zones, n_zones))
+    first = pk == 0
+    moves[mi[first], mj[first]] = res.x[m_col[first]]
+    return -res.eqlin.marginals.reshape(n_steps, n_zones).T, moves
 
 
 @dataclass
@@ -260,13 +267,14 @@ class FleetMpcValue(IVehicleValue):
         self._trip_steps = np.maximum(trips.trip_time / step, 1.0)
 
         self._t_solved: float | None = None
+        self.moves = np.zeros((self._zone_ids.size, self._zone_ids.size))  # step-0 moves of the last solve
         self._grid = np.zeros((self._zone_ids.size, n_steps))  # values at t_solved + k * step
         self._slope = 0.0
 
     def prepare(self, vehicles, requests, t_now):
         if self._t_solved is not None and t_now < self._t_solved + self._resolve_every:
             return
-        lp = fleet_lp_values(
+        lp, self.moves = fleet_lp_values(
             self.supply_grid(vehicles, t_now),
             self.demand_grid(requests, t_now),
             np.stack([self._trips.shares_at(t_now + k * self._step) for k in range(self._n_steps)]),
@@ -275,7 +283,8 @@ class FleetMpcValue(IVehicleValue):
             self._move_cost,
             self._reward,
             self._pooling,
-        ) * (self._weight / self._pooling)
+        )
+        lp = lp * (self._weight / self._pooling)
         if self._t_solved is not None:
             times = t_now + self._step * np.arange(self._n_steps)
             previous = self._interpolate(np.repeat(np.arange(self._zone_ids.size), self._n_steps),
@@ -284,6 +293,10 @@ class FleetMpcValue(IVehicleValue):
         self._t_solved, self._grid = t_now, lp
         mean = lp.mean(axis=0)
         self._slope = max((mean[0] - mean[-1]) / (self._step * (self._n_steps - 1)), 0.0)
+
+    @property
+    def t_solved(self) -> float | None:
+        return self._t_solved
 
     def values(self, nodes, times, t_now):
         if self._t_solved is None:
@@ -327,3 +340,41 @@ class FleetMpcValue(IVehicleValue):
         if waiting:
             np.add.at(grid[:, 0], np.searchsorted(self._zone_ids, self._zones.zones_of(waiting)), 1.0)
         return grid
+
+
+class MpcRebalancingSolver(IRebalancingSolver):
+    """
+    Carries out the fleet LP's empty moves (Zhang & Pavone's MPC: apply the
+    first step of the plan). The joint ILP prices moves with the LP's duals,
+    but where the LP moves vehicles the duals make the move worth exactly its
+    cost, so the ILP is indifferent and the number of moves is left to
+    chance. This step sends round(m_ij) idle vehicles from zone i to the
+    centre of zone j, those nearest to it, in the batch right after each LP
+    solve. Vehicles already moving keep going.
+    """
+
+    def __init__(self, network: INetworkService, zones: ZoneIndex, value: FleetMpcValue):
+        self._network = network
+        self._zones = zones
+        self._value = value
+        self._zone_ids = np.asarray(zones.zone_ids)
+        self._centres = np.array([zones.center_node[int(z)] for z in self._zone_ids])
+
+    def solve(self, idle_vehicles, unassigned_requests, t_now, en_route=()):
+        if self._value.t_solved != t_now or not idle_vehicles:
+            return {}
+        idle = sorted(idle_vehicles, key=lambda v: v.vehicle_id)
+        nodes = [v.available_at_node for v in idle]
+        zone_of = np.searchsorted(self._zone_ids, self._zones.zones_of(nodes))
+        travel = self._network.get_travel_time_matrix(nodes, list(self._centres))
+        dist = self._network.get_distance_matrix()
+        routes: dict[str, Route] = {}
+        moves = np.round(self._value.moves)
+        for i, j in zip(*np.nonzero(moves)):
+            free = [k for k in np.nonzero(zone_of == i)[0] if idle[k].vehicle_id not in routes]
+            for k in sorted(free, key=lambda k: travel[k, j])[: int(moves[i, j])]:
+                stop = Stop.rebalancing(int(self._centres[j]), f"zone{int(self._zone_ids[j])}")
+                routes[idle[k].vehicle_id] = Route(
+                    (stop,), float(travel[k, j]), float(dist[nodes[k], self._centres[j]]), 0.0
+                )
+        return routes

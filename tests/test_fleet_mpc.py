@@ -9,7 +9,7 @@ import polars as pl
 import pytest
 
 from src.components.assignment_solver import HighsAssignmentSolver
-from src.components.fleet_mpc import FleetMpcValue, ZoneTrips, fleet_lp_values
+from src.components.fleet_mpc import FleetMpcValue, MpcRebalancingSolver, ZoneTrips, fleet_lp_values
 from src.components.joint_assignment_solver import JointAssignmentSolver
 from src.components.objectives import DelayObjective
 from src.interfaces import IDemandModel, Stop, VehicleAvailability
@@ -33,7 +33,7 @@ def lp(supply, demand, trip, move=None, move_cost=None, reward=1.0, pooling=1.0,
         np.zeros((n_zones, n_zones)) if move_cost is None else np.asarray(move_cost, dtype=float),
         reward,
         pooling,
-    )
+    )[0]
 
 
 def test_one_zone_value_counts_trips_left_in_the_horizon():
@@ -76,6 +76,16 @@ def test_a_vehicle_far_from_demand_is_worth_the_move_less_its_cost():
     assert values[0] == pytest.approx([0.9, 0.9, 0.0], abs=1e-6)
 
 
+def test_planned_moves_of_the_first_step():
+    """Two vehicles in A, riders only in B: both move at once (B trips take one step)."""
+    _, moves = fleet_lp_values(
+        np.array([[2.0, 0, 0], [0, 0, 0]]), np.array([[0.0, 0, 0], [5, 5, 5]]),
+        np.repeat(np.eye(2)[None], 3, axis=0), np.ones((2, 2)),
+        np.array([[INF, 1], [1, INF]]), np.zeros((2, 2)), 1.0,
+    )
+    assert moves == pytest.approx(np.array([[0, 2], [0, 0]]), abs=1e-3)
+
+
 @pytest.mark.parametrize("vehicles, value_now", [(1, 2.0), (3, 1.0)])
 def test_value_is_that_of_the_marginal_trip_class(vehicles, value_now):
     """
@@ -101,8 +111,8 @@ def test_runtime_on_a_city_sized_instance():
     supply = rng.poisson(5, (n_zones, n_steps)).astype(float)
     demand = rng.poisson(8, (n_zones, n_steps)).astype(float)
     start = time.perf_counter()
-    values = fleet_lp_values(supply, demand, shares, trip_steps, move_steps, 300 * move_steps,
-                             1e5, 1.2)
+    values, _ = fleet_lp_values(supply, demand, shares, trip_steps, move_steps, 300 * move_steps,
+                                1e5, 1.2)
     assert time.perf_counter() - start < 5.0  # solved once a minute; batches are 10 s
     assert values.shape == (n_zones, n_steps) and (values >= -1e-6).all()
 
@@ -239,3 +249,15 @@ def test_zone_trips_fit_shares_and_trip_times():
                           pickup_time=60.0)
     assert trips.shares_at(18 * 3600 + 60)[0] == pytest.approx([1 / 3, 2 / 3])
     assert trips.trip_time == pytest.approx(np.array([[160.0, 460.0], [560.0, 110.0]]))
+
+
+def test_rebalancer_carries_out_the_first_moves_after_a_solve(network):
+    value = mpc(network, {2: 0.1}, trip_time=120.0)  # moving now beats moving later
+    vehicles = [idle("a", 0), idle("b", 1), idle("c", 6)]  # all in zone 1
+    rebalancer = MpcRebalancingSolver(network, Zones(), value)
+    value.prepare(set(vehicles), set(), T_NOW)
+    assert value.moves[0, 1] == pytest.approx(3, abs=1e-2)
+    routes = rebalancer.solve(vehicles, [], T_NOW)
+    assert set(routes) == {"a", "b", "c"}
+    assert all(r.stops[0].node == 21 and r.stops[0].is_rebalancing for r in routes.values())
+    assert rebalancer.solve(vehicles, [], T_NOW + 10) == {}  # no new solve, nothing to do
