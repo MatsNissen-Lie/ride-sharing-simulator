@@ -49,20 +49,22 @@ def fleet_lp_values(
     Fluid fleet LP over Z zones and K steps; returns the dual value (Z, K) of
     one more free vehicle in zone i at the start of step k, as a saving.
 
-        max  sum_ik pooling * reward * x_ik - sum_ijk move_cost_ij * m_ijk
-        s.t. x_ik + sum_j m_ijk + w_ik - w_i,k-1
-               - sum_j,k' shares_k'ji x_jk' [arrives at i in step k]
-               - sum_j,k' m_jik'           [arrives at i in step k]  = supply_ik
-             0 <= x_ik <= demand_ik / pooling,   m, w >= 0
+        max  sum_ijk pooling * reward * x_ijk - sum_ijk move_cost_ij * m_ijk
+        s.t. sum_j x_ijk + sum_j m_ijk + w_ik - w_i,k-1
+               - sum_j,k' x_jik' [arrives at i in step k]
+               - sum_j,k' m_jik' [arrives at i in step k]  = supply_ik
+             0 <= x_ijk <= demand_ik * shares_kij / pooling,   m, w >= 0
 
-    x_ik: vehicle trips starting in zone i in step k, each carrying `pooling`
-    riders on average; they free the vehicle in zone j (share shares_kij)
-    trip_steps_ij steps later. m_ijk: empty moves, allowed where move_steps
-    is finite. w_ik: vehicles waiting into step k+1. A duration d that is not
-    a whole number of steps is split, (1 - f) at floor(d) and f at
-    floor(d) + 1, so the duals are linear in time between step starts.
-    Arrivals after the last step are worth nothing (see FleetMpcValue for the
-    tail).
+    x_ijk: vehicle trips from zone i to zone j starting in step k, each
+    carrying `pooling` riders on average; they free the vehicle in j
+    trip_steps_ij steps later. Trips are per destination, so where vehicles
+    are scarce the LP serves the most valuable trips first and the dual is
+    the value of the marginal (worst served) trip class, not of an average
+    rider. m_ijk: empty moves, allowed where move_steps is finite. w_ik:
+    vehicles waiting into step k+1. A duration d that is not a whole number
+    of steps is split, (1 - f) at floor(d) and f at floor(d) + 1, so the
+    duals are linear in time between step starts. Arrivals after the last
+    step are worth nothing (see FleetMpcValue for the tail).
 
     Degeneracy: a zone-step without vehicles has no basic variable to pin its
     dual. `eps_supply` extra vehicles in every zone-step make the LP route
@@ -86,44 +88,43 @@ def fleet_lp_values(
             vals.append(-share[keep])
 
     zk = np.arange(n_zones * n_steps)
-    z_of, k_of = zk % n_zones, zk // n_zones  # column order = row order (k-major)
+    z_of, k_of = zk % n_zones, zk // n_zones  # row order: k-major
 
-    # x: columns 0 .. ZK-1, leaves its own row and returns at destinations.
-    x_col = zk
-    rows.append(zk), cols.append(x_col), vals.append(np.ones(zk.size))
-    o, d = np.meshgrid(np.arange(n_zones), np.arange(n_zones), indexing="ij")
-    for k in range(n_steps):
-        s = shares[k][o, d]
-        arrive(np.full(o.size, row(0, k)) + o.ravel(), d.ravel(), np.full(o.size, k),
-               trip_steps[o, d].ravel(), s.ravel())
+    # x: one column per step and pair of zones with riders.
+    xk, xi, xj = np.nonzero(shares > 0)
+    x_col = np.arange(xk.size)
+    rows.append(row(xi, xk)), cols.append(x_col), vals.append(np.ones(xk.size))
+    arrive(x_col, xj, xk, trip_steps[xi, xj], np.ones(xk.size))
 
-    # w: columns ZK .. 2ZK-1, carries a vehicle to the next step.
-    w_col = zk + zk.size
+    # w: carries a vehicle to the next step.
+    w_col = xk.size + zk
     rows.append(zk), cols.append(w_col), vals.append(np.ones(zk.size))
     nxt = k_of + 1 < n_steps
     rows.append(row(z_of[nxt], k_of[nxt] + 1)), cols.append(w_col[nxt]), vals.append(-np.ones(nxt.sum()))
 
     # m: one column per allowed pair and step.
     pi, pj = np.nonzero(np.isfinite(move_steps))
-    n_pairs = pi.size
-    pk = np.repeat(np.arange(n_steps), n_pairs)
+    pk = np.repeat(np.arange(n_steps), pi.size)
     mi, mj = np.tile(pi, n_steps), np.tile(pj, n_steps)
-    m_col = 2 * zk.size + np.arange(mi.size)
+    m_col = xk.size + zk.size + np.arange(mi.size)
     rows.append(row(mi, pk)), cols.append(m_col), vals.append(np.ones(mi.size))
     arrive(m_col, mj, pk, move_steps[mi, mj], np.ones(mi.size))
 
-    n_cols = 2 * zk.size + mi.size
+    n_cols = xk.size + zk.size + mi.size
     a_eq = coo_matrix(
         (np.concatenate(vals), (np.concatenate(rows), np.concatenate(cols))),
         shape=(zk.size, n_cols),
     ).tocsr()
     b_eq = supply.T.ravel() + eps_supply  # k-major, like the rows
     cost = np.concatenate([
-        np.full(zk.size, -pooling * reward),
+        np.full(xk.size, -pooling * reward),
         np.zeros(zk.size),
         move_cost[mi, mj],
     ])
-    upper = np.concatenate([demand.T.ravel() / pooling, np.full(zk.size + mi.size, np.inf)])
+    upper = np.concatenate([
+        demand[xi, xk] * shares[xk, xi, xj] / pooling,
+        np.full(zk.size + mi.size, np.inf),
+    ])
     res = linprog(cost, A_eq=a_eq, b_eq=b_eq, bounds=np.column_stack([np.zeros(n_cols), upper]),
                   method="highs-ipm")
     if res.status != 0:
