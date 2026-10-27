@@ -179,6 +179,18 @@ class DuckDBPathCache:
     def get_travel_time_matrix(
         self, sources: list[int], targets: list[int], fill_value: float = float("inf")
     ) -> np.ndarray:
+        """Free-flow travel times in seconds."""
+        return self._pair_matrix(sources, targets, "time_s", fill_value)
+
+    def get_distance_matrix(
+        self, sources: list[int], targets: list[int], fill_value: float = float("inf")
+    ) -> np.ndarray:
+        """Shortest-path (by time) distances in metres."""
+        return self._pair_matrix(sources, targets, "dist_m", fill_value)
+
+    def _pair_matrix(
+        self, sources: list[int], targets: list[int], column: str, fill_value: float
+    ) -> np.ndarray:
         # Works in RO mode because TEMPORARY tables are process-local (in RAM)
         if not sources or not targets:
             return np.array([[]])
@@ -202,11 +214,11 @@ class DuckDBPathCache:
             [targets, targets],
         )
 
-        query = """
+        query = f"""
             SELECT 
                 s.idx AS row_idx,
                 t.idx AS col_idx,
-                ts.time_s
+                ts.{column}
             FROM v_sources s
             CROSS JOIN v_targets t
             LEFT JOIN time_simple ts 

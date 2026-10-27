@@ -122,3 +122,29 @@ def test_simulation_is_consistent_with_traffic():
     slow = NetworkXService(graph, db=InMemoryPathCache(graph), travel_time_factor=1.8)
     batches, _ = run(slow, TripCentricRTVGraphBuilder, HighsAssignmentSolver)
     assert sum(b.requests_delivered for b in batches) > 20
+
+
+def test_profit_simulation_is_consistent(network):
+    """Profit objective end to end: promises kept, deadlines met, money recorded."""
+    from src.components.objectives import ProfitObjective
+    from src.components.pricing import LinearFareModel
+
+    class ProfitSolver(HighsAssignmentSolver):
+        def __init__(self):
+            super().__init__(ProfitObjective(network, cost_per_km=0.25))
+
+    class PricedController(CheckedController):
+        def __init__(self, network, fleet):
+            super().__init__(network, fleet, fare_model=LinearFareModel(network))
+
+    import tests.test_simulation as me
+    original = me.CheckedController
+    me.CheckedController = PricedController
+    try:
+        batches, _ = run(network, TripCentricRTVGraphBuilder, ProfitSolver)
+    finally:
+        me.CheckedController = original
+    assert sum(b.requests_delivered for b in batches) > 20
+    assert sum(b.revenue for b in batches) > 0
+    assert sum(b.vehicle_km_loaded for b in batches) > 0
+    assert sum(b.vehicle_km_empty for b in batches) > 0

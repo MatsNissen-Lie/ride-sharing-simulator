@@ -96,6 +96,10 @@ class INetworkService(ABC):
         """
         pass
 
+    def get_distance_matrix(self) -> np.ndarray:
+        """All-pairs shortest-path distances in metres, indexed by node id."""
+        raise NotImplementedError("get_distance_matrix not implemented in base class")
+
     def get_l1_cache(self) -> Any:
         """
         Returns the internal L1 cache object, if any.
@@ -125,6 +129,14 @@ class ITripSolver(ABC):
         cost is the solver's own ranking criterion; the assignment uses
         IObjective.trip_cost.
         """
+
+
+class IFareModel(ABC):
+    """The price a rider pays for a trip, quoted when the request arrives."""
+
+    @abstractmethod
+    def price(self, origin: int, destination: int) -> float:
+        """Fare in USD for a ride from `origin` to `destination` (graph node ids)."""
 
 
 class IObjective(ABC):

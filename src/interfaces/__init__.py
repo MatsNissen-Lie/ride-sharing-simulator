@@ -20,6 +20,7 @@ from .services import (
     IRTVGraphBuilder,
     IRVGraphBuilder,
     IRebalancingSolver,
+    IFareModel,
     IObjective,
     ITripSolver,
     RTVGraph,
@@ -29,6 +30,7 @@ from .services import (
 __all__ = [
     # SERVICES
     "IRebalancingSolver",
+    "IFareModel",
     "IObjective",
     "ITripSolver",
     "IAssignmentSolver",

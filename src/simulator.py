@@ -270,6 +270,9 @@ class Simulator:
                 assigned_trips_size_4=assigned_trip_stats.get(4, 0),
                 assigned_trips_size_5=assigned_trip_stats.get(5, 0),
                 assigned_trips_size_6=assigned_trip_stats.get(6, 0),
+                revenue=c_stats.revenue,
+                vehicle_km_loaded=c_stats.km_loaded,
+                vehicle_km_empty=c_stats.km_empty,
             )
 
             if c_stats.delivered_count > 0:

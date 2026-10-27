@@ -20,12 +20,21 @@ class InMemoryPathCache:
     def __init__(self, graph: nx.MultiDiGraph):
         n = max(graph.nodes) + 1
         self.matrix = np.full((n, n), np.inf)
-        for o, times in nx.all_pairs_dijkstra_path_length(graph, weight="travel_time"):
+        self.distances = np.full((n, n), np.inf)
+        for o, (times, paths) in nx.all_pairs_dijkstra(graph, weight="travel_time"):
             for d, t in times.items():
                 self.matrix[o, d] = t
+                self.distances[o, d] = sum(
+                    min(e["length"] for e in graph[u][v].values() if e["travel_time"] == min(
+                        x["travel_time"] for x in graph[u][v].values()))
+                    for u, v in zip(paths[d], paths[d][1:])
+                )
 
     def get_travel_time_matrix(self, origins, destinations):
         return self.matrix[np.ix_(origins, destinations)]
+
+    def get_distance_matrix(self, origins, destinations):
+        return self.distances[np.ix_(origins, destinations)]
 
     def get_simple(self, o, d):
         return float(self.matrix[o, d]), 0.0

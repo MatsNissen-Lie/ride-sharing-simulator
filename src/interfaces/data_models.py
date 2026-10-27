@@ -56,6 +56,7 @@ class Request(MetaRequest):
     promised_pickup_time: float | None = (
         None  # Assigned pickup time (t_r^p), but not committed (aka not picked up yet)
     )
+    fare: float = 0.0  # Price the rider pays if served (from an IFareModel)
 
     def __hash__(self):
         return hash(self.id)

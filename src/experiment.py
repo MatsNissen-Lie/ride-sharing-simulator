@@ -20,14 +20,16 @@ from src.components.graph_builder.rtv_trip_centric import TripCentricRTVGraphBui
 from src.components.graph_builder.rtv_vehicle_centric import VehicleCentricRTVGraphBuilder
 from src.components.graph_builder.rv_builder import RVGraphBuilder
 from src.components.network_service import NetworkXService
-from src.components.objectives import DelayObjective
+from src.components.objectives import DelayObjective, ProfitObjective
 from src.components.oracle_rebalance_solver import OracleRebalancingSolver
+from src.components.pricing import LinearFareModel
 from src.components.rebalance_solver import ReactiveRebalancingSolver
 from src.components.simulation_data_provider import SimulationDataProvider
 from src.components.trip_solver import AStarTripSolver
 from src.database.simple_db import DuckDBPathCache
 from src.interfaces import (
     IAssignmentSolver,
+    IFareModel,
     IObjective,
     IRebalancingSolver,
     IRTVGraphBuilder,
@@ -50,6 +52,8 @@ class ExperimentConfig:
     hours: float | None = None  # measured hours after warm-up; None uses config.END_TIME
     max_batches: int | None = None
     objective: str = "delay"
+    cost_per_km: float = config.COST_PER_KM  # used by the profit objective
+    fare_model: str = "linear"
     trip_solver: str = "astar"
     rtv_builder: str = "trip"
     assignment_solver: str = "gurobi"
@@ -72,6 +76,10 @@ class Context:
 
 OBJECTIVES: dict[str, Callable[[Context], IObjective]] = {
     "delay": lambda ctx: DelayObjective(),
+    "profit": lambda ctx: ProfitObjective(ctx.network, ctx.config.cost_per_km),
+}
+FARE_MODELS: dict[str, Callable[[Context], IFareModel]] = {
+    "linear": lambda ctx: LinearFareModel(ctx.network),
 }
 TRIP_SOLVERS: dict[str, Callable[[Context], ITripSolver]] = {
     "astar": lambda ctx: AStarTripSolver(ctx.network.get_l1_cache()),
@@ -116,7 +124,11 @@ def build_simulator(ctx: Context, db_cache: DuckDBPathCache) -> Simulator:
     trip_solver = TRIP_SOLVERS[cfg.trip_solver](ctx)
     return Simulator(
         provider=ctx.provider,
-        controller=BatchController(ctx.network, ctx.provider.iter_vehicles(cfg.fleet)),
+        controller=BatchController(
+            ctx.network,
+            ctx.provider.iter_vehicles(cfg.fleet),
+            fare_model=FARE_MODELS[cfg.fare_model](ctx),
+        ),
         rv_builder=RVGraphBuilder(ctx.network, trip_solver),
         rtv_builder=RTV_BUILDERS[cfg.rtv_builder](trip_solver),
         assignment_solver=ASSIGNMENT_SOLVERS[cfg.assignment_solver](objective),
@@ -131,6 +143,7 @@ def run_experiment(cfg: ExperimentConfig) -> Path:
     """Run one simulation; returns the run folder with stats, plots and metadata."""
     for key, registry in [
         ("objective", OBJECTIVES),
+        ("fare_model", FARE_MODELS),
         ("trip_solver", TRIP_SOLVERS),
         ("rtv_builder", RTV_BUILDERS),
         ("assignment_solver", ASSIGNMENT_SOLVERS),

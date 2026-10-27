@@ -10,6 +10,7 @@ from src.interfaces.batch_control import IBatchController
 from src.interfaces import (
     VehicleAvailability,
     AssignmentResult,
+    IFareModel,
     INetworkService,
     MetaRequest,
     Passenger,
@@ -33,8 +34,10 @@ class BatchController(IBatchController):
         vehicles: Iterable[Vehicle],
         omega: float = OMEGA,
         delta: float = DELTA,
+        fare_model: IFareModel | None = None,
     ) -> None:
         super().__init__(network, vehicles)
+        self._fare_model = fare_model
         self._id_to_vehicle: dict[str, Vehicle] = {v.id: v for v in self._fleet}
         # Optimized history: separate lists for bisect
         self._batch_end_times: list[float] = []
@@ -152,6 +155,7 @@ class BatchController(IBatchController):
 
                 if arrival <= vehicle_t_now:
                     # Fully reach this stop before or at vehicle_t_now → serve it
+                    self._count_distance(path.travel_distance, loaded=bool(onboard))
                     cur_time = arrival
                     cur_node = stop.node
 
@@ -208,6 +212,7 @@ class BatchController(IBatchController):
                             self._current_stats.delivered_count += 1
                             self._current_stats.sum_wait_time += wait_time
                             self._current_stats.sum_total_delay += total_delay
+                            self._current_stats.revenue += req.fare
 
                         onboard = {
                             p for p in onboard if p.original_request.id != target_id
@@ -228,6 +233,12 @@ class BatchController(IBatchController):
                     leg_start_time=cur_time,
                     t_now=vehicle_t_now,
                 )
+
+                if anchor_node != cur_node:
+                    # Distance driven so far on this leg (a prefix of a shortest path).
+                    self._count_distance(
+                        get_path(cur_node, anchor_node).travel_distance, loaded=bool(onboard)
+                    )
 
                 if anchor_time < vehicle_t_now:
                     path_sum = sum(path.travel_times) if path.travel_times else 0
@@ -409,6 +420,11 @@ class BatchController(IBatchController):
                     request_time=meta.request_time,
                     latest_pickup_time=meta.request_time + self._omega,
                     latest_dropoff_time=meta.request_time + travel_time + self._delta,
+                    fare=(
+                        self._fare_model.price(meta.origin_node, meta.destination_node)
+                        if self._fare_model
+                        else 0.0
+                    ),
                 )
             )
         return converted
@@ -651,6 +667,7 @@ class BatchController(IBatchController):
             latest_pickup_time=promised_pickup_time + PROMISE_TOLERANCE,
             latest_dropoff_time=request.latest_dropoff_time,
             promised_pickup_time=promised_pickup_time,  # we need this info later
+            fare=request.fare,
         )
 
     def _expire_stale_requests(self, t_now: float) -> None:
@@ -703,6 +720,12 @@ class BatchController(IBatchController):
                 raise ValueError(
                     f"Request {req.id} has request_time {req.request_time} after batch time {t_now}"
                 )
+
+    def _count_distance(self, metres: float, loaded: bool) -> None:
+        if loaded:
+            self._current_stats.km_loaded += metres / 1000
+        else:
+            self._current_stats.km_empty += metres / 1000
 
     def get_and_reset_metrics(self) -> ControllerStats:
         """Returns the accumulated delivered stats and clears the buffer."""

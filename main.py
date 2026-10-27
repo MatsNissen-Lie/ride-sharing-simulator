@@ -31,6 +31,12 @@ def parse_args() -> ExperimentConfig:
     )
     parser.add_argument("--max-batches", type=int, default=None, help="Stop after this many batches.")
     parser.add_argument("--objective", choices=OBJECTIVES, default=DEFAULTS.objective)
+    parser.add_argument(
+        "--cost-per-km",
+        type=float,
+        default=DEFAULTS.cost_per_km,
+        help="Variable cost per vehicle-km in USD (profit objective).",
+    )
     parser.add_argument("--trip-solver", choices=TRIP_SOLVERS, default=DEFAULTS.trip_solver)
     parser.add_argument(
         "--rtv",
@@ -68,6 +74,7 @@ def parse_args() -> ExperimentConfig:
         hours=a.hours,
         max_batches=a.max_batches,
         objective=a.objective,
+        cost_per_km=a.cost_per_km,
         trip_solver=a.trip_solver,
         rtv_builder=a.rtv,
         assignment_solver=a.solver,

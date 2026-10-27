@@ -17,6 +17,11 @@ class ControllerStats:
     sum_total_delay: float = 0.0
     sum_expired_wait: float = 0.0
 
+    # Economics
+    revenue: float = 0.0  # fares of riders dropped off (USD)
+    km_loaded: float = 0.0  # vehicle-km driven with passengers on board
+    km_empty: float = 0.0  # vehicle-km driven empty (to pickups, rebalancing)
+
     @property
     def avg_wait_time(self) -> float:
         return (
@@ -95,6 +100,11 @@ class BatchStatistics:
     assigned_trips_size_4: int = 0
     assigned_trips_size_5: int = 0
     assigned_trips_size_6: int = 0
+
+    # Economics (profit = revenue - cost per km * (km_loaded + km_empty), computed in analysis)
+    revenue: float = 0.0
+    vehicle_km_loaded: float = 0.0
+    vehicle_km_empty: float = 0.0
 
     def to_dict(self) -> dict:
         return self.__dict__

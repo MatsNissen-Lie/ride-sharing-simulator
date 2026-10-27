@@ -41,6 +41,7 @@ class NetworkXService(INetworkService):
             raise ValueError("travel_time_factor must be positive")
         self.G = graph
         self.travel_time_factor = travel_time_factor
+        self._distances_loaded = False
 
         if max_node_id is not None:
             self.N = max_node_id
@@ -326,6 +327,14 @@ class NetworkXService(INetworkService):
                 f"Input time_matrix shape {cache.shape} does not match expected {(self.N, self.N)}"
             )
         self._time_matrix = cache
+
+    def get_distance_matrix(self) -> np.ndarray:
+        """All-pairs shortest-path distances in metres (loaded on first use)."""
+        if not self._distances_loaded:
+            nodes = list(range(self.N))
+            self._dist_matrix[np.ix_(nodes, nodes)] = self._db.get_distance_matrix(nodes, nodes)
+            self._distances_loaded = True
+        return self._dist_matrix
 
     def get_l1_cache(self):
         """Returns the current L1 cache."""
