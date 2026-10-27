@@ -142,7 +142,6 @@ ASSIGNMENT_SOLVERS: dict[str, Callable[[Context, IObjective], IAssignmentSolver]
         objective,
         ctx.network,
         ctx.zones,
-        VEHICLE_VALUES[ctx.config.vehicle_value](ctx),
         REQUEST_SAMPLERS[ctx.config.request_sampler](ctx),
         horizon=ctx.config.sample_horizon_min * 60,
         weight=ctx.config.virtual_weight,

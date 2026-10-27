@@ -11,7 +11,6 @@ from config.config import DELTA, OMEGA
 from src.components.assignment_solver import HighsAssignmentSolver
 from src.components.demand import HistoricalDemandModel
 from src.components.graph_builder.rtv_trip_centric import TripCentricRTVGraphBuilder
-from src.components.joint_assignment_solver import ZeroValue
 from src.components.objectives import DelayObjective
 from src.components.rebalance_solver import NoRebalancingSolver
 from src.components.request_sampler import HistoricalRequestSampler
@@ -100,9 +99,9 @@ def virtual(network, rid, origin, dt=60.0, dest=35):
 
 
 def sampled(network, requests=(), **kwargs):
-    kwargs = {"horizon": 300.0, "weight": 0.05, "max_move": 1e6} | kwargs
+    kwargs = {"horizon": 300.0, "weight": 0.05} | kwargs
     return SampledRequestsAssignmentSolver(
-        DelayObjective(), network, Zones(), ZeroValue(), FixedSampler(requests), **kwargs
+        DelayObjective(), network, Zones(), FixedSampler(requests), **kwargs
     )
 
 
@@ -189,7 +188,7 @@ def test_virtual_riders_are_never_committed(network, monkeypatch):
 
     monkeypatch.setattr(sim, "CheckedController", NoVirtualPickups)
     solver = lambda: SampledRequestsAssignmentSolver(
-        DelayObjective(), network, Zones(), ZeroValue(), RandomSampler(network)
+        DelayObjective(), network, Zones(), RandomSampler(network)
     )
     batches, controller = run(network, TripCentricRTVGraphBuilder, solver, rebalancer=NoRebalancingSolver())
     assert sum(b.vehicles_rebalanced for b in batches) > 0
