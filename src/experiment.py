@@ -24,6 +24,7 @@ from src.components.joint_assignment_solver import JointAssignmentSolver, ZeroVa
 from src.components.network_service import NetworkXService
 from src.components.objectives import DelayObjective, ProfitObjective
 from src.components.demand import HistoricalDemandModel
+from src.components.fleet_mpc import FleetMpcValue, ZoneTrips
 from src.components.demand_rebalance_solver import DemandRebalancingSolver
 from src.components.oracle_rebalance_solver import OracleRebalancingSolver
 from src.components.zones import ZoneIndex
@@ -94,6 +95,16 @@ class Context:
             self.provider.request_table(), self.zones, t0, exclude={simulated_day}
         )
 
+    @cached_property
+    def zone_trips(self) -> ZoneTrips:
+        """Destination shares and trip times per pair of zones, without the simulated day."""
+        t0 = self.provider.first_request_time()
+        simulated_day = (t0 + timedelta(seconds=self.start_time)).date()
+        return ZoneTrips.fit(
+            self.provider.request_trips(), self.zones, self.network.get_l1_cache(), t0,
+            exclude={simulated_day},
+        )
+
 
 OBJECTIVES: dict[str, Callable[[Context], IObjective]] = {
     "delay": lambda ctx: DelayObjective(),
@@ -109,8 +120,21 @@ RTV_BUILDERS: dict[str, Callable[[ITripSolver], IRTVGraphBuilder]] = {
     "trip": TripCentricRTVGraphBuilder,
     "vehicle": VehicleCentricRTVGraphBuilder,
 }
+def _mpc(ctx: Context, **kwargs) -> IVehicleValue:
+    """Fleet MPC values; a rider is worth the delay objective's unserved penalty or the mean fare."""
+    objective = OBJECTIVES[ctx.config.objective](ctx)
+    if ctx.config.objective == "delay":
+        reward = 1e5
+    else:
+        fares = FARE_MODELS[ctx.config.fare_model](ctx)
+        sample = ctx.provider.request_trips().sample(2000, seed=0)
+        reward = sum(fares.price(o, d) for o, d in zip(sample["orig_node"], sample["dest_node"])) / 2000
+    return FleetMpcValue(ctx.network, ctx.zones, ctx.demand, ctx.zone_trips, objective, reward, **kwargs)
+
+
 VEHICLE_VALUES: dict[str, Callable[[Context], IVehicleValue]] = {
     "zero": lambda ctx: ZeroValue(),
+    "mpc": _mpc,
 }
 ASSIGNMENT_SOLVERS: dict[str, Callable[[Context, IObjective], IAssignmentSolver]] = {
     "gurobi": lambda ctx, objective: GurobiAssignmentSolver(objective),

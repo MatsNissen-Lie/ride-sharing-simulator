@@ -1,0 +1,328 @@
+"""
+Zone-level fleet MPC whose duals price the assignment (stage C, option C).
+
+Every minute a fluid LP plans the fleet over zones x time steps (Zhang, Rossi
+& Pavone 2016; Iglesias et al. 2018). The dual of a zone-step supply
+constraint is what one more free vehicle there and then is worth; the joint
+assignment ILP uses it as V(node, time). Reasoning and results:
+research/stage-c/fleet-mpc.md.
+"""
+
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+
+import numpy as np
+import polars as pl
+from scipy.optimize import linprog
+from scipy.sparse import coo_matrix
+
+from src.components.demand import HOLIDAYS, day_type
+from src.components.zones import ZoneIndex
+from src.interfaces import (
+    IDemandModel,
+    INetworkService,
+    IObjective,
+    IVehicleValue,
+    Request,
+    VehicleAvailability,
+)
+
+
+def _split(steps: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """A duration of d steps lands (1 - f) at floor(d) and f at floor(d) + 1, f = d - floor(d)."""
+    lo = np.floor(steps)
+    return lo.astype(np.int64), steps - lo
+
+
+def fleet_lp_values(
+    supply: np.ndarray,
+    demand: np.ndarray,
+    shares: np.ndarray,
+    trip_steps: np.ndarray,
+    move_steps: np.ndarray,
+    move_cost: np.ndarray,
+    reward: float,
+    pooling: float = 1.0,
+    eps_supply: float = 1e-3,
+) -> np.ndarray:
+    """
+    Fluid fleet LP over Z zones and K steps; returns the dual value (Z, K) of
+    one more free vehicle in zone i at the start of step k, as a saving.
+
+        max  sum_ik pooling * reward * x_ik - sum_ijk move_cost_ij * m_ijk
+        s.t. x_ik + sum_j m_ijk + w_ik - w_i,k-1
+               - sum_j,k' shares_k'ji x_jk' [arrives at i in step k]
+               - sum_j,k' m_jik'           [arrives at i in step k]  = supply_ik
+             0 <= x_ik <= demand_ik / pooling,   m, w >= 0
+
+    x_ik: vehicle trips starting in zone i in step k, each carrying `pooling`
+    riders on average; they free the vehicle in zone j (share shares_kij)
+    trip_steps_ij steps later. m_ijk: empty moves, allowed where move_steps
+    is finite. w_ik: vehicles waiting into step k+1. A duration d that is not
+    a whole number of steps is split, (1 - f) at floor(d) and f at
+    floor(d) + 1, so the duals are linear in time between step starts.
+    Arrivals after the last step are worth nothing (see FleetMpcValue for the
+    tail).
+
+    Degeneracy: a zone-step without vehicles has no basic variable to pin its
+    dual. `eps_supply` extra vehicles in every zone-step make the LP route
+    them to their best use, so every dual is the value of one more vehicle
+    (the right derivative), not an arbitrary point of the dual face.
+
+    supply, demand: (Z, K); shares: (K, Z, Z), rows sum to 1;
+    trip_steps, move_steps, move_cost: (Z, Z); durations must be >= 1 step.
+    """
+    n_zones, n_steps = supply.shape
+    row = lambda i, k: k * n_zones + i  # noqa: E731
+    rows, cols, vals = [], [], []
+
+    def arrive(col, dest, start, dur, weight):
+        """Column `col` delivers `weight` vehicles to zone `dest` `dur` steps after step `start`."""
+        lo, f = _split(dur)
+        for k, share in ((start + lo, weight * (1 - f)), (start + lo + 1, weight * f)):
+            keep = (k < n_steps) & (share > 0)
+            rows.append(row(dest[keep], k[keep]))
+            cols.append(col[keep])
+            vals.append(-share[keep])
+
+    zk = np.arange(n_zones * n_steps)
+    z_of, k_of = zk % n_zones, zk // n_zones  # column order = row order (k-major)
+
+    # x: columns 0 .. ZK-1, leaves its own row and returns at destinations.
+    x_col = zk
+    rows.append(zk), cols.append(x_col), vals.append(np.ones(zk.size))
+    o, d = np.meshgrid(np.arange(n_zones), np.arange(n_zones), indexing="ij")
+    for k in range(n_steps):
+        s = shares[k][o, d]
+        arrive(np.full(o.size, row(0, k)) + o.ravel(), d.ravel(), np.full(o.size, k),
+               trip_steps[o, d].ravel(), s.ravel())
+
+    # w: columns ZK .. 2ZK-1, carries a vehicle to the next step.
+    w_col = zk + zk.size
+    rows.append(zk), cols.append(w_col), vals.append(np.ones(zk.size))
+    nxt = k_of + 1 < n_steps
+    rows.append(row(z_of[nxt], k_of[nxt] + 1)), cols.append(w_col[nxt]), vals.append(-np.ones(nxt.sum()))
+
+    # m: one column per allowed pair and step.
+    pi, pj = np.nonzero(np.isfinite(move_steps))
+    n_pairs = pi.size
+    pk = np.repeat(np.arange(n_steps), n_pairs)
+    mi, mj = np.tile(pi, n_steps), np.tile(pj, n_steps)
+    m_col = 2 * zk.size + np.arange(mi.size)
+    rows.append(row(mi, pk)), cols.append(m_col), vals.append(np.ones(mi.size))
+    arrive(m_col, mj, pk, move_steps[mi, mj], np.ones(mi.size))
+
+    n_cols = 2 * zk.size + mi.size
+    a_eq = coo_matrix(
+        (np.concatenate(vals), (np.concatenate(rows), np.concatenate(cols))),
+        shape=(zk.size, n_cols),
+    ).tocsr()
+    b_eq = supply.T.ravel() + eps_supply  # k-major, like the rows
+    cost = np.concatenate([
+        np.full(zk.size, -pooling * reward),
+        np.zeros(zk.size),
+        move_cost[mi, mj],
+    ])
+    upper = np.concatenate([demand.T.ravel() / pooling, np.full(zk.size + mi.size, np.inf)])
+    res = linprog(cost, A_eq=a_eq, b_eq=b_eq, bounds=np.column_stack([np.zeros(n_cols), upper]),
+                  method="highs-ipm")
+    if res.status != 0:
+        raise RuntimeError(f"Fleet LP failed: {res.message}")
+    return -res.eqlin.marginals.reshape(n_steps, n_zones).T
+
+
+@dataclass
+class ZoneTrips:
+    """
+    Where riders go and how long it takes, per pair of zones (in ZoneIndex.zone_ids order).
+
+    shares[(day type, hour)]: (Z, Z) destination shares of riders by origin zone.
+    trip_time: (Z, Z) mean shortest-path travel time of riders' trips plus
+    `pickup_time` (the vehicle's drive to the rider), in seconds.
+    """
+
+    shares: dict[tuple[str, int], np.ndarray]
+    trip_time: np.ndarray
+    t0: datetime
+
+    @classmethod
+    def fit(
+        cls,
+        trips: pl.DataFrame,
+        zones: ZoneIndex,
+        travel_times: np.ndarray,
+        t0: datetime,
+        exclude: set[date] = frozenset(),
+        pickup_time: float = 90.0,
+    ) -> "ZoneTrips":
+        """`trips` needs pickup_datetime, orig_node, dest_node; `travel_times` is node x node."""
+        zone_ids = np.asarray(zones.zone_ids)
+        n = zone_ids.size
+        o_node, d_node = trips["orig_node"].to_numpy(), trips["dest_node"].to_numpy()
+        df = pl.DataFrame({
+            "day": trips["pickup_datetime"].dt.date(),
+            "hour": trips["pickup_datetime"].dt.hour().cast(pl.Int32),
+            "o": np.searchsorted(zone_ids, zones.zones_of(o_node)),
+            "d": np.searchsorted(zone_ids, zones.zones_of(d_node)),
+            "t": travel_times[o_node, d_node],
+        }).filter(~pl.col("day").is_in(sorted(exclude | HOLIDAYS)))
+
+        shares: dict[tuple[str, int], np.ndarray] = {}
+        counts = (
+            df.with_columns(pl.col("day").map_elements(day_type, return_dtype=pl.String).alias("kind"))
+            .group_by("kind", "hour", "o", "d").len()
+        )
+        for (kind, hour), g in counts.group_by("kind", "hour"):
+            m = np.zeros((n, n))
+            m[g["o"].to_numpy(), g["d"].to_numpy()] = g["len"].to_numpy()
+            shares[(kind, int(hour))] = m / np.maximum(m.sum(axis=1, keepdims=True), 1)
+
+        mean = df.filter(pl.col("t").is_finite() & (pl.col("t") >= 0)).group_by("o", "d").agg(pl.col("t").mean())
+        trip_time = np.full((n, n), np.nan)
+        trip_time[mean["o"].to_numpy(), mean["d"].to_numpy()] = mean["t"].to_numpy()
+        centres = np.array([zones.center_node[int(z)] for z in zone_ids])
+        fallback = travel_times[np.ix_(centres, centres)]
+        trip_time = np.where(np.isnan(trip_time), fallback, trip_time) + pickup_time
+        return cls(shares, trip_time, t0)
+
+    def shares_at(self, t: float) -> np.ndarray:
+        moment = self.t0 + timedelta(seconds=t)
+        n = self.trip_time.shape[0]
+        return self.shares.get((day_type(moment.date()), moment.hour), np.zeros((n, n)))
+
+
+def free_at(vehicle: VehicleAvailability, times: np.ndarray) -> tuple[int, float]:
+    """Node and time at which `vehicle` has driven all its remaining stops."""
+    node, t = vehicle.available_at_node, vehicle.available_from_time
+    for stop in vehicle.remaining_stops_to_serve:
+        t += times[node, stop.node]
+        node = stop.node
+    return node, t
+
+
+class FleetMpcValue(IVehicleValue):
+    """
+    V(node, t) from the fluid fleet LP (`fleet_lp_values`), re-solved every
+    `resolve_every` seconds over `n_steps` steps of `step` seconds:
+
+    - supply: idle vehicles now, plus every busy or moving vehicle in the zone
+      and step where its current plan ends (known future arrivals);
+    - demand: the forecast per zone and step, plus the riders in the pool now
+      (step 0; promised riders too, as their pickups are re-planned every batch);
+    - served riders free their vehicle at the destination zone (OD shares of
+      training days) after the mean trip time; empty moves between zones up to
+      `max_move` seconds apart cost IObjective.rebalancing_cost.
+
+    Values are per rider-equivalent: the dual divided by `pooling` (riders per
+    vehicle trip in the LP), so a trip of average length breaks even where the
+    fleet is scarce. They are scaled by `weight`, smoothed between solves
+    (new = smoothing * LP + (1 - smoothing) * previous, on absolute time) and
+    interpolated linearly in time between step starts. After the last step
+    they fall at the mean slope of the horizon, down to zero.
+    """
+
+    def __init__(
+        self,
+        network: INetworkService,
+        zones: ZoneIndex,
+        demand: IDemandModel,
+        trips: ZoneTrips,
+        objective: IObjective,
+        rider_reward: float,
+        step: float = 300.0,
+        n_steps: int = 12,
+        pooling: float = 1.0,
+        weight: float = 1.0,
+        smoothing: float = 0.5,
+        resolve_every: float = 60.0,
+        max_move: float = 900.0,
+    ):
+        self._network = network
+        self._zones = zones
+        self._demand = demand
+        self._trips = trips
+        self._reward = rider_reward
+        self._step = step
+        self._n_steps = n_steps
+        self._pooling = pooling
+        self._weight = weight
+        self._smoothing = smoothing
+        self._resolve_every = resolve_every
+
+        self._zone_ids = np.asarray(zones.zone_ids)
+        centres = [zones.center_node[int(z)] for z in self._zone_ids]
+        travel = network.get_travel_time_matrix(centres, centres)
+        dist = network.get_distance_matrix()[np.ix_(centres, centres)]
+        allowed = (travel > 0) & (travel <= max_move)
+        self._move_steps = np.where(allowed, np.maximum(travel / step, 1.0), np.inf)
+        self._move_cost = np.vectorize(objective.rebalancing_cost)(travel, dist)
+        self._trip_steps = np.maximum(trips.trip_time / step, 1.0)
+
+        self._t_solved: float | None = None
+        self._grid = np.zeros((self._zone_ids.size, n_steps))  # values at t_solved + k * step
+        self._slope = 0.0
+
+    def prepare(self, vehicles, requests, t_now):
+        if self._t_solved is not None and t_now < self._t_solved + self._resolve_every:
+            return
+        lp = fleet_lp_values(
+            self.supply_grid(vehicles, t_now),
+            self.demand_grid(requests, t_now),
+            np.stack([self._trips.shares_at(t_now + k * self._step) for k in range(self._n_steps)]),
+            self._trip_steps,
+            self._move_steps,
+            self._move_cost,
+            self._reward,
+            self._pooling,
+        ) * (self._weight / self._pooling)
+        if self._t_solved is not None:
+            times = t_now + self._step * np.arange(self._n_steps)
+            previous = self._interpolate(np.repeat(np.arange(self._zone_ids.size), self._n_steps),
+                                         np.tile(times, self._zone_ids.size))
+            lp = self._smoothing * lp + (1 - self._smoothing) * previous.reshape(lp.shape)
+        self._t_solved, self._grid = t_now, lp
+        mean = lp.mean(axis=0)
+        self._slope = max((mean[0] - mean[-1]) / (self._step * (self._n_steps - 1)), 0.0)
+
+    def values(self, nodes, times, t_now):
+        if self._t_solved is None:
+            return np.zeros(len(nodes))
+        cols = np.searchsorted(self._zone_ids, self._zones.zones_of(nodes))
+        return self._interpolate(cols, np.asarray(times, dtype=float))
+
+    def _interpolate(self, cols: np.ndarray, times: np.ndarray) -> np.ndarray:
+        last = self._n_steps - 1
+        f = np.clip((times - self._t_solved) / self._step, 0.0, last)
+        lo = np.minimum(np.floor(f).astype(np.int64), last - 1) if last else np.zeros(f.size, dtype=np.int64)
+        frac = f - lo
+        hi = np.minimum(lo + 1, last)
+        inside = (1 - frac) * self._grid[cols, lo] + frac * self._grid[cols, hi]
+        beyond = np.maximum(times - (self._t_solved + last * self._step), 0.0)
+        return np.maximum(inside - self._slope * beyond, 0.0)
+
+    def supply_grid(self, vehicles: set[VehicleAvailability], t_now: float) -> np.ndarray:
+        times = self._network.get_l1_cache()
+        ends = [free_at(v, times) for v in vehicles]
+        supply = np.zeros((self._zone_ids.size, self._n_steps))
+        if not ends:
+            return supply
+        nodes, t = zip(*ends)
+        cols = np.searchsorted(self._zone_ids, self._zones.zones_of(nodes))
+        lo, f = _split(np.maximum(np.array(t) - t_now, 0.0) / self._step)
+        for k, w in ((lo, 1 - f), (lo + 1, f)):
+            keep = k < self._n_steps
+            np.add.at(supply, (cols[keep], k[keep]), w[keep])
+        return supply
+
+    def demand_grid(self, requests: set[Request], t_now: float) -> np.ndarray:
+        grid = np.zeros((self._zone_ids.size, self._n_steps))
+        for k in range(self._n_steps):
+            start = t_now + k * self._step
+            for zone, rate in self._demand.expected_requests(start, start + self._step).items():
+                col = np.searchsorted(self._zone_ids, zone)
+                if col < self._zone_ids.size and self._zone_ids[col] == zone:
+                    grid[col, k] += rate
+        waiting = [r.origin_node for r in requests]
+        if waiting:
+            np.add.at(grid[:, 0], np.searchsorted(self._zone_ids, self._zones.zones_of(waiting)), 1.0)
+        return grid
