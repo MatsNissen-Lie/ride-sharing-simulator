@@ -259,4 +259,3 @@ class IVehicleValue(ABC):
     @abstractmethod
     def values(self, nodes: np.ndarray, times: np.ndarray, t_now: float) -> np.ndarray:
         """Value of a free vehicle for each (node, time) pair."""
-
