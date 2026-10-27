@@ -129,6 +129,13 @@ class SimulationDataProvider:
             for path in self.iter_request_files()
         )
 
+    def trip_table(self) -> pl.DataFrame:
+        """All requests in the rider files: pickup_datetime, orig_node and dest_node."""
+        return pl.concat(
+            pl.read_parquet(path, columns=["pickup_datetime", "orig_node", "dest_node"])
+            for path in self.iter_request_files()
+        )
+
     def request_origins_between(self, start: float, end: float) -> pl.DataFrame:
         """Requests with start <= time < end (simulation seconds): columns t, origin."""
         t0 = self.first_request_time()

@@ -29,6 +29,8 @@ from src.components.oracle_rebalance_solver import OracleRebalancingSolver
 from src.components.zones import ZoneIndex
 from src.components.pricing import LinearFareModel
 from src.components.rebalance_solver import NoRebalancingSolver, ReactiveRebalancingSolver
+from src.components.request_sampler import HistoricalRequestSampler
+from src.components.sampled_assignment_solver import SampledRequestsAssignmentSolver
 from src.components.simulation_data_provider import SimulationDataProvider
 from src.components.trip_solver import AStarTripSolver
 from src.database.simple_db import DuckDBPathCache
@@ -37,6 +39,7 @@ from src.interfaces import (
     IFareModel,
     IObjective,
     IRebalancingSolver,
+    IRequestSampler,
     IRTVGraphBuilder,
     ITripSolver,
     IVehicleValue,
@@ -67,6 +70,9 @@ class ExperimentConfig:
     oracle_horizon_min: float = 10.0
     demand_horizon_min: float = 15.0  # look-ahead of the demand rebalancer
     vehicle_value: str = "zero"  # V(node, time) used by the joint solver
+    request_sampler: str = "historical"  # virtual future requests for the sampled solver
+    sample_horizon_min: float = 5.0  # look-ahead of the sampled solver
+    virtual_weight: float = 0.05  # weight of a virtual rider relative to a real one
     travel_time_factor: float = config.TRAVEL_TIME_FACTOR
     read_only: bool = False
 
@@ -94,6 +100,10 @@ class Context:
             self.provider.request_table(), self.zones, t0, exclude={simulated_day}
         )
 
+    @cached_property
+    def simulated_day(self):
+        return (self.provider.first_request_time() + timedelta(seconds=self.start_time)).date()
+
 
 OBJECTIVES: dict[str, Callable[[Context], IObjective]] = {
     "delay": lambda ctx: DelayObjective(),
@@ -112,11 +122,30 @@ RTV_BUILDERS: dict[str, Callable[[ITripSolver], IRTVGraphBuilder]] = {
 VEHICLE_VALUES: dict[str, Callable[[Context], IVehicleValue]] = {
     "zero": lambda ctx: ZeroValue(),
 }
+REQUEST_SAMPLERS: dict[str, Callable[[Context], IRequestSampler]] = {
+    "historical": lambda ctx: HistoricalRequestSampler(
+        ctx.demand,
+        ctx.provider.trip_table(),
+        ctx.zones,
+        ctx.provider.first_request_time(),
+        ctx.network,
+        exclude={ctx.simulated_day},
+    ),
+}
 ASSIGNMENT_SOLVERS: dict[str, Callable[[Context, IObjective], IAssignmentSolver]] = {
     "gurobi": lambda ctx, objective: GurobiAssignmentSolver(objective),
     "highs": lambda ctx, objective: HighsAssignmentSolver(objective),
     "joint": lambda ctx, objective: JointAssignmentSolver(
         objective, ctx.network, ctx.zones, VEHICLE_VALUES[ctx.config.vehicle_value](ctx)
+    ),
+    "sampled": lambda ctx, objective: SampledRequestsAssignmentSolver(
+        objective,
+        ctx.network,
+        ctx.zones,
+        VEHICLE_VALUES[ctx.config.vehicle_value](ctx),
+        REQUEST_SAMPLERS[ctx.config.request_sampler](ctx),
+        horizon=ctx.config.sample_horizon_min * 60,
+        weight=ctx.config.virtual_weight,
     ),
 }
 
@@ -184,6 +213,7 @@ def run_experiment(cfg: ExperimentConfig) -> Path:
         ("assignment_solver", ASSIGNMENT_SOLVERS),
         ("rebalancing", REBALANCERS),
         ("vehicle_value", VEHICLE_VALUES),
+        ("request_sampler", REQUEST_SAMPLERS),
     ]:
         if getattr(cfg, key) not in registry:
             raise ValueError(f"Unknown {key} {getattr(cfg, key)!r}; choose from {list(registry)}")

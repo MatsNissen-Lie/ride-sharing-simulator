@@ -21,6 +21,7 @@ from .services import (
     IRVGraphBuilder,
     IRebalancingSolver,
     IDemandModel,
+    IRequestSampler,
     IVehicleValue,
     IFareModel,
     IObjective,
@@ -33,6 +34,7 @@ __all__ = [
     # SERVICES
     "IRebalancingSolver",
     "IDemandModel",
+    "IRequestSampler",
     "IVehicleValue",
     "IFareModel",
     "IObjective",

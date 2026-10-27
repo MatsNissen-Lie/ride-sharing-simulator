@@ -61,6 +61,10 @@ class AssignmentSolverBase(IAssignmentSolver):
         """Extra (vehicle id, cost, rebalancing route) columns; none in the paper's ILP."""
         return []
 
+    def _move_groups(self, moves: list[tuple[str, float, Route]]) -> list[list[int]]:
+        """Index sets of `moves` of which at most one may be chosen; none by default."""
+        return []
+
     def _result(
         self,
         rtv_graph: RTVGraph,
@@ -222,9 +226,14 @@ class HighsAssignmentSolver(AssignmentSolverBase):
             rows.append(k)
             cols.append(n_x + n_m + k)
 
-        n_rows, n_cols = n_y + len(veh_index), n_x + n_m + n_y
+        groups = self._move_groups(moves)  # "at most one" rows after the vehicle rows
+        for g, members in enumerate(groups):
+            rows += [n_y + len(veh_index) + g] * len(members)
+            cols += [n_x + k for k in members]
+
+        n_rows, n_cols = n_y + len(veh_index) + len(groups), n_x + n_m + n_y
         a = coo_matrix((np.ones(len(rows)), (rows, cols)), shape=(n_rows, n_cols)).tocsr()
-        lower = np.concatenate([np.ones(n_y), np.zeros(len(veh_index))])
+        lower = np.concatenate([np.ones(n_y), np.zeros(len(veh_index) + len(groups))])
         result = milp(
             c=cost,
             constraints=LinearConstraint(a, lower, np.ones(n_rows)),
