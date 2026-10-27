@@ -21,7 +21,6 @@ from .services import (
     IRVGraphBuilder,
     IRebalancingSolver,
     IDemandModel,
-    IRequestSampler,
     IVehicleValue,
     IFareModel,
     IObjective,
@@ -29,6 +28,7 @@ from .services import (
     RTVGraph,
     RVGraph,
 )
+from .sampling import IRequestSampler
 
 __all__ = [
     # SERVICES

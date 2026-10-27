@@ -260,10 +260,3 @@ class IVehicleValue(ABC):
     def values(self, nodes: np.ndarray, times: np.ndarray, t_now: float) -> np.ndarray:
         """Value of a free vehicle for each (node, time) pair."""
 
-
-class IRequestSampler(ABC):
-    """Virtual future requests: one possible realisation of the demand to come."""
-
-    @abstractmethod
-    def sample(self, t_start: float, t_end: float) -> list[Request]:
-        """Virtual requests with request times in [t_start, t_end) (simulation seconds)."""

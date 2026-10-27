@@ -11,6 +11,7 @@ from config.config import DELTA, OMEGA
 from src.components.assignment_solver import HighsAssignmentSolver
 from src.components.demand import HistoricalDemandModel
 from src.components.graph_builder.rtv_trip_centric import TripCentricRTVGraphBuilder
+from src.components.joint_assignment_solver import ZeroValue
 from src.components.objectives import DelayObjective
 from src.components.rebalance_solver import NoRebalancingSolver
 from src.components.request_sampler import HistoricalRequestSampler
@@ -51,7 +52,7 @@ def sampler(network, seed=0):
     trips = trip_table()
     demand = HistoricalDemandModel.fit(trips, HalfZones(), T0, exclude={date(2025, 1, 16)})
     return HistoricalRequestSampler(
-        demand, trips, HalfZones(), T0, network, exclude={date(2025, 1, 16)}, seed=seed
+        demand, trips, HalfZones(), T0, network, exclude={date(2025, 1, 1), date(2025, 1, 16)}, seed=seed
     )
 
 
@@ -104,7 +105,7 @@ def virtual(network, rid, origin, dt=60.0, dest=35):
 def sampled(network, requests=(), **kwargs):
     kwargs = {"horizon": 300.0, "weight": 0.05} | kwargs
     return SampledRequestsAssignmentSolver(
-        DelayObjective(), network, Zones(), FixedSampler(requests), **kwargs
+        DelayObjective(), network, Zones(), ZeroValue(), FixedSampler(requests), **kwargs
     )
 
 
@@ -143,7 +144,8 @@ def test_unreachable_virtual_rider_is_ignored(network):
 
 
 def test_scenario_rolls_and_keeps_virtual_riders_until_their_latest_pickup(network):
-    solver = sampled(network, [virtual(network, 1, 21, dt=20), virtual(network, 2, 22, dt=305)])
+    source = FixedSampler([virtual(network, 1, 21, dt=20), virtual(network, 2, 22, dt=305)])
+    solver = SampledRequestsAssignmentSolver(DelayObjective(), network, Zones(), ZeroValue(), source)
     vehicles = {idle("a", 0)}
     rtv = instance(network, vehicles, [])
     solver.solve(rtv, set(), vehicles, 30, T_NOW)
@@ -152,7 +154,7 @@ def test_scenario_rolls_and_keeps_virtual_riders_until_their_latest_pickup(netwo
     assert [q.id for q in solver.virtual] == ["virtual_1", "virtual_2"]
     solver.solve(rtv, set(), vehicles, 30, T_NOW + 20 + OMEGA)
     assert [q.id for q in solver.virtual] == ["virtual_2"]
-    assert solver._sampler.calls == [(T_NOW, T_NOW + 300), (T_NOW + 300, T_NOW + 310),
+    assert source.calls == [(T_NOW, T_NOW + 300), (T_NOW + 300, T_NOW + 310),
                                      (T_NOW + 310, T_NOW + 500)]
 
 
@@ -192,7 +194,7 @@ def test_virtual_riders_are_never_committed(network, monkeypatch):
 
     monkeypatch.setattr(sim, "CheckedController", NoVirtualPickups)
     solver = lambda: SampledRequestsAssignmentSolver(
-        DelayObjective(), network, Zones(), RandomSampler(network)
+        DelayObjective(), network, Zones(), ZeroValue(), RandomSampler(network)
     )
     batches, controller = run(network, TripCentricRTVGraphBuilder, solver, rebalancer=NoRebalancingSolver())
     assert sum(b.vehicles_rebalanced for b in batches) > 0
@@ -213,7 +215,9 @@ def test_no_virtual_requests_simulation_matches_the_paper(network, seed):
 
 def chain(network, requests=(), **kwargs):
     kwargs = {"horizon": 300.0, "weight": 0.05} | kwargs
-    return SampledChainAssignmentSolver(DelayObjective(), network, Zones(), FixedSampler(requests), **kwargs)
+    return SampledChainAssignmentSolver(
+        DelayObjective(), network, Zones(), ZeroValue(), FixedSampler(requests), **kwargs
+    )
 
 
 def test_vehicle_ending_its_plan_near_a_virtual_rider_spares_a_move(network):

@@ -23,7 +23,7 @@ from src.components.graph_builder.rv_builder import RVGraphBuilder
 from src.components.joint_assignment_solver import JointAssignmentSolver, ZeroValue
 from src.components.network_service import NetworkXService
 from src.components.objectives import DelayObjective, ProfitObjective
-from src.components.demand import HistoricalDemandModel
+from src.components.demand import HOLIDAYS, HistoricalDemandModel
 from src.components.demand_rebalance_solver import DemandRebalancingSolver
 from src.components.oracle_rebalance_solver import OracleRebalancingSolver
 from src.components.zones import ZoneIndex
@@ -128,11 +128,11 @@ VEHICLE_VALUES: dict[str, Callable[[Context], IVehicleValue]] = {
 REQUEST_SAMPLERS: dict[str, Callable[[Context], IRequestSampler]] = {
     "historical": lambda ctx: HistoricalRequestSampler(
         ctx.demand,
-        ctx.provider.trip_table(),
+        HistoricalRequestSampler.read_trips(ctx.provider.iter_request_files()),
         ctx.zones,
         ctx.provider.first_request_time(),
         ctx.network,
-        exclude={ctx.simulated_day},
+        exclude={ctx.simulated_day, *HOLIDAYS},
     ),
 }
 ASSIGNMENT_SOLVERS: dict[str, Callable[[Context, IObjective], IAssignmentSolver]] = {
@@ -145,6 +145,7 @@ ASSIGNMENT_SOLVERS: dict[str, Callable[[Context, IObjective], IAssignmentSolver]
         objective,
         ctx.network,
         ctx.zones,
+        VEHICLE_VALUES[ctx.config.vehicle_value](ctx),
         REQUEST_SAMPLERS[ctx.config.request_sampler](ctx),
         horizon=ctx.config.sample_horizon_min * 60,
         weight=ctx.config.virtual_weight,
@@ -153,6 +154,7 @@ ASSIGNMENT_SOLVERS: dict[str, Callable[[Context, IObjective], IAssignmentSolver]
         objective,
         ctx.network,
         ctx.zones,
+        VEHICLE_VALUES[ctx.config.vehicle_value](ctx),
         REQUEST_SAMPLERS[ctx.config.request_sampler](ctx),
         horizon=ctx.config.sample_horizon_min * 60,
         weight=ctx.config.virtual_weight,

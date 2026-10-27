@@ -3,8 +3,7 @@
 import numpy as np
 
 from config import get_logger
-from src.components.joint_assignment_solver import JointAssignmentSolver, ZeroValue
-from src.components.request_sampler import VIRTUAL_PREFIX
+from src.components.joint_assignment_solver import JointAssignmentSolver
 from src.components.zones import ZoneIndex
 from src.interfaces import (
     AssignmentResult,
@@ -12,6 +11,7 @@ from src.interfaces import (
     INetworkService,
     IObjective,
     IRequestSampler,
+    IVehicleValue,
     Request,
     Route,
     Stop,
@@ -22,22 +22,19 @@ from src.interfaces.graphs import RTVGraph, TripId
 logger = get_logger(__name__)
 
 
-def is_virtual(request_id: str) -> bool:
-    return request_id.startswith(VIRTUAL_PREFIX)
-
-
 class VirtualWeightedObjective(IObjective):
-    """An objective whose penalty for leaving a virtual rider unserved is scaled by `weight`."""
+    """An objective whose penalty for leaving a virtual rider (id in `virtual_ids`) unserved is scaled by `weight`."""
 
-    def __init__(self, inner: IObjective, weight: float):
+    def __init__(self, inner: IObjective, weight: float, virtual_ids: set[str]):
         self._inner = inner
         self._weight = weight
+        self._virtual_ids = virtual_ids
 
     def trip_cost(self, route, vehicle, requests):
         return self._inner.trip_cost(route, vehicle, requests)
 
     def unserved_penalty(self, request, current_time):
-        if is_virtual(request.id):  # a fresh request: no waiting time yet
+        if request.id in self._virtual_ids:  # a fresh request: no waiting time yet
             return self._weight * self._inner.unserved_penalty(request, request.request_time)
         return self._inner.unserved_penalty(request, current_time)
 
@@ -73,7 +70,8 @@ class SampledRequestsAssignmentSolver(JointAssignmentSolver):
     - Real riders first: under the delay objective chi = 1e5, so with w <= 0.1
       a virtual rider is worth at most 1e4, a tenth of a real rider.
 
-    With no virtual requests this is the paper's ILP.
+    With no virtual requests this is the paper's ILP. Costs of virtual
+    options ignore the vehicle value V (use `zero`); V still prices real trips.
     """
 
     def __init__(
@@ -81,12 +79,16 @@ class SampledRequestsAssignmentSolver(JointAssignmentSolver):
         objective: IObjective,
         network: INetworkService,
         zones: ZoneIndex,
+        value: IVehicleValue,
         sampler: IRequestSampler,
         horizon: float = 300.0,
         weight: float = 0.05,
         n_virtual: int = 20,
     ):
-        super().__init__(VirtualWeightedObjective(objective, weight), network, zones, ZeroValue())
+        self._virtual_ids: set[str] = set()
+        self._costs = VirtualWeightedObjective(objective, weight, self._virtual_ids)
+        self._net = network
+        super().__init__(self._costs, network, zones, value)
         self._sampler = sampler
         self._horizon = horizon
         self._weight = weight
@@ -111,9 +113,9 @@ class SampledRequestsAssignmentSolver(JointAssignmentSolver):
             self.virtual += self._sampler.sample(start, end)
             self._sampled_until = end
         self.virtual = [q for q in self.virtual if q.latest_pickup_time > current_time]
+        self._virtual_ids.clear()
+        self._virtual_ids.update(q.id for q in self.virtual)
 
-        self._t_now = current_time
-        self._plan_value = self._current_plan_values(vehicles)
         options = self._virtual_options(rtv_graph, vehicles)
         self._real_graph = rtv_graph
         self._virtual_costs = {key: cost for key, (_, cost) in options.items()}
@@ -130,7 +132,7 @@ class SampledRequestsAssignmentSolver(JointAssignmentSolver):
         )
         return AssignmentResult(
             assignments=result.assignments,
-            unassigned_requests={r for r in result.unassigned_requests if not is_virtual(r.id)},
+            unassigned_requests={r for r in result.unassigned_requests if r.id not in self._virtual_ids},
             total_cost=result.total_cost,
             is_optimal=result.is_optimal,
             rebalancing=result.rebalancing,
@@ -157,13 +159,13 @@ class SampledRequestsAssignmentSolver(JointAssignmentSolver):
             return {}
         origins = [v.available_at_node for v in free]
         pickups = [q.origin_node for q in self.virtual]
-        travel = self._network.get_travel_time_matrix(origins, pickups)
-        dist = self._network.get_distance_matrix()[np.ix_(origins, pickups)]
+        travel = self._net.get_travel_time_matrix(origins, pickups)
+        dist = self._net.get_distance_matrix()[np.ix_(origins, pickups)]
         arrival = np.array([v.available_from_time for v in free])[:, None] + travel
         cost = (
-            self._objective.rebalancing_cost(travel, dist)
+            self._costs.rebalancing_cost(travel, dist)
             + self._weight * self._wait(arrival)
-            + np.array([self._plan_value[v.vehicle_id] for v in free])[:, None]
+            - np.array([self._move_left(v) for v in free])[:, None]
         )
         gain = self._reward()[None, :] - cost
         gain[~(arrival <= self._deadlines()[None, :])] = -np.inf
@@ -186,14 +188,30 @@ class SampledRequestsAssignmentSolver(JointAssignmentSolver):
 
     def _reward(self) -> np.ndarray:
         """w * chi of each virtual rider: what serving it saves in the ILP."""
-        return np.array([self._objective.unserved_penalty(q, self._t_now) for q in self.virtual])
+        return np.array([self._costs.unserved_penalty(q, q.request_time) for q in self.virtual])
+
+    def _free_at(self, vehicle: VehicleAvailability, stops) -> tuple[int, float]:
+        """Node and time at which `vehicle` is free after driving `stops`."""
+        node, t = vehicle.available_at_node, vehicle.available_from_time
+        for stop in stops:
+            t += self._net.get_travel_time(node, stop.node)
+            node = stop.node
+        return node, t
+
+    def _move_left(self, vehicle: VehicleAvailability) -> float:
+        """Cost of the rest of a free vehicle's move in progress (the joint ILP's -U_v under V = 0)."""
+        if not vehicle.remaining_stops_to_serve:
+            return 0.0
+        node, t = self._free_at(vehicle, vehicle.remaining_stops_to_serve)
+        dist = self._net.get_distance_matrix()[vehicle.available_at_node, node]
+        return float(self._costs.rebalancing_cost(t - vehicle.available_from_time, dist))
 
     def _edge_costs(self, rtv_graph, requests, vehicles):
         """Real trips as in the joint ILP; a virtual option adds its cost to that of its real part."""
-        real = {r for r in requests if not is_virtual(r.id)}
+        real = {r for r in requests if r.id not in self._virtual_ids}
         costs = super()._edge_costs(self._real_graph, real, vehicles)
         for (trip, v_id), extra in self._virtual_costs.items():
-            real_part = frozenset(r for r in trip if not is_virtual(r))
+            real_part = trip - self._virtual_ids
             costs[(trip, v_id)] = (costs[(real_part, v_id)] if real_part else 0.0) + extra
         return costs
 
@@ -201,22 +219,21 @@ class SampledRequestsAssignmentSolver(JointAssignmentSolver):
         """Commit real trips; a free vehicle chosen for a virtual rider moves to its origin."""
         real, moves = [], dict(rebalancing or {})
         for trip, v_id in chosen:
-            if not any(is_virtual(r) for r in trip):
+            real_part = trip - self._virtual_ids
+            if real_part == trip:
                 real.append((trip, v_id))
                 continue
             route = rtv_graph.get_route(trip, v_id).route
-            real_part = frozenset(r for r in trip if not is_virtual(r))
             if real_part:
                 real.append((real_part, v_id))
             elif v_id in self._free:
                 moves[v_id] = self._move_to_virtual(route)
         return super()._result(self._real_graph, requests, real, total_cost, is_optimal, moves)
 
-    @staticmethod
-    def _move_to_virtual(route: Route) -> Route:
+    def _move_to_virtual(self, route: Route) -> Route:
         if route.total_travel_time <= 0:
             return Route((), 0.0, 0.0, 0.0)  # already there: stop
-        first = next(s for s in route.stops if is_virtual(s.request_id))
+        first = next(s for s in route.stops if s.request_id in self._virtual_ids)
         return Route((Stop.rebalancing(first.node, first.request_id),), route.total_travel_time,
                      route.total_travel_distance, 0.0)
 
@@ -251,17 +268,17 @@ class SampledChainAssignmentSolver(SampledRequestsAssignmentSolver):
         bases += [(frozenset(), v.vehicle_id, v.remaining_stops_to_serve) for v in vehicles if v.passengers_onboard]
         if not bases or not self.virtual:
             return options
-        ends = [self._end_state(veh[v_id], stops) for _, v_id, stops in bases]
+        ends = [self._free_at(veh[v_id], stops) for _, v_id, stops in bases]
         nodes, times = [n for n, _ in ends], np.array([t for _, t in ends])
         pickups = [q.origin_node for q in self.virtual]
         deadline = self._deadlines()
         k = min(self._n_chain, len(pickups))
         for lo in range(0, len(bases), self._chunk):
             rows = slice(lo, lo + self._chunk)
-            travel = self._network.get_travel_time_matrix(nodes[rows], pickups)
-            dist = self._network.get_distance_matrix()[np.ix_(nodes[rows], pickups)]
+            travel = self._net.get_travel_time_matrix(nodes[rows], pickups)
+            dist = self._net.get_distance_matrix()[np.ix_(nodes[rows], pickups)]
             arrival = times[rows, None] + travel
-            extra = self._weight * (self._objective.rebalancing_cost(travel, dist) + self._wait(arrival))
+            extra = self._weight * (self._costs.rebalancing_cost(travel, dist) + self._wait(arrival))
             extra[~(arrival <= deadline[None, :])] = np.inf
             for i, best in enumerate(np.argpartition(extra, k - 1, axis=1)[:, :k]):
                 trip, v_id, stops = bases[lo + i]

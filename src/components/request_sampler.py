@@ -1,18 +1,20 @@
 """Virtual future requests sampled from the demand forecast and historical trips."""
 
+from collections.abc import Iterable
 from datetime import date, datetime, timedelta
 from itertools import count
+from pathlib import Path
 
 import numpy as np
 import polars as pl
 
 from config.config import DELTA, OMEGA
-from src.components.demand import HOLIDAYS, day_type
 from src.components.zones import ZoneIndex
 from src.interfaces import IDemandModel, INetworkService, IRequestSampler, Request
 
-VIRTUAL_PREFIX = "virtual_"
-DAY_TYPES = ("weekday", "weekend")
+
+def is_weekend(d: date) -> int:
+    return int(d.weekday() >= 5)
 
 
 class HistoricalRequestSampler(IRequestSampler):
@@ -24,7 +26,8 @@ class HistoricalRequestSampler(IRequestSampler):
       expectation for the interval;
     - each request copies the origin and destination nodes of a random
       historical trip that started in the same zone, day type and time slot,
-      on a training day (never the simulated day);
+      on a training day (days in `exclude`, e.g. the simulated day and
+      holidays, are never used); day types are weekday and weekend;
     - request times are uniform within each slot piece of the interval;
     - deadlines are those of real requests: pickup within omega, drop-off
       within the direct travel time plus delta.
@@ -63,7 +66,7 @@ class HistoricalRequestSampler(IRequestSampler):
                 pl.col("orig_node").cast(pl.Int32),
                 pl.col("dest_node").cast(pl.Int32),
             )
-            .filter(~pl.col("day").is_in(sorted(set(exclude) | HOLIDAYS)))
+            .filter(~pl.col("day").is_in(sorted(exclude)))
             # Polars weekdays run 1 (Monday) to 7: 6 and 7 are the weekend.
             .with_columns((pl.col("day").dt.weekday() >= 6).cast(pl.Int64).alias("kind"))
             .with_columns(self._key(pl.col("kind"), pl.col("slot"), pl.col("zone")).alias("key"))
@@ -72,6 +75,13 @@ class HistoricalRequestSampler(IRequestSampler):
         self._keys = df["key"].to_numpy()
         self._orig = df["orig_node"].to_numpy()
         self._dest = df["dest_node"].to_numpy()
+
+    @staticmethod
+    def read_trips(paths: Iterable[Path]) -> pl.DataFrame:
+        """Pickup time, origin and destination node of every trip in the rider files."""
+        return pl.concat(
+            pl.read_parquet(path, columns=["pickup_datetime", "orig_node", "dest_node"]) for path in paths
+        )
 
     @staticmethod
     def _key(kind, slot, zone):
@@ -84,7 +94,7 @@ class HistoricalRequestSampler(IRequestSampler):
             moment = self._t0 + timedelta(seconds=t)
             seconds_of_day = moment.hour * 3600 + moment.minute * 60 + moment.second
             piece_end = min(t + (self._slot - seconds_of_day % self._slot), t_end)
-            kind = DAY_TYPES.index(day_type(moment.date()))
+            kind = is_weekend(moment.date())
             slot = seconds_of_day // self._slot
             for zone, expected in sorted(self._demand.expected_requests(t, piece_end).items()):
                 key = self._key(kind, slot, zone)
@@ -100,7 +110,7 @@ class HistoricalRequestSampler(IRequestSampler):
 
     def _request(self, t: float, origin: int, destination: int) -> Request:
         return Request(
-            id=f"{VIRTUAL_PREFIX}{next(self._ids)}",
+            id=f"virtual_{next(self._ids)}",
             origin_node=origin,
             destination_node=destination,
             request_time=t,
