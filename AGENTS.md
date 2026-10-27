@@ -6,7 +6,10 @@
 - FOCUS ON A NARROW SCOPE AND DO THAT WELL. AVOID BIG CHANGES THAT TOUCH MANY PARTS OF THE CODEBASE.
 - PRESENT THE MASTER DEVELOPER WITH A PLAN IF THE SCOPE OF WORK IS MEDIUM OR LARGER. READ FILES CAREFULLY BEFORE SUGGESTING A PLAN.
 - KEEP THE CODE MODULAR: every pipeline component (RV/RTV builder, trip solver, assignment solver, rebalancing, objective) sits behind an interface so it can be swapped to run experiments. New behaviour goes in a new implementation of an interface, not in flags inside an existing one.
-- Keep the thesis roadmap in `research/ROADMAP.md` up to date: record decisions and experiment results there.
+- Document as you go, in the same commit as the work:
+  - `research/ROADMAP.md`: add a dated line to the Work log for every piece of work, record decisions in the Decisions table, and experiment results under Experiments.
+  - `thesis/working_notes.tex` (temporary section of the thesis): key words, findings, numbers and figures. Every data analysis or modelling choice gets a method entry: data, measure (formula), result, how it is used in the simulator, limitations, and the script that reproduces it.
+  - Numbers in the notes must come from a script in the repo (e.g. `scripts/analysis/`), not from one-off commands.
 
 ## Core Directive: 
 This project exclusively uses uv for all Python package management and script execution.
