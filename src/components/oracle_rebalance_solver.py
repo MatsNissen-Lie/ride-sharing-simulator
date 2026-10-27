@@ -45,6 +45,7 @@ class OracleRebalancingSolver(IRebalancingSolver):
         idle_vehicles: list[VehicleAvailability],
         unassigned_requests: list[Request],
         t_now: float,
+        en_route: list[VehicleAvailability] = (),
     ) -> dict[str, Route]:
         if not idle_vehicles:
             return {}
@@ -70,6 +71,6 @@ class OracleRebalancingSolver(IRebalancingSolver):
             if cost[i, j] >= UNREACHABLE or travel[i, j] == 0:
                 continue  # unreachable in time, or already there
             vehicle = idle_vehicles[i]
-            stop = Stop(node=target_nodes[j], is_pickup=False, request_id=f"rebalance_{j}")
+            stop = Stop.rebalancing(target_nodes[j], str(j))
             routes[vehicle.vehicle_id] = Route((stop,), float(travel[i, j]), 0.0, 0.0)
         return routes

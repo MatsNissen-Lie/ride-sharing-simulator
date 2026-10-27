@@ -226,5 +226,10 @@ class IRebalancingSolver(ABC):
         idle_vehicles: list[VehicleAvailability],
         unassigned_requests: list[Request],
         t_now: float,
+        en_route: list[VehicleAvailability] = (),
     ) -> dict[str, Route]:
-        """Rebalancing route per vehicle id; vehicles left out stay where they are."""
+        """
+        Rebalancing route per idle vehicle id; vehicles left out stay where
+        they are. `en_route` are vehicles still driving to an earlier
+        rebalancing destination (their remaining stops); they keep going.
+        """

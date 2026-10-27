@@ -77,7 +77,10 @@ class ProfitObjective(IObjective):
     ) -> float:
         start = vehicle.available_at_node
         km = self._route_km(start, [s.node for s in route.route.stops])
-        km_anyway = self._route_km(start, [s.node for s in vehicle.remaining_stops_to_serve])
+        # Rebalancing moves can be dropped, so they are not km driven anyway.
+        km_anyway = self._route_km(
+            start, [s.node for s in vehicle.remaining_stops_to_serve if not s.is_rebalancing]
+        )
         return self._cost_per_km * (km - km_anyway) - sum(r.fare for r in requests)
 
     def unserved_penalty(self, request: Request, current_time: float) -> float:

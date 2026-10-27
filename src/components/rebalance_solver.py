@@ -29,6 +29,7 @@ class ReactiveRebalancingSolver(IRebalancingSolver):
         idle_vehicles: list[VehicleAvailability],
         unassigned_requests: list[Request],
         t_now: float,
+        en_route: list[VehicleAvailability] = (),
     ) -> dict[str, Route]:
 
         n_vehicles = len(idle_vehicles)
@@ -84,11 +85,7 @@ class ReactiveRebalancingSolver(IRebalancingSolver):
 
             # Create the rebalancing route (Move to request origin)
             # This is a deadhead trip.
-            stop = Stop(
-                node=request.origin_node,
-                request_id=f"rebalance_{request.id}",
-                is_pickup=False,  # Just a move
-            )
+            stop = Stop.rebalancing(request.origin_node, request.id)
 
             # We assume a direct trip, so delay/wait is 0
             route = Route(

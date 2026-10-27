@@ -267,13 +267,14 @@ class BatchController(IBatchController):
 
                 onboard_request_ids = {p.original_request.id for p in onboard}
 
+                # Keep drop-offs of riders on board and rebalancing moves (the
+                # vehicle keeps driving to its rebalancing destination). Pickups
+                # are dropped: those riders are re-planned in the next assignment.
                 drop_off_remaining = tuple(
-                    [
-                        drop_off
-                        for drop_off in stops[idx:]
-                        if not drop_off.is_pickup
-                        and drop_off.request_id in onboard_request_ids
-                    ]
+                    stop2
+                    for stop2 in stops[idx:]
+                    if stop2.is_rebalancing
+                    or (not stop2.is_pickup and stop2.request_id in onboard_request_ids)
                 )
 
                 # 3) Mutate vehicle state to reflect projection
@@ -589,9 +590,13 @@ class BatchController(IBatchController):
         self,
         assignment_result: AssignmentResult,
         vehicle_avail_pool: Set[VehicleAvailability],
-    ) -> Tuple[list[VehicleAvailability], list[Request]]:
+    ) -> Tuple[list[VehicleAvailability], list[Request], list[VehicleAvailability]]:
         """
         Identifies the inputs for the Rebalancing LP (Algorithm 4).
+
+        Also returns the vehicles still driving to a rebalancing destination
+        and not assigned a rider in this batch (en route), so a rebalancer can
+        count them where they are heading.
 
         According to the paper, rebalancing targets:
         1. V_idle: Vehicles that are "empty, stopped and unassigned".
@@ -602,7 +607,7 @@ class BatchController(IBatchController):
             snapshots: The vehicle states used during the assignment.
 
         Returns:
-            A tuple containing (idle_vehicles, unassigned_requests).
+            (idle_vehicles, unassigned_requests, en_route_vehicles).
         """
         # 1. Identify Unassigned Requests (R_ko)
         # Directly from the assignment result[cite: 128].
@@ -616,7 +621,16 @@ class BatchController(IBatchController):
         assigned_vehicle_ids = {a.vehicle_id for a in assignment_result.assignments}
 
         idle_vehicles = []
+        en_route = []
         for v in vehicle_avail_pool:
+            if (
+                v.vehicle_id not in assigned_vehicle_ids
+                and not v.passengers_onboard
+                and v.remaining_stops_to_serve
+                and all(s.is_rebalancing for s in v.remaining_stops_to_serve)
+            ):
+                en_route.append(v)
+                continue
             # Check a: Empty and Stopped
             is_physically_idle = (
                 len(v.passengers_onboard) == 0 and len(v.remaining_stops_to_serve) == 0
@@ -628,7 +642,7 @@ class BatchController(IBatchController):
             if is_physically_idle and is_unassigned:
                 idle_vehicles.append(v)
 
-        return idle_vehicles, unassigned_requests
+        return idle_vehicles, unassigned_requests, en_route
 
     def apply_rebalancing(
         self, rebalancing_routes: dict[str, Route], t_now: float

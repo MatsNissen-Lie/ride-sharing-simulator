@@ -174,7 +174,7 @@ class Simulator:
             commit_end = time.perf_counter()
 
             # 7. Rebalancing (Controller Step 3)
-            idle_vehicles, unassigned_requests = (
+            idle_vehicles, unassigned_requests, en_route_vehicles = (
                 self.controller.get_rebalancing_candidates(
                     assignment_result, vehicle_avail_pool
                 )
@@ -200,6 +200,7 @@ class Simulator:
                     idle_vehicles=idle_vehicles,
                     unassigned_requests=unassigned_requests,
                     t_now=t_now,
+                    en_route=en_route_vehicles,
                 )
                 rebal_end_time = time.perf_counter()
                 rebalancing_duration = rebal_end_time - rebal_start_time

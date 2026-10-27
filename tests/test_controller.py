@@ -117,3 +117,42 @@ def test_promised_rider_stays_feasible_for_the_same_vehicle(network):
     matrix = network.get_l1_cache().copy()
     matrix[snapshot.available_at_node, promised.origin_node] += 1e-7  # float noise
     assert AStarTripSolver(matrix).solve([promised], snapshot).is_feasible
+
+
+def test_rebalancing_vehicle_keeps_its_destination_until_arrival(network):
+    from src.interfaces.data_models import AssignmentResult
+
+    controller = make_controller(network, [0])
+    controller.prepare_batch(10.0, [])
+    controller.apply_rebalancing({"v0": Route((Stop.rebalancing(35, "x"),), 0, 0, 0)}, 10.0)
+    arrival = 10.0 + network.get_travel_time(0, 35)
+    empty = AssignmentResult(set(), set(), 0.0, True)
+
+    t, batches_en_route = 10.0, 0
+    while True:
+        t += 10.0
+        _, (snapshot,) = controller.prepare_batch(t, [])
+        idle, _, en_route = controller.get_rebalancing_candidates(empty, {snapshot})
+        if snapshot.available_at_node == 35:
+            break
+        assert [s.node for s in snapshot.remaining_stops_to_serve] == [35]
+        assert idle == [] and en_route == [snapshot]
+        batches_en_route += 1
+    assert batches_en_route >= 1
+    # At (or arriving at) the destination: idle there from the arrival time.
+    _, (snapshot,) = controller.prepare_batch(t + 10.0, [])
+    idle, _, en_route = controller.get_rebalancing_candidates(empty, {snapshot})
+    assert snapshot.available_at_node == 35 and snapshot.remaining_stops_to_serve == ()
+    assert snapshot.available_from_time == pytest.approx(max(arrival, t + 10.0))
+    assert idle == [snapshot] and en_route == []
+
+
+def test_rebalancing_vehicle_can_be_assigned_a_rider_on_the_way(network):
+    controller = make_controller(network, [0])
+    controller.prepare_batch(10.0, [])
+    controller.apply_rebalancing({"v0": Route((Stop.rebalancing(35, "x"),), 0, 0, 0)}, 10.0)
+    (req,), (snapshot,) = controller.prepare_batch(20.0, [MetaRequest("r", 14, 7, 15.0)])
+    assert snapshot.remaining_stops_to_serve  # still heading to 35
+    assign(controller, 20.0, "v0", req)
+    route = controller._fleet[0].current_route
+    assert [s.request_id for s in route.stops] == ["r", "r"]  # rebalancing replaced by the ride
