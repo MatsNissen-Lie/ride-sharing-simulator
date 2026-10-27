@@ -25,6 +25,7 @@ def summarize(run_dir: Path) -> dict:
         "run": run_dir.name,
         "fleet": exp.get("fleet", meta.get("NUMBER_OF_VEHICLES")),
         "objective": exp.get("objective", "delay"),
+        "cost_per_km": exp.get("cost_per_km") if exp.get("objective") == "profit" else None,
         "rebalancing": exp.get("rebalancing", meta.get("rebalancing", "reactive")),
         "ttf": exp.get("travel_time_factor", 1.0),
         "minutes": df.height * meta.get("BATCH_DURATION", 10) / 60,
@@ -53,4 +54,4 @@ if __name__ == "__main__":
     runs = [Path(p) for p in sys.argv[1:] if (Path(p) / "simulation_stats.csv").exists()]
     pl.Config.set_tbl_cols(30)
     pl.Config.set_tbl_width_chars(300)
-    print(pl.DataFrame([summarize(r) for r in runs]).sort(["objective", "fleet"]))
+    print(pl.DataFrame([summarize(r) for r in runs]).sort(["fleet", "objective", "cost_per_km"], nulls_last=False))
