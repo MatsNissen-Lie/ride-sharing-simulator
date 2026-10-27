@@ -9,7 +9,9 @@ import polars as pl
 import pytest
 
 from src.components.assignment_solver import HighsAssignmentSolver
-from src.components.fleet_mpc import FleetMpcValue, MpcRebalancingSolver, ZoneTrips, fleet_lp_values
+from src.components.fleet_mpc import FleetMpcValue, fleet_lp_values
+from src.components.mpc_rebalance_solver import MpcRebalancingSolver
+from src.components.zone_trips import ZoneTrips
 from src.components.joint_assignment_solver import JointAssignmentSolver
 from src.components.objectives import DelayObjective
 from src.interfaces import IDemandModel, Stop, VehicleAvailability
@@ -261,3 +263,18 @@ def test_rebalancer_carries_out_the_first_moves_after_a_solve(network):
     assert set(routes) == {"a", "b", "c"}
     assert all(r.stops[0].node == 21 and r.stops[0].is_rebalancing for r in routes.values())
     assert rebalancer.solve(vehicles, [], T_NOW + 10) == {}  # no new solve, nothing to do
+
+
+def test_provider_reads_trips_with_destinations(tmp_path, monkeypatch):
+    """The hook ZoneTrips needs: request_trips() concatenates the rider files."""
+    import networkx as nx
+
+    from src.components import simulation_data_provider as sdp
+
+    monkeypatch.setattr(sdp, "load_graph", lambda: nx.MultiDiGraph())
+    for k in range(2):
+        pl.DataFrame({"pickup_datetime": [datetime(2025, 1, 15, 8, k)], "orig_node": [k],
+                      "dest_node": [k + 10], "other": [0]}).write_parquet(tmp_path / f"trips_{k}.parquet")
+    trips = sdp.SimulationDataProvider(rider_dir=tmp_path, rider_pattern="trips_*.parquet").request_trips()
+    assert trips.columns == ["pickup_datetime", "orig_node", "dest_node"]
+    assert trips["dest_node"].to_list() == [10, 11]

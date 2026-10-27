@@ -24,7 +24,9 @@ from src.components.joint_assignment_solver import JointAssignmentSolver, ZeroVa
 from src.components.network_service import NetworkXService
 from src.components.objectives import DelayObjective, ProfitObjective
 from src.components.demand import HistoricalDemandModel
-from src.components.fleet_mpc import FleetMpcValue, MpcRebalancingSolver, ZoneTrips
+from src.components.fleet_mpc import FleetMpcValue
+from src.components.mpc_rebalance_solver import MpcRebalancingSolver
+from src.components.zone_trips import ZoneTrips
 from src.components.demand_rebalance_solver import DemandRebalancingSolver
 from src.components.oracle_rebalance_solver import OracleRebalancingSolver
 from src.components.zones import ZoneIndex
@@ -41,6 +43,7 @@ from src.interfaces import (
     IRTVGraphBuilder,
     ITripSolver,
     IVehicleValue,
+    Request,
 )
 from src.interfaces.stats import BatchStatistics
 from src.simulator import Simulator
@@ -133,11 +136,15 @@ MPC_POOLING = 1.6
 
 
 def _mpc(ctx: Context, **kwargs) -> IVehicleValue:
-    """Fleet MPC values; a rider is worth the delay objective's unserved penalty or the mean fare."""
+    """
+    Fleet MPC values. A rider is worth what leaving a new rider unserved costs
+    (delay objective: its base penalty); where that is nothing (profit), the
+    mean fare of training trips.
+    """
     objective = OBJECTIVES[ctx.config.objective](ctx)
-    if ctx.config.objective == "delay":
-        reward = 1e5
-    else:
+    fresh = Request("mpc_reward", 0, 0, 0.0, latest_dropoff_time=0.0, latest_pickup_time=0.0)
+    reward = objective.unserved_penalty(fresh, 0.0)
+    if reward <= 0:
         fares = FARE_MODELS[ctx.config.fare_model](ctx)
         sample = ctx.provider.request_trips().sample(2000, seed=0)
         reward = sum(fares.price(o, d) for o, d in zip(sample["orig_node"], sample["dest_node"])) / 2000
