@@ -131,6 +131,21 @@ class ITripSolver(ABC):
         """
 
 
+class IZoneIndex(ABC):
+    """A partition of the street graph into zones, with one representative node per zone."""
+
+    zone_ids: np.ndarray  # all zone ids
+    center_node: dict[int, int]  # zone id -> node used as a rebalancing destination
+
+    @abstractmethod
+    def zone(self, node: int) -> int:
+        """Zone id of a graph node."""
+
+    @abstractmethod
+    def zones_of(self, nodes) -> np.ndarray:
+        """Zone ids of many graph nodes."""
+
+
 class IDemandModel(ABC):
     """Expected requests per zone: a forecast of where and when riders appear."""
 

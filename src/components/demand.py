@@ -5,8 +5,7 @@ from datetime import date, datetime, timedelta
 import numpy as np
 import polars as pl
 
-from src.components.zones import ZoneIndex
-from src.interfaces import IDemandModel
+from src.interfaces import IDemandModel, IZoneIndex
 
 # Days left out of the profile: holidays with atypical demand.
 HOLIDAYS = {date(2025, 1, 1), date(2025, 1, 20)}
@@ -39,7 +38,7 @@ class HistoricalDemandModel(IDemandModel):
     def fit(
         cls,
         trips: pl.DataFrame,
-        zones: ZoneIndex,
+        zones: IZoneIndex,
         t0: datetime,
         exclude: set[date] = frozenset(),
         slot_minutes: int = 15,
@@ -91,3 +90,12 @@ class HistoricalDemandModel(IDemandModel):
 
 def zone_vector(expected: dict[int, float], zone_ids: np.ndarray) -> np.ndarray:
     return np.array([expected.get(int(z), 0.0) for z in zone_ids])
+
+
+def integer_targets(fractional: np.ndarray) -> np.ndarray:
+    """Largest-remainder rounding: integers that sum to round(sum(fractional))."""
+    base = np.floor(fractional)
+    missing = int(round(fractional.sum() - base.sum()))
+    order = np.argsort(-(fractional - base))
+    base[order[:missing]] += 1
+    return base

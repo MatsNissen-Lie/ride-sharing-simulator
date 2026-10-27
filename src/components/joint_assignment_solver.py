@@ -3,12 +3,12 @@
 import numpy as np
 
 from src.components.assignment_solver import HighsAssignmentSolver
-from src.components.zones import ZoneIndex
 from src.interfaces import (
     AssignmentResult,
     INetworkService,
     IObjective,
     IVehicleValue,
+    IZoneIndex,
     Request,
     Route,
     Stop,
@@ -46,7 +46,7 @@ class JointAssignmentSolver(HighsAssignmentSolver):
         self,
         objective: IObjective,
         network: INetworkService,
-        zones: ZoneIndex,
+        zones: IZoneIndex,
         value: IVehicleValue,
         max_move: float = 900.0,
         n_moves: int = 5,
@@ -152,7 +152,7 @@ class JointAssignmentSolver(HighsAssignmentSolver):
                 by_vehicle.setdefault(int(i), []).append((cost, int(j)))
         for i, options in by_vehicle.items():
             for cost, j in sorted(options)[: self._n_moves]:
-                stop = Stop.rebalancing(int(self._centres[j]), f"zone{self._zone_ids[j]}")
+                stop = Stop.zone_move(int(self._centres[j]), self._zone_ids[j])
                 route = Route((stop,), float(travel[i, j]), float(dist[i, j]), 0.0)
                 moves.append((free[i].vehicle_id, cost, route))
         return moves

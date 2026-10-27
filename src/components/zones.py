@@ -5,9 +5,10 @@ import networkx as nx
 import numpy as np
 
 from config.paths import TAXI_ZONES_PATH
+from src.interfaces import IZoneIndex
 
 
-class ZoneIndex:
+class ZoneIndex(IZoneIndex):
     """
     Zone of every graph node: the Manhattan taxi zone containing it, or the
     nearest one for the few nodes just outside the zone polygons.

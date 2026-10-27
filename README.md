@@ -48,10 +48,27 @@ run_experiment(ExperimentConfig(fleet=750, rebalancing="oracle", hours=1))
 ```
 
 Each pipeline step is a swappable component behind an interface in
-`src/interfaces/services.py`: `IObjective`, `ITripSolver`, `IRVGraphBuilder`,
-`IRTVGraphBuilder`, `IAssignmentSolver` and `IRebalancingSolver`. To try a new
-variant, implement the interface and register it by name in `src/experiment.py`;
-it is then selectable from `ExperimentConfig` and the command line.
+`src/interfaces/`, registered by name in `src/experiment.py` and chosen by a
+field of `ExperimentConfig`:
+
+| Config field | Interface | Registry | Options |
+|---|---|---|---|
+| `controller` | `IBatchController` | `CONTROLLERS` | batch |
+| `zoning` | `IZoneIndex` | `ZONINGS` | taxi |
+| `demand_model` | `IDemandModel` | `DEMAND_MODELS` | historical |
+| `fare_model` | `IFareModel` | `FARE_MODELS` | linear |
+| `objective` | `IObjective` | `OBJECTIVES` | delay, profit |
+| `trip_solver` | `ITripSolver` | `TRIP_SOLVERS` | astar |
+| `rv_builder` | `IRVGraphBuilder` | `RV_BUILDERS` | standard |
+| `rtv_builder` | `IRTVGraphBuilder` | `RTV_BUILDERS` | trip, vehicle |
+| `assignment_solver` | `IAssignmentSolver` | `ASSIGNMENT_SOLVERS` | gurobi, highs, joint |
+| `vehicle_value` | `IVehicleValue` | `VEHICLE_VALUES` | zero |
+| `rebalancing` | `IRebalancingSolver` | `REBALANCERS` | reactive, demand, transport, oracle, none |
+
+To try a new variant, implement the interface in a new file and register it;
+it is then selectable from `ExperimentConfig` (and the command line for the
+main choices). Components talk to each other only through these interfaces
+and the data models; see the ownership rules in `AGENTS.md`.
 
 Tests compare each component with brute force on a small synthetic network:
 

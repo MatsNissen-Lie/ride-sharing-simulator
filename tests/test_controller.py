@@ -180,3 +180,10 @@ def test_rebalancing_never_overwrites_a_vehicle_with_riders(network):
     assign(controller, 10.0, "v0", req)
     controller.apply_rebalancing({"v0": Route((), 0, 0, 0)}, 10.0)
     assert [s.request_id for s in controller._fleet[0].current_route.stops] == ["r", "r"]
+
+
+def test_stop_kinds():
+    move, chase = Stop.zone_move(5, 161), Stop.rebalancing(5, "r1")
+    assert move.is_rebalancing and move.is_zone_move
+    assert chase.is_rebalancing and not chase.is_zone_move
+    assert not Stop(5, True, "r1").is_rebalancing

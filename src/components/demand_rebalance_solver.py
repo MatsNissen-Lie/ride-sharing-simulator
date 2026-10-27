@@ -3,19 +3,17 @@
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
-from src.components.demand import zone_vector
+from src.components.demand import integer_targets, zone_vector
 from src.components.rebalance_solver import ReactiveRebalancingSolver
-from src.components.zones import ZoneIndex
 from src.interfaces import (
     IDemandModel,
     INetworkService,
     IRebalancingSolver,
+    IZoneIndex,
     Request,
     VehicleAvailability,
 )
-from src.interfaces.data_models import REBALANCE_PREFIX, Route, Stop
-
-ZONE_MOVE = f"{REBALANCE_PREFIX}zone"
+from src.interfaces.data_models import Route, Stop
 
 
 class DemandRebalancingSolver(IRebalancingSolver):
@@ -36,7 +34,7 @@ class DemandRebalancingSolver(IRebalancingSolver):
     def __init__(
         self,
         network: INetworkService,
-        zones: ZoneIndex,
+        zones: IZoneIndex,
         demand: IDemandModel,
         horizon: float = 900.0,
         max_travel: float = 900.0,
@@ -56,7 +54,7 @@ class DemandRebalancingSolver(IRebalancingSolver):
         en_route: list[VehicleAvailability] = (),
     ) -> dict[str, Route]:
         # Vehicles chasing a rider are re-planned every batch; zone moves persist.
-        zone_move = [v for v in en_route if v.remaining_stops_to_serve[-1].request_id.startswith(ZONE_MOVE)]
+        zone_move = [v for v in en_route if v.remaining_stops_to_serve[-1].is_zone_move]
         chasing = [v for v in en_route if v not in zone_move]
         routes = self._reactive.solve(idle_vehicles, unassigned_requests, t_now, chasing)
         free = [
@@ -76,7 +74,7 @@ class DemandRebalancingSolver(IRebalancingSolver):
         supply = np.zeros(len(zone_ids))
         for z in self._zones.zones_of([v.available_at_node for v in free] + heading):
             supply[col[int(z)]] += 1
-        target = self._integer_targets(expected / expected.sum() * supply.sum())
+        target = integer_targets(expected / expected.sum() * supply.sum())
 
         # Movers: free vehicles in surplus zones (as many as the surplus).
         movers: list[VehicleAvailability] = []
@@ -99,15 +97,6 @@ class DemandRebalancingSolver(IRebalancingSolver):
         cost = np.where(travel <= self._max_travel, travel, 1e9)
         for i, j in zip(*linear_sum_assignment(cost)):
             if cost[i, j] < 1e9 and travel[i, j] > 0:
-                stop = Stop.rebalancing(dest[j], f"zone{slots[j]}")
+                stop = Stop.zone_move(dest[j], slots[j])
                 routes[movers[i].vehicle_id] = Route((stop,), float(travel[i, j]), 0.0, 0.0)
         return routes
-
-    @staticmethod
-    def _integer_targets(fractional: np.ndarray) -> np.ndarray:
-        """Largest-remainder rounding: integers that sum to round(sum(fractional))."""
-        base = np.floor(fractional)
-        missing = int(round(fractional.sum() - base.sum()))
-        order = np.argsort(-(fractional - base))
-        base[order[:missing]] += 1
-        return base

@@ -80,7 +80,9 @@ def test_unassigned_riders_get_a_vehicle_first(network):
 
 
 def test_integer_targets_sum_to_the_fleet():
-    t = DemandRebalancingSolver._integer_targets(np.array([2.4, 3.3, 1.3]))
+    from src.components.demand import integer_targets
+
+    t = integer_targets(np.array([2.4, 3.3, 1.3]))
     assert t.sum() == 7 and list(t) == [3, 3, 1]
 
 

@@ -35,6 +35,9 @@ from src.components.trip_solver import AStarTripSolver
 from src.database.simple_db import DuckDBPathCache
 from src.interfaces import (
     IAssignmentSolver,
+    IDemandModel,
+    IRVGraphBuilder,
+    IZoneIndex,
     IFareModel,
     IObjective,
     IRebalancingSolver,
@@ -42,6 +45,7 @@ from src.interfaces import (
     ITripSolver,
     IVehicleValue,
 )
+from src.interfaces.batch_control import IBatchController
 from src.interfaces.stats import BatchStatistics
 from src.simulator import Simulator
 from src.utils.generate_plots import generate_plots
@@ -58,10 +62,14 @@ class ExperimentConfig:
     start: datetime | None = None  # local time; None uses config.MIN_START_TIME
     hours: float | None = None  # measured hours after warm-up; None uses config.END_TIME
     max_batches: int | None = None
+    controller: str = "batch"
+    zoning: str = "taxi"
+    demand_model: str = "historical"
     objective: str = "delay"
     cost_per_km: float = config.COST_PER_KM  # used by the profit objective
     fare_model: str = "linear"
     trip_solver: str = "astar"
+    rv_builder: str = "standard"
     rtv_builder: str = "trip"
     assignment_solver: str = "gurobi"
     rebalancing: str = "reactive"
@@ -82,20 +90,25 @@ class Context:
     start_time: float
     end_time: float
 
+    # Built once and shared by every component that needs them.
     @cached_property
-    def zones(self) -> ZoneIndex:
-        return ZoneIndex(self.provider.graph)
+    def zones(self) -> IZoneIndex:
+        return ZONINGS[self.config.zoning](self)
 
     @cached_property
-    def demand(self) -> HistoricalDemandModel:
-        """Demand forecast fitted on every day except the simulated ones."""
-        t0 = self.provider.first_request_time()
-        return HistoricalDemandModel.fit(
-            self.provider.request_table(),
-            self.zones,
-            t0,
-            exclude=simulated_days(t0, self.start_time, self.end_time),
-        )
+    def demand(self) -> IDemandModel:
+        return DEMAND_MODELS[self.config.demand_model](self)
+
+
+def _historical_demand(ctx: Context) -> IDemandModel:
+    """Fitted on every day except the simulated ones."""
+    t0 = ctx.provider.first_request_time()
+    return HistoricalDemandModel.fit(
+        ctx.provider.request_table(),
+        ctx.zones,
+        t0,
+        exclude=simulated_days(t0, ctx.start_time, ctx.end_time),
+    )
 
 
 def simulated_days(t0: datetime, start_time: float, end_time: float) -> set[date]:
@@ -105,6 +118,19 @@ def simulated_days(t0: datetime, start_time: float, end_time: float) -> set[date
     return {first + timedelta(days=k) for k in range((last - first).days + 1)}
 
 
+CONTROLLERS: dict[str, Callable[[Context], IBatchController]] = {
+    "batch": lambda ctx: BatchController(
+        ctx.network,
+        ctx.provider.iter_vehicles(ctx.config.fleet),
+        fare_model=FARE_MODELS[ctx.config.fare_model](ctx),
+    ),
+}
+ZONINGS: dict[str, Callable[[Context], IZoneIndex]] = {
+    "taxi": lambda ctx: ZoneIndex(ctx.provider.graph),
+}
+DEMAND_MODELS: dict[str, Callable[[Context], IDemandModel]] = {
+    "historical": _historical_demand,
+}
 OBJECTIVES: dict[str, Callable[[Context], IObjective]] = {
     "delay": lambda ctx: DelayObjective(),
     "profit": lambda ctx: ProfitObjective(ctx.network, ctx.config.cost_per_km),
@@ -114,6 +140,9 @@ FARE_MODELS: dict[str, Callable[[Context], IFareModel]] = {
 }
 TRIP_SOLVERS: dict[str, Callable[[Context], ITripSolver]] = {
     "astar": lambda ctx: AStarTripSolver(ctx.network.get_l1_cache()),
+}
+RV_BUILDERS: dict[str, Callable[[Context, ITripSolver], IRVGraphBuilder]] = {
+    "standard": lambda ctx, trip_solver: RVGraphBuilder(ctx.network, trip_solver),
 }
 RTV_BUILDERS: dict[str, Callable[[ITripSolver], IRTVGraphBuilder]] = {
     "trip": TripCentricRTVGraphBuilder,
@@ -172,12 +201,8 @@ def build_simulator(ctx: Context, db_cache: DuckDBPathCache) -> Simulator:
     trip_solver = TRIP_SOLVERS[cfg.trip_solver](ctx)
     return Simulator(
         provider=ctx.provider,
-        controller=BatchController(
-            ctx.network,
-            ctx.provider.iter_vehicles(cfg.fleet),
-            fare_model=FARE_MODELS[cfg.fare_model](ctx),
-        ),
-        rv_builder=RVGraphBuilder(ctx.network, trip_solver),
+        controller=CONTROLLERS[cfg.controller](ctx),
+        rv_builder=RV_BUILDERS[cfg.rv_builder](ctx, trip_solver),
         rtv_builder=RTV_BUILDERS[cfg.rtv_builder](trip_solver),
         assignment_solver=ASSIGNMENT_SOLVERS[cfg.assignment_solver](ctx, objective),
         rebalancing_solver=REBALANCERS[cfg.rebalancing](ctx),
@@ -196,6 +221,10 @@ def run_experiment(cfg: ExperimentConfig) -> Path:
         ("rtv_builder", RTV_BUILDERS),
         ("assignment_solver", ASSIGNMENT_SOLVERS),
         ("rebalancing", REBALANCERS),
+        ("controller", CONTROLLERS),
+        ("zoning", ZONINGS),
+        ("demand_model", DEMAND_MODELS),
+        ("rv_builder", RV_BUILDERS),
         ("vehicle_value", VEHICLE_VALUES),
     ]:
         if getattr(cfg, key) not in registry:

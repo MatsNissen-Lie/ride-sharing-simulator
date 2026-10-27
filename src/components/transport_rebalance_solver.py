@@ -4,13 +4,12 @@ import numpy as np
 from scipy.optimize import linear_sum_assignment, linprog
 from scipy.sparse import coo_matrix
 
-from src.components.demand import zone_vector
-from src.components.demand_rebalance_solver import ZONE_MOVE, DemandRebalancingSolver
-from src.components.zones import ZoneIndex
+from src.components.demand import integer_targets, zone_vector
 from src.interfaces import (
     IDemandModel,
     INetworkService,
     IRebalancingSolver,
+    IZoneIndex,
     Request,
     VehicleAvailability,
 )
@@ -40,7 +39,7 @@ class TransportRebalancingSolver(IRebalancingSolver):
     def __init__(
         self,
         network: INetworkService,
-        zones: ZoneIndex,
+        zones: IZoneIndex,
         demand: IDemandModel,
         horizon: float = 900.0,
         max_travel: float = 900.0,
@@ -61,7 +60,7 @@ class TransportRebalancingSolver(IRebalancingSolver):
         t_now: float,
         en_route: list[VehicleAvailability] = (),
     ) -> dict[str, Route]:
-        zone_move = [v for v in en_route if v.remaining_stops_to_serve[-1].request_id.startswith(ZONE_MOVE)]
+        zone_move = [v for v in en_route if v.remaining_stops_to_serve[-1].is_zone_move]
         free = sorted(
             [*idle_vehicles, *(v for v in en_route if v not in zone_move)],
             key=lambda v: v.vehicle_id,
@@ -80,7 +79,7 @@ class TransportRebalancingSolver(IRebalancingSolver):
         heading = [r.stops[-1].node for r in routes.values() if r.stops]
         heading += [v.remaining_stops_to_serve[-1].node for v in zone_move]
         n_total = len(free) + len(heading)
-        target = DemandRebalancingSolver._integer_targets(expected / expected.sum() * n_total)
+        target = integer_targets(expected / expected.sum() * n_total)
         for z in self._zones.zones_of(heading):
             target[self._col[int(z)]] -= 1
         routes.update(self._transport(free, np.maximum(target, 0)))
@@ -139,6 +138,6 @@ class TransportRebalancingSolver(IRebalancingSolver):
         for e in np.flatnonzero(result.x > 0.5):
             i, z = rows[e], cols[e]
             if z != home[i]:
-                stop = Stop.rebalancing(self._centres[z], f"zone{self._zone_ids[z]}")
+                stop = Stop.zone_move(self._centres[z], self._zone_ids[z])
                 out[free[i].vehicle_id] = Route((stop,), float(travel[i, z]), 0.0, 0.0)
         return out

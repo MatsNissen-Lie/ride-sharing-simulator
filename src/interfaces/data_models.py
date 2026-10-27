@@ -171,6 +171,7 @@ class VehicleAvailability:
 
 
 REBALANCE_PREFIX = "rebalance_"
+ZONE_TAG = "zone"
 
 
 @dataclass(frozen=True)
@@ -192,6 +193,15 @@ class Stop:
     @staticmethod
     def rebalancing(node: int, tag: str) -> "Stop":
         return Stop(node=node, is_pickup=False, request_id=f"{REBALANCE_PREFIX}{tag}")
+
+    @property
+    def is_zone_move(self) -> bool:
+        """A rebalancing move to a zone (as opposed to one towards a waiting rider)."""
+        return self.request_id.startswith(f"{REBALANCE_PREFIX}{ZONE_TAG}")
+
+    @staticmethod
+    def zone_move(node: int, zone: int) -> "Stop":
+        return Stop.rebalancing(node, f"{ZONE_TAG}{zone}")
 
     # TODO perhaps the stops that have been calculated pickup time should be saved. However we also want to have stops that are not yet assigned.
     # But a route could maybe contain the scheduled times for each stop?
