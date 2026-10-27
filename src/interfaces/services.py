@@ -131,6 +131,14 @@ class ITripSolver(ABC):
         """
 
 
+class IDemandModel(ABC):
+    """Expected requests per zone: a forecast of where and when riders appear."""
+
+    @abstractmethod
+    def expected_requests(self, t_start: float, t_end: float) -> dict[int, float]:
+        """Expected number of new requests per zone id in [t_start, t_end) (simulation seconds)."""
+
+
 class IFareModel(ABC):
     """The price a rider pays for a trip, quoted when the request arrives."""
 
