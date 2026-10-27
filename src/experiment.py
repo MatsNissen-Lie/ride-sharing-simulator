@@ -8,7 +8,7 @@ To add a component, implement its interface and register a factory below.
 
 import os
 from dataclasses import asdict, dataclass, replace
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from functools import cached_property
 from pathlib import Path
 from typing import Callable
@@ -87,12 +87,21 @@ class Context:
 
     @cached_property
     def demand(self) -> HistoricalDemandModel:
-        """Demand forecast fitted on every day except the simulated one."""
+        """Demand forecast fitted on every day except the simulated ones."""
         t0 = self.provider.first_request_time()
-        simulated_day = (t0 + timedelta(seconds=self.start_time)).date()
         return HistoricalDemandModel.fit(
-            self.provider.request_table(), self.zones, t0, exclude={simulated_day}
+            self.provider.request_table(),
+            self.zones,
+            t0,
+            exclude=simulated_days(t0, self.start_time, self.end_time),
         )
+
+
+def simulated_days(t0: datetime, start_time: float, end_time: float) -> set[date]:
+    """Every calendar day the simulation window touches (a night run spans two)."""
+    first = (t0 + timedelta(seconds=start_time)).date()
+    last = (t0 + timedelta(seconds=end_time)).date()
+    return {first + timedelta(days=k) for k in range((last - first).days + 1)}
 
 
 OBJECTIVES: dict[str, Callable[[Context], IObjective]] = {
