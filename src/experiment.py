@@ -55,6 +55,7 @@ class ExperimentConfig:
     assignment_solver: str = "gurobi"
     rebalancing: str = "reactive"
     oracle_horizon_min: float = 10.0
+    travel_time_factor: float = config.TRAVEL_TIME_FACTOR
     read_only: bool = False
 
 
@@ -150,7 +151,9 @@ def run_experiment(cfg: ExperimentConfig) -> Path:
 
     logger.info("Initializing components...")
     db_cache = DuckDBPathCache(read_only=cfg.read_only)
-    network = NetworkXService(provider.graph, db=db_cache)
+    network = NetworkXService(
+        provider.graph, db=db_cache, travel_time_factor=cfg.travel_time_factor
+    )
     simulator = build_simulator(Context(cfg, provider, network, start_time, end_time), db_cache)
 
     stats_logger = SimulationStatsLogger()

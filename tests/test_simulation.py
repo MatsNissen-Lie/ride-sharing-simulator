@@ -111,3 +111,14 @@ def test_builders_and_solvers_agree_every_batch(network, seed):
     """Whole trajectories can differ through ties, so compare on identical inputs."""
     batches, _ = run(network, CrossCheckedBuilder, CrossCheckedSolver, seed=seed)
     assert sum(b.requests_delivered for b in batches) > 50
+
+
+def test_simulation_is_consistent_with_traffic():
+    """Slower travel times: planning and replay must still agree on every deadline."""
+    from src.components.network_service import NetworkXService
+    from tests.conftest import InMemoryPathCache, make_street_graph
+
+    graph = make_street_graph(seed=7)
+    slow = NetworkXService(graph, db=InMemoryPathCache(graph), travel_time_factor=1.8)
+    batches, _ = run(slow, TripCentricRTVGraphBuilder, HighsAssignmentSolver)
+    assert sum(b.requests_delivered for b in batches) > 20

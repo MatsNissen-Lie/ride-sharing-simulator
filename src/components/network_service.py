@@ -27,10 +27,20 @@ class NetworkXService(INetworkService):
         db: DuckDBPathCache | None = None,
         max_node_id: int | None = None,
         prefetch: bool = True,
+        travel_time_factor: float = 1.0,
     ):
+        """
+        travel_time_factor scales every travel time this service hands out
+        (matrix, paths, single lookups) relative to the free-flow times in the
+        graph and database, e.g. 2.9 for Manhattan evening traffic. The stored
+        database is never changed.
+        """
         if graph is not None and not isinstance(graph, nx.MultiDiGraph):
             raise TypeError("NetworkXService requires an nx.MultiDiGraph")
+        if travel_time_factor <= 0:
+            raise ValueError("travel_time_factor must be positive")
         self.G = graph
+        self.travel_time_factor = travel_time_factor
 
         if max_node_id is not None:
             self.N = max_node_id
@@ -89,6 +99,7 @@ class NetworkXService(INetworkService):
             hit = self._db.get_simple(origin_node, destination_node)
             if hit:
                 time_s, dist_m = hit
+                time_s = self._scaled(time_s)
                 # Update L1 immediately for next time
                 self._time_matrix[origin_node, destination_node] = time_s
                 self._dist_matrix[origin_node, destination_node] = dist_m
@@ -134,7 +145,7 @@ class NetworkXService(INetworkService):
         grid_indices = np.ix_(nodes, nodes)
 
         # Bulk write
-        self._time_matrix[grid_indices] = db_matrix_time
+        self._time_matrix[grid_indices] = self._scaled(db_matrix_time)
 
         # Note: We are not populating _dist_matrix here because get_travel_time_matrix
         # only returns times. Distances will be fetched on-demand via L2 fallback
@@ -191,7 +202,7 @@ class NetworkXService(INetworkService):
         # Check if we have these in L1 first?
         # Usually for matrices, it's faster to go straight to DuckDB
         # OR build a numpy array from L1 if you are sure L1 is full.
-        return self._db.get_travel_time_matrix(origins, destinations)
+        return self._scaled(self._db.get_travel_time_matrix(origins, destinations))
 
     def get_shortest_path_with_travel_time(
         self, origin_node: int, destination_node: int
@@ -239,7 +250,7 @@ class NetworkXService(INetworkService):
             else:
                 edge_attr = min(edge_data.values(), key=lambda a: a["travel_time"])
 
-            t = float(edge_attr["travel_time"])
+            t = self._scaled(float(edge_attr["travel_time"]))
             total_time += t
             total_dist += float(edge_attr.get("length", 0.0))
             edge_times_list.append(t)
@@ -251,97 +262,16 @@ class NetworkXService(INetworkService):
             travel_distance=total_dist,
         )
 
-    def get_shortest_path_with_travel_time_old(
-        self, origin_node: int, destination_node: int
-    ) -> NetworkPathExtended | None:
-        # 1) Single round-trip to cache
-        time_s = dist_m = None
-        nodes = edge_times = None
+    def _scaled(self, free_flow):
+        """The single place where free-flow times become simulated times.
 
-        time_s, dist_m, nodes, edge_times = self._db.get_both(
-            origin_node, destination_node
-        )
-
-        # Check for "no path" marker
-        if time_s is not None and time_s < 0:
-            return None
-
-        # If we have everything, return immediately
-        if (
-            nodes is not None
-            and edge_times is not None
-            and time_s is not None
-            and dist_m is not None
-        ):
-            return NetworkPathExtended(
-                nodes=tuple(int(n) for n in nodes),
-                travel_times=tuple(float(t) for t in edge_times),
-                travel_time=float(time_s),
-                travel_distance=float(dist_m),
-            )
-        if self.G is None:
-            raise RuntimeError("Underlying graph is not initialized.")
-
-        # 2) If we have nodes+edge_times but missing totals, derive what we can
-        if nodes is not None and edge_times is not None:
-            derived_time = float(sum(edge_times))
-            # If distance missing, recompute distance cheaply by summing along nodes in G
-            if dist_m is None:
-                total_dist = 0.0
-                G = self.G
-                for u, v in zip(nodes, nodes[1:]):
-                    # use the min-time edge (consistent with how path was produced)
-                    edge_attr = min(G[u][v].values(), key=lambda a: a["travel_time"])
-                    total_dist += float(edge_attr.get("length", 0.0))
-                dist_m = total_dist
-            if time_s is None:
-                time_s = derived_time
-
-            # Write-through minimal row if it was missing
-            if time_s is not None and dist_m is not None:
-                self._db.put_simple(origin_node, destination_node, time_s, dist_m)
-
-            return NetworkPathExtended(
-                nodes=tuple(int(n) for n in nodes),
-                travel_times=tuple(float(t) for t in edge_times),
-                travel_time=float(time_s),
-                travel_distance=float(dist_m),
-            )
-
-        # 3) Cache miss: compute fresh
-        try:
-            if self.G is None:
-                raise RuntimeError("Underlying graph is not initialized.")
-            nodes = nx.shortest_path(
-                self.G, origin_node, destination_node, weight="travel_time"
-            )
-        except nx.NetworkXNoPath:
-            # Store "no path" to prevent re-computation
-            self._db.put_no_path(origin_node, destination_node)
-            return None
-
-        total_time = 0.0
-        total_dist = 0.0
-        edge_times_list: list[float] = []
-        G = self.G
-        for u, v in zip(nodes, nodes[1:]):
-            edge_attr = min(G[u][v].values(), key=lambda a: a["travel_time"])
-            t = float(edge_attr["travel_time"])
-            total_time += t
-            total_dist += float(edge_attr.get("length", 0.0))
-            edge_times_list.append(t)
-
-        # 4) Write-through both layers
-        if not self._db.read_only:
-            self._db.put_simple(origin_node, destination_node, total_time, total_dist)
-            self._db.put_extended(origin_node, destination_node, nodes, edge_times_list)
-
-        return NetworkPathExtended(
-            nodes=tuple(nodes),
-            travel_times=tuple(edge_times_list),
-            travel_time=total_time,
-            travel_distance=total_dist,
-        )
+        Negative values are "no path" sentinels and stay unchanged.
+        """
+        if self.travel_time_factor == 1.0:
+            return free_flow
+        if isinstance(free_flow, np.ndarray):
+            return np.where(free_flow < 0, free_flow, free_flow * self.travel_time_factor)
+        return free_flow if free_flow < 0 else free_flow * self.travel_time_factor
 
     def get_travel_time(self, origin: int, destination: int) -> float:
         """
@@ -362,6 +292,7 @@ class NetworkXService(INetworkService):
             hit = self._db.get_simple(origin, destination)
             if hit:
                 time_s, dist_m = hit
+                time_s = self._scaled(time_s)
                 # Update L1 immediately for next time
                 self._time_matrix[origin, destination] = time_s
                 self._dist_matrix[origin, destination] = dist_m

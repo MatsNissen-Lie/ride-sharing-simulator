@@ -53,6 +53,12 @@ def parse_args() -> ExperimentConfig:
     parser.add_argument(
         "--horizon", type=float, default=DEFAULTS.oracle_horizon_min, help="Oracle look-ahead in minutes."
     )
+    parser.add_argument(
+        "--travel-time-factor",
+        type=float,
+        default=DEFAULTS.travel_time_factor,
+        help="Override config.TRAVEL_TIME_FACTOR (1.0 = free-flow speeds).",
+    )
     parser.add_argument("--read-only", action="store_true", help="Do not write to the route database.")
     a = parser.parse_args()
     return ExperimentConfig(
@@ -67,6 +73,7 @@ def parse_args() -> ExperimentConfig:
         assignment_solver=a.solver,
         rebalancing=a.rebalancing,
         oracle_horizon_min=a.horizon,
+        travel_time_factor=a.travel_time_factor,
         read_only=a.read_only,
     )
 
