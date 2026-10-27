@@ -52,10 +52,11 @@ class SampledRequestsAssignmentSolver(JointAssignmentSolver):
     leaving one unserved costs only w * chi (w = `weight`, chi the objective's
     penalty for a fresh request).
 
-    - Scenario: virtual requests with request times in (t_now, t_now + horizon].
-      It rolls: virtual requests are kept until their request time and each
-      batch only the newly visible end of the horizon is sampled, so a vehicle
-      sent to a virtual rider still sees that rider in the next batch.
+    - Scenario: virtual requests with request times up to t_now + horizon.
+      It rolls: each batch only the newly visible end of the horizon is
+      sampled, and a virtual rider stays until its latest pickup, like a real
+      one waiting in the pool. A vehicle sent to a virtual rider therefore
+      still sees it in the next batches, until it could have picked it up.
     - Options: a free vehicle v (nobody on board, at most a move in progress)
       may take a virtual rider q if it reaches q's origin by q's latest pickup,
       at cost
@@ -83,7 +84,7 @@ class SampledRequestsAssignmentSolver(JointAssignmentSolver):
         sampler: IRequestSampler,
         horizon: float = 300.0,
         weight: float = 0.05,
-        n_virtual: int = 10,
+        n_virtual: int = 20,
     ):
         super().__init__(VirtualWeightedObjective(objective, weight), network, zones, ZeroValue())
         self._sampler = sampler
@@ -109,7 +110,7 @@ class SampledRequestsAssignmentSolver(JointAssignmentSolver):
         if end > start:
             self.virtual += self._sampler.sample(start, end)
             self._sampled_until = end
-        self.virtual = [q for q in self.virtual if q.request_time > current_time]
+        self.virtual = [q for q in self.virtual if q.latest_pickup_time > current_time]
 
         self._t_now = current_time
         self._plan_value = self._current_plan_values(vehicles)

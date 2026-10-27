@@ -142,17 +142,18 @@ def test_unreachable_virtual_rider_is_ignored(network):
     assert result.rebalancing == {}
 
 
-def test_scenario_rolls_and_drops_due_virtual_riders(network):
+def test_scenario_rolls_and_keeps_virtual_riders_until_their_latest_pickup(network):
     solver = sampled(network, [virtual(network, 1, 21, dt=20), virtual(network, 2, 22, dt=305)])
     vehicles = {idle("a", 0)}
     rtv = instance(network, vehicles, [])
     solver.solve(rtv, set(), vehicles, 30, T_NOW)
     assert [q.id for q in solver.virtual] == ["virtual_1"]
     solver.solve(rtv, set(), vehicles, 30, T_NOW + 10)
-    solver.solve(rtv, set(), vehicles, 30, T_NOW + 20)
+    assert [q.id for q in solver.virtual] == ["virtual_1", "virtual_2"]
+    solver.solve(rtv, set(), vehicles, 30, T_NOW + 20 + OMEGA)
     assert [q.id for q in solver.virtual] == ["virtual_2"]
     assert solver._sampler.calls == [(T_NOW, T_NOW + 300), (T_NOW + 300, T_NOW + 310),
-                                     (T_NOW + 310, T_NOW + 320)]
+                                     (T_NOW + 310, T_NOW + 500)]
 
 
 @pytest.mark.parametrize("seed", range(5))
