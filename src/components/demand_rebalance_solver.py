@@ -13,7 +13,9 @@ from src.interfaces import (
     Request,
     VehicleAvailability,
 )
-from src.interfaces.data_models import Route, Stop
+from src.interfaces.data_models import REBALANCE_PREFIX, Route, Stop
+
+ZONE_MOVE = f"{REBALANCE_PREFIX}zone"
 
 
 class DemandRebalancingSolver(IRebalancingSolver):
@@ -53,8 +55,14 @@ class DemandRebalancingSolver(IRebalancingSolver):
         t_now: float,
         en_route: list[VehicleAvailability] = (),
     ) -> dict[str, Route]:
-        routes = self._reactive.solve(idle_vehicles, unassigned_requests, t_now)
-        free = [v for v in idle_vehicles if v.vehicle_id not in routes]
+        # Vehicles chasing a rider are re-planned every batch; zone moves persist.
+        zone_move = [v for v in en_route if v.remaining_stops_to_serve[-1].request_id.startswith(ZONE_MOVE)]
+        chasing = [v for v in en_route if v not in zone_move]
+        routes = self._reactive.solve(idle_vehicles, unassigned_requests, t_now, chasing)
+        free = [
+            v for v in [*idle_vehicles, *chasing]
+            if v.vehicle_id not in routes or not routes[v.vehicle_id].stops
+        ]
 
         zone_ids = self._zones.zone_ids
         col = {int(z): k for k, z in enumerate(zone_ids)}
@@ -63,8 +71,8 @@ class DemandRebalancingSolver(IRebalancingSolver):
             return routes
 
         # Current supply per zone: free vehicles where they are, others where they head.
-        heading = [r.stops[-1].node for r in routes.values()]
-        heading += [v.remaining_stops_to_serve[-1].node for v in en_route]
+        heading = [r.stops[-1].node for r in routes.values() if r.stops]
+        heading += [v.remaining_stops_to_serve[-1].node for v in zone_move]
         supply = np.zeros(len(zone_ids))
         for z in self._zones.zones_of([v.available_at_node for v in free] + heading):
             supply[col[int(z)]] += 1

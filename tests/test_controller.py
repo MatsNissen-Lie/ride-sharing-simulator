@@ -156,3 +156,27 @@ def test_rebalancing_vehicle_can_be_assigned_a_rider_on_the_way(network):
     assign(controller, 20.0, "v0", req)
     route = controller._fleet[0].current_route
     assert [s.request_id for s in route.stops] == ["r", "r"]  # rebalancing replaced by the ride
+
+
+def test_rebalancing_vehicle_can_be_redirected_or_stopped(network):
+    controller = make_controller(network, [0])
+    controller.prepare_batch(10.0, [])
+    controller.apply_rebalancing({"v0": Route((Stop.rebalancing(35, "x"),), 0, 0, 0)}, 10.0)
+    _, (snapshot,) = controller.prepare_batch(20.0, [])
+    controller.apply_rebalancing({"v0": Route((Stop.rebalancing(5, "y"),), 0, 0, 0)}, 20.0)
+    assert [s.node for s in controller._fleet[0].current_route.stops] == [5]
+
+    _, (snapshot,) = controller.prepare_batch(30.0, [])
+    controller.apply_rebalancing({"v0": Route((), 0, 0, 0)}, 30.0)
+    _, (stopped,) = controller.prepare_batch(40.0, [])
+    assert stopped.remaining_stops_to_serve == ()
+    assert stopped.available_at_node == snapshot.available_at_node
+    assert stopped.available_from_time == max(snapshot.available_from_time, 40.0)
+
+
+def test_rebalancing_never_overwrites_a_vehicle_with_riders(network):
+    controller = make_controller(network, [0])
+    (req,), _ = controller.prepare_batch(10.0, [MetaRequest("r", 14, 7, 5.0)])
+    assign(controller, 10.0, "v0", req)
+    controller.apply_rebalancing({"v0": Route((), 0, 0, 0)}, 10.0)
+    assert [s.request_id for s in controller._fleet[0].current_route.stops] == ["r", "r"]

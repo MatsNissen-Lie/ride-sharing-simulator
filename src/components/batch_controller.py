@@ -619,6 +619,7 @@ class BatchController(IBatchController):
         #   b) Were NOT assigned a new trip in the main optimization batch.
 
         assigned_vehicle_ids = {a.vehicle_id for a in assignment_result.assignments}
+        assigned_vehicle_ids |= assignment_result.rebalancing.keys()
 
         idle_vehicles = []
         en_route = []
@@ -651,16 +652,19 @@ class BatchController(IBatchController):
         Applies rebalancing routes (Algorithm 4) to idle vehicles.
 
         These routes move empty vehicles to high-demand areas (or specific request origins)
-        but do NOT technically 'pickup' the request yet.
+        but do NOT technically 'pickup' the request yet. A vehicle already
+        rebalancing may be redirected; an empty route stops it at its next node.
         """
         for v_id, route in rebalancing_routes.items():
             vehicle = self._id_to_vehicle.get(v_id)
 
-            # Safety check: ensure vehicle exists and we aren't overwriting a busy vehicle
-            # (Though get_rebalancing_candidates filters for idle ones, double-check safe state)
-            if vehicle and vehicle.is_idle:
-                vehicle.current_route = route
-                vehicle.route_assignment_time = t_now
+            # Never overwrite a vehicle that carries or is fetching riders.
+            if vehicle and vehicle.current_occupancy == 0 and (
+                vehicle.current_route is None
+                or all(s.is_rebalancing for s in vehicle.current_route.stops)
+            ):
+                vehicle.current_route = route if route.stops else None
+                vehicle.route_assignment_time = vehicle.last_visited_time
                 # Note: We do NOT remove requests from _request_index.
                 # Rebalancing targets are "ghosts"; the actual requests remain in R_ko[cite: 194].
 

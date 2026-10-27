@@ -171,6 +171,8 @@ class Simulator:
 
             # 6. Commit Assignment (Controller Step 2)
             self.controller.commit_assignment(t_now, assignment_result)
+            if assignment_result.rebalancing:
+                self.controller.apply_rebalancing(assignment_result.rebalancing, t_now)
             commit_end = time.perf_counter()
 
             # 7. Rebalancing (Controller Step 3)
@@ -189,8 +191,8 @@ class Simulator:
             )
 
             rebalancing_duration = 0.0
-            vehicles_rebalanced = 0
-            if idle_vehicles:
+            vehicles_rebalanced = len(assignment_result.rebalancing)
+            if idle_vehicles or en_route_vehicles:
                 logger.debug(
                     f"Rebalancing: {len(idle_vehicles)} idle vehicles, "
                     f"{len(unassigned_requests)} unassigned requests."
@@ -211,7 +213,7 @@ class Simulator:
                     rebalancing_duration,
                 )
 
-                vehicles_rebalanced = len(rebalancing_routes)
+                vehicles_rebalanced += sum(1 for r in rebalancing_routes.values() if r.stops)
                 if rebalancing_routes:
                     self.controller.apply_rebalancing(rebalancing_routes, t_now)
                     logger.debug(

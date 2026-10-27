@@ -63,7 +63,7 @@ def test_vehicles_en_route_count_at_their_destination(network):
     idle = vehicles_in(network, 1, 4)
     heading_right = vehicles_in(network, 2, 4, start=10)
     en_route = [
-        type(v)(**{**v.__dict__, "remaining_stops_to_serve": (__import__("src.interfaces", fromlist=["Stop"]).Stop.rebalancing(21, "z"),)})
+        type(v)(**{**v.__dict__, "remaining_stops_to_serve": (__import__("src.interfaces", fromlist=["Stop"]).Stop.rebalancing(21, "zone2"),)})
         for v in heading_right
     ]
     solver = DemandRebalancingSolver(network, Zones(), FixedDemand({1: 1.0, 2: 1.0}))
@@ -82,3 +82,19 @@ def test_unassigned_riders_get_a_vehicle_first(network):
 def test_integer_targets_sum_to_the_fleet():
     t = DemandRebalancingSolver._integer_targets(np.array([2.4, 3.3, 1.3]))
     assert t.sum() == 7 and list(t) == [3, 3, 1]
+
+
+def test_rider_chasers_are_replanned_but_zone_moves_persist(network):
+    from src.interfaces import Stop
+
+    def heading(v, node, tag):
+        return type(v)(**{**v.__dict__, "remaining_stops_to_serve": (Stop.rebalancing(node, tag),)})
+
+    left = vehicles_in(network, 1, 2)
+    chaser = heading(left[0], 21, "r_gone")  # its rider was served or expired
+    mover = heading(left[1], 21, "zone2")
+    solver = DemandRebalancingSolver(network, Zones(), FixedDemand({1: 1.0, 2: 1.0}))
+    routes = solver.solve([], [], T_NOW, en_route=[chaser, mover])
+    # The mover counts in zone 2 and keeps going; the chaser stops in zone 1.
+    assert routes == {chaser.vehicle_id: routes[chaser.vehicle_id]}
+    assert routes[chaser.vehicle_id].stops == ()

@@ -42,7 +42,8 @@ class CheckedController(BatchController):
         super().commit_assignment(t_now, result)
 
 
-def run(network, rtv_builder, solver, seed=0, n_vehicles=5, n_requests=150, horizon=1800):
+def run(network, rtv_builder, solver, seed=0, n_vehicles=5, n_requests=150, horizon=1800,
+        rebalancer=None):
     rng = random.Random(seed)
     fleet = [
         Vehicle(f"v{k}", 4, set(), rng.randrange(network.N), 0.0) for k in range(n_vehicles)
@@ -59,7 +60,7 @@ def run(network, rtv_builder, solver, seed=0, n_vehicles=5, n_requests=150, hori
         rv_builder=RVGraphBuilder(network, trip_solver),
         rtv_builder=rtv_builder(trip_solver),
         assignment_solver=solver(),
-        rebalancing_solver=ReactiveRebalancingSolver(network),
+        rebalancing_solver=rebalancer or ReactiveRebalancingSolver(network),
         network_service=network,
         db_cache=None,
         read_only=True,
@@ -148,3 +149,36 @@ def test_profit_simulation_is_consistent(network):
     assert sum(b.revenue for b in batches) > 0
     assert sum(b.vehicle_km_loaded for b in batches) > 0
     assert sum(b.vehicle_km_empty for b in batches) > 0
+
+
+def test_assignment_solver_can_rebalance(network):
+    """Moves returned with the assignment are applied, and hidden from the rebalancer."""
+    from src.interfaces import Route, Stop
+
+    class JointSolver(HighsAssignmentSolver):
+        def solve(self, rtv_graph, requests, vehicles, solver_timeout, current_time):
+            result = super().solve(rtv_graph, requests, vehicles, solver_timeout, current_time)
+            busy = {a.vehicle_id for a in result.assignments}
+            for v in vehicles:
+                if v.vehicle_id not in busy and not v.passengers_onboard \
+                        and not v.remaining_stops_to_serve and v.available_at_node != 0:
+                    result.rebalancing[v.vehicle_id] = Route(
+                        stops=(Stop.rebalancing(0, v.vehicle_id),), total_travel_time=0.0,
+                        total_travel_distance=0.0, total_delay_cost=0.0,
+                    )
+            self.moved = set(result.rebalancing)
+            return result
+
+    class Spy(ReactiveRebalancingSolver):
+        heading_to_0 = 0
+
+        def solve(self, idle_vehicles, unassigned_requests, t_now, en_route=()):
+            assert not {v.vehicle_id for v in idle_vehicles} & solver.moved
+            self.heading_to_0 += sum(v.remaining_stops_to_serve[-1].node == 0 for v in en_route)
+            return super().solve(idle_vehicles, unassigned_requests, t_now, en_route)
+
+    solver, spy = JointSolver(), Spy(network)
+    batches, _ = run(network, TripCentricRTVGraphBuilder, lambda: solver, n_requests=20,
+                     rebalancer=spy)
+    assert sum(b.vehicles_rebalanced for b in batches) > 0
+    assert spy.heading_to_0 > 0  # the moves were applied and persist across batches

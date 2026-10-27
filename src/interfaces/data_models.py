@@ -286,3 +286,6 @@ class AssignmentResult:
     unassigned_requests: set[Request]
     total_cost: float
     is_optimal: bool
+    # Moves for idle vehicles chosen together with the assignment (joint
+    # solvers); the separate rebalancer only sees vehicles not listed here.
+    rebalancing: dict[str, "Route"] = field(default_factory=dict)

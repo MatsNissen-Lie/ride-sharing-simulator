@@ -9,6 +9,7 @@ To add a component, implement its interface and register a factory below.
 import os
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta
+from functools import cached_property
 from pathlib import Path
 from typing import Callable
 
@@ -26,7 +27,7 @@ from src.components.demand_rebalance_solver import DemandRebalancingSolver
 from src.components.oracle_rebalance_solver import OracleRebalancingSolver
 from src.components.zones import ZoneIndex
 from src.components.pricing import LinearFareModel
-from src.components.rebalance_solver import ReactiveRebalancingSolver
+from src.components.rebalance_solver import NoRebalancingSolver, ReactiveRebalancingSolver
 from src.components.simulation_data_provider import SimulationDataProvider
 from src.components.trip_solver import AStarTripSolver
 from src.database.simple_db import DuckDBPathCache
@@ -77,6 +78,19 @@ class Context:
     start_time: float
     end_time: float
 
+    @cached_property
+    def zones(self) -> ZoneIndex:
+        return ZoneIndex(self.provider.graph)
+
+    @cached_property
+    def demand(self) -> HistoricalDemandModel:
+        """Demand forecast fitted on every day except the simulated one."""
+        t0 = self.provider.first_request_time()
+        simulated_day = (t0 + timedelta(seconds=self.start_time)).date()
+        return HistoricalDemandModel.fit(
+            self.provider.request_table(), self.zones, t0, exclude={simulated_day}
+        )
+
 
 OBJECTIVES: dict[str, Callable[[Context], IObjective]] = {
     "delay": lambda ctx: DelayObjective(),
@@ -92,9 +106,9 @@ RTV_BUILDERS: dict[str, Callable[[ITripSolver], IRTVGraphBuilder]] = {
     "trip": TripCentricRTVGraphBuilder,
     "vehicle": VehicleCentricRTVGraphBuilder,
 }
-ASSIGNMENT_SOLVERS: dict[str, Callable[[IObjective], IAssignmentSolver]] = {
-    "gurobi": GurobiAssignmentSolver,
-    "highs": HighsAssignmentSolver,
+ASSIGNMENT_SOLVERS: dict[str, Callable[[Context, IObjective], IAssignmentSolver]] = {
+    "gurobi": lambda ctx, objective: GurobiAssignmentSolver(objective),
+    "highs": lambda ctx, objective: HighsAssignmentSolver(objective),
 }
 
 
@@ -107,14 +121,8 @@ def _oracle(ctx: Context) -> IRebalancingSolver:
 
 
 def _demand(ctx: Context) -> IRebalancingSolver:
-    t0 = ctx.provider.first_request_time()
-    simulated_day = (t0 + timedelta(seconds=ctx.start_time)).date()
-    zones = ZoneIndex(ctx.provider.graph)
-    model = HistoricalDemandModel.fit(
-        ctx.provider.request_table(), zones, t0, exclude={simulated_day}
-    )
     return DemandRebalancingSolver(
-        ctx.network, zones, model, horizon=ctx.config.demand_horizon_min * 60
+        ctx.network, ctx.zones, ctx.demand, horizon=ctx.config.demand_horizon_min * 60
     )
 
 
@@ -122,6 +130,7 @@ REBALANCERS: dict[str, Callable[[Context], IRebalancingSolver]] = {
     "reactive": lambda ctx: ReactiveRebalancingSolver(ctx.network),
     "oracle": _oracle,
     "demand": _demand,
+    "none": lambda ctx: NoRebalancingSolver(),
 }
 
 
@@ -148,7 +157,7 @@ def build_simulator(ctx: Context, db_cache: DuckDBPathCache) -> Simulator:
         ),
         rv_builder=RVGraphBuilder(ctx.network, trip_solver),
         rtv_builder=RTV_BUILDERS[cfg.rtv_builder](trip_solver),
-        assignment_solver=ASSIGNMENT_SOLVERS[cfg.assignment_solver](objective),
+        assignment_solver=ASSIGNMENT_SOLVERS[cfg.assignment_solver](ctx, objective),
         rebalancing_solver=REBALANCERS[cfg.rebalancing](ctx),
         network_service=ctx.network,
         db_cache=db_cache,

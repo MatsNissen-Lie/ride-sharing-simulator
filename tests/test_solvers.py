@@ -9,7 +9,7 @@ import pytest
 from src.components.assignment_solver import GurobiAssignmentSolver, HighsAssignmentSolver
 from src.components.objectives import DelayObjective
 from src.components.rebalance_solver import ReactiveRebalancingSolver
-from src.interfaces import FeasibleRoute, Route
+from src.interfaces import FeasibleRoute, Route, Stop
 from src.interfaces.graphs import RTVGraph
 from tests.conftest import make_request, random_vehicle
 
@@ -98,3 +98,19 @@ def test_rebalancing_minimises_total_travel_time(network, seed):
         for cols in itertools.combinations(range(len(requests)), k)
     )
     assert total == pytest.approx(best)
+
+
+def test_rebalancing_replans_vehicles_en_route(network):
+    """En-route vehicles join the matching; those left without a rider stop."""
+    rng = random.Random(0)
+    idle = [random_vehicle(network, rng, "idle", T_NOW, 0)]
+    en_route = [
+        type(v)(**{**v.__dict__, "remaining_stops_to_serve": (Stop.rebalancing(0, "old"),)})
+        for v in (random_vehicle(network, rng, f"e{k}", T_NOW, 0) for k in range(2))
+    ]
+    rider = make_request(network, "r", en_route[0].available_at_node, 35, T_NOW)
+    routes = ReactiveRebalancingSolver(network).solve(idle, [rider], T_NOW, en_route)
+
+    assert routes["e0"].stops[0].node == rider.origin_node  # closest vehicle, zero travel
+    assert routes["e1"].stops == ()  # stops instead of chasing the old target
+    assert "idle" not in routes

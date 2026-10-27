@@ -19,6 +19,10 @@ class ReactiveRebalancingSolver(IRebalancingSolver):
 
     Instead of an ILP, this solves the Linear Sum Assignment Problem (LSAP)
     to match idle vehicles to unassigned requests minimizing total travel time.
+
+    Re-planned every batch, as in the paper: vehicles still driving to an
+    earlier target (en route) are matched again, and stop at their next node
+    if no request is left for them (an empty route).
     """
 
     def __init__(self, network: INetworkService):
@@ -32,15 +36,16 @@ class ReactiveRebalancingSolver(IRebalancingSolver):
         en_route: list[VehicleAvailability] = (),
     ) -> dict[str, Route]:
 
-        n_vehicles = len(idle_vehicles)
-        n_requests = len(unassigned_requests)
+        vehicles = [*idle_vehicles, *en_route]
+        stop = Route(stops=(), total_travel_time=0.0, total_travel_distance=0.0, total_delay_cost=0.0)
+        routes = {v.vehicle_id: stop for v in en_route}
 
-        if n_vehicles == 0 or n_requests == 0:
-            return {}
+        if not vehicles or not unassigned_requests:
+            return routes
 
         # 1. Vectorized Cost Lookup (The "Nuclear" approach)
         # Extract location IDs
-        vehicle_locs = [v.available_at_node for v in idle_vehicles]
+        vehicle_locs = [v.available_at_node for v in vehicles]
         request_locs = [r.origin_node for r in unassigned_requests]
 
         # Fetch the NxM cost matrix directly from the cache
@@ -68,10 +73,9 @@ class ReactiveRebalancingSolver(IRebalancingSolver):
             row_ind, col_ind = linear_sum_assignment(cost_matrix)
         except ValueError as e:
             logger.error(f"Scipy solver failed: {e}")
-            return {}
+            return routes
 
         # 4. Construct Routes
-        rebalancing_routes: dict[str, Route] = {}
 
         for r_idx, c_idx in zip(row_ind, col_ind):
             cost = cost_matrix[r_idx, c_idx]
@@ -80,7 +84,7 @@ class ReactiveRebalancingSolver(IRebalancingSolver):
             if cost >= 1e8:
                 continue
 
-            vehicle = idle_vehicles[r_idx]
+            vehicle = vehicles[r_idx]
             request = unassigned_requests[c_idx]
 
             # Create the rebalancing route (Move to request origin)
@@ -95,6 +99,13 @@ class ReactiveRebalancingSolver(IRebalancingSolver):
                 total_travel_distance=0.0,  # Could be filled with distance if needed
             )
 
-            rebalancing_routes[vehicle.vehicle_id] = route
+            routes[vehicle.vehicle_id] = route
 
-        return rebalancing_routes
+        return routes
+
+
+class NoRebalancingSolver(IRebalancingSolver):
+    """Moves nobody; for joint solvers that rebalance inside the assignment."""
+
+    def solve(self, idle_vehicles, unassigned_requests, t_now, en_route=()) -> dict[str, Route]:
+        return {}
