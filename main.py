@@ -9,6 +9,7 @@ from src.experiment import (
     REBALANCERS,
     RTV_BUILDERS,
     TRIP_SOLVERS,
+    VEHICLE_VALUES,
     ExperimentConfig,
     run_experiment,
 )
@@ -48,13 +49,19 @@ def parse_args() -> ExperimentConfig:
         "--solver",
         choices=ASSIGNMENT_SOLVERS,
         default=DEFAULTS.assignment_solver,
-        help="Assignment ILP solver (HiGHS needs no licence).",
+        help="Assignment ILP solver (HiGHS needs no licence; joint = HiGHS with rebalancing moves).",
+    )
+    parser.add_argument(
+        "--vehicle-value",
+        choices=VEHICLE_VALUES,
+        default=DEFAULTS.vehicle_value,
+        help="Value of where vehicles end up, used by --solver joint.",
     )
     parser.add_argument(
         "--rebalancing",
         choices=REBALANCERS,
         default=DEFAULTS.rebalancing,
-        help="reactive (paper), demand (forecast-based) or oracle (perfect information).",
+        help="reactive (paper), demand (forecast-based), oracle (perfect information) or none.",
     )
     parser.add_argument(
         "--horizon", type=float, default=DEFAULTS.oracle_horizon_min, help="Oracle look-ahead in minutes."
@@ -78,6 +85,7 @@ def parse_args() -> ExperimentConfig:
         trip_solver=a.trip_solver,
         rtv_builder=a.rtv,
         assignment_solver=a.solver,
+        vehicle_value=a.vehicle_value,
         rebalancing=a.rebalancing,
         oracle_horizon_min=a.horizon,
         travel_time_factor=a.travel_time_factor,

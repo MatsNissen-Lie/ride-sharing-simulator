@@ -18,6 +18,7 @@ from src.interfaces import (
     IAssignmentSolver,
     IObjective,
     Request,
+    Route,
     VehicleAvailability,
 )
 from src.interfaces.data_models import Assignment
@@ -54,6 +55,12 @@ class AssignmentSolverBase(IAssignmentSolver):
             for (trip, v_id), route in rtv_graph.trip_vehicle_details.items()
         }
 
+    def _moves(
+        self, vehicles: set[VehicleAvailability], current_time: float
+    ) -> list[tuple[str, float, Route]]:
+        """Extra (vehicle id, cost, rebalancing route) columns; none in the paper's ILP."""
+        return []
+
     def _result(
         self,
         rtv_graph: RTVGraph,
@@ -61,6 +68,7 @@ class AssignmentSolverBase(IAssignmentSolver):
         chosen: list[tuple[TripId, str]],
         total_cost: float,
         is_optimal: bool,
+        rebalancing: dict[str, Route] | None = None,
     ) -> AssignmentResult:
         assignments: set[Assignment] = set()
         assigned_req_ids: set[str] = set()
@@ -80,6 +88,7 @@ class AssignmentSolverBase(IAssignmentSolver):
             unassigned_requests={r for r in requests if r.id not in assigned_req_ids},
             total_cost=total_cost,
             is_optimal=is_optimal,
+            rebalancing=rebalancing or {},
         )
 
 
@@ -185,15 +194,17 @@ class HighsAssignmentSolver(AssignmentSolverBase):
         from scipy.sparse import coo_matrix
 
         req_list = list(requests)
-        if not req_list:
+        moves = self._moves(vehicles, current_time)
+        if not req_list and not moves:
             return AssignmentResult(set(), set(), 0.0, True)
         costs = self._edge_costs(rtv_graph, requests, vehicles)
         edges = list(costs)
         req_index = {r.id: k for k, r in enumerate(req_list)}
         veh_index = {v.vehicle_id: k for k, v in enumerate(vehicles)}
-        n_x, n_y = len(edges), len(req_list)
+        # Columns: trips (x), then moves (m), then unserved requests (y).
+        n_x, n_m, n_y = len(edges), len(moves), len(req_list)
 
-        cost = np.empty(n_x + n_y)
+        cost = np.empty(n_x + n_m + n_y)
         rows, cols = [], []  # request rows first, then vehicle rows
         for e, (trip, v_id) in enumerate(edges):
             cost[e] = costs[(trip, v_id)]
@@ -202,18 +213,22 @@ class HighsAssignmentSolver(AssignmentSolverBase):
                 cols.append(e)
             rows.append(n_y + veh_index[v_id])
             cols.append(e)
-        for k, req in enumerate(req_list):
-            cost[n_x + k] = self._objective.unserved_penalty(req, current_time)
-            rows.append(k)
+        for k, (v_id, move_cost, _) in enumerate(moves):
+            cost[n_x + k] = move_cost
+            rows.append(n_y + veh_index[v_id])
             cols.append(n_x + k)
+        for k, req in enumerate(req_list):
+            cost[n_x + n_m + k] = self._objective.unserved_penalty(req, current_time)
+            rows.append(k)
+            cols.append(n_x + n_m + k)
 
-        n_rows = n_y + len(veh_index)
-        a = coo_matrix((np.ones(len(rows)), (rows, cols)), shape=(n_rows, n_x + n_y)).tocsr()
+        n_rows, n_cols = n_y + len(veh_index), n_x + n_m + n_y
+        a = coo_matrix((np.ones(len(rows)), (rows, cols)), shape=(n_rows, n_cols)).tocsr()
         lower = np.concatenate([np.ones(n_y), np.zeros(len(veh_index))])
         result = milp(
             c=cost,
             constraints=LinearConstraint(a, lower, np.ones(n_rows)),
-            integrality=np.ones(n_x + n_y),
+            integrality=np.ones(n_cols),
             bounds=Bounds(0, 1),
             options={"time_limit": solver_timeout, "mip_rel_gap": 0.0},
         )
@@ -221,5 +236,10 @@ class HighsAssignmentSolver(AssignmentSolverBase):
             raise RuntimeError(f"HiGHS failed to find a solution: {result.message}")
 
         chosen = [edges[e] for e in range(n_x) if result.x[e] > 0.5]
+        rebalancing = {
+            v_id: route for k, (v_id, _, route) in enumerate(moves) if result.x[n_x + k] > 0.5
+        }
         logger.info(f"HiGHS finished: {result.message} {len(chosen)} trips assigned.")
-        return self._result(rtv_graph, requests, chosen, float(result.fun), result.status == 0)
+        return self._result(
+            rtv_graph, requests, chosen, float(result.fun), result.status == 0, rebalancing
+        )

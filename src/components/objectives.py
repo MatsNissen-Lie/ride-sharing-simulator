@@ -19,9 +19,15 @@ class DelayObjective(IObjective):
     Section IV: the cost of ignoring a matched request is increased).
     """
 
-    def __init__(self, penalty_base: float = 1e5, penalty_growth_rate: float = 10.0):
+    def __init__(
+        self,
+        penalty_base: float = 1e5,
+        penalty_growth_rate: float = 10.0,
+        move_weight: float = 1.0,
+    ):
         self._penalty_base = penalty_base
         self._penalty_growth_rate = penalty_growth_rate
+        self._move_weight = move_weight  # cost per second of empty rebalancing driving
 
     def trip_cost(
         self,
@@ -37,6 +43,11 @@ class DelayObjective(IObjective):
         if request.promised_pickup_time is not None:
             penalty *= 2.0
         return penalty
+
+    def rebalancing_cost(self, travel_time: float, distance_m: float) -> float:
+        # Not in the paper (rebalancing is separate there): a second of empty
+        # driving weighs like a second of passenger delay.
+        return self._move_weight * travel_time
 
 
 class ProfitObjective(IObjective):
@@ -85,3 +96,6 @@ class ProfitObjective(IObjective):
 
     def unserved_penalty(self, request: Request, current_time: float) -> float:
         return self._promise_penalty if request.promised_pickup_time is not None else 0.0
+
+    def rebalancing_cost(self, travel_time: float, distance_m: float) -> float:
+        return self._cost_per_km * distance_m / 1000

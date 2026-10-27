@@ -163,6 +163,10 @@ class IObjective(ABC):
     def unserved_penalty(self, request: Request, current_time: float) -> float:
         """Cost chi_r of leaving request r unassigned in this batch."""
 
+    @abstractmethod
+    def rebalancing_cost(self, travel_time: float, distance_m: float) -> float:
+        """Cost of an empty move (used by solvers that rebalance in the assignment)."""
+
 
 class IRVGraphBuilder(ABC):
     """Pairwise shareability: request-request and request-vehicle edges."""
@@ -231,5 +235,27 @@ class IRebalancingSolver(ABC):
         """
         Rebalancing route per idle vehicle id; vehicles left out stay where
         they are. `en_route` are vehicles still driving to an earlier
-        rebalancing destination (their remaining stops); they keep going.
+        rebalancing destination (their remaining stops); they keep going
+        unless a route is returned for them (an empty route stops them).
         """
+
+
+class IVehicleValue(ABC):
+    """
+    Future value of a vehicle that becomes free at `node` at time `t`, in the
+    objective's units as a saving (higher is better). Joint assignment solvers
+    weigh every option of a vehicle by where and when it leaves the vehicle,
+    which makes the assignment look past the current batch.
+    """
+
+    def prepare(
+        self,
+        vehicles: Iterable[VehicleAvailability],
+        requests: Iterable[Request],
+        t_now: float,
+    ) -> None:
+        """Called once per batch before `values` (to plan or learn); default: nothing."""
+
+    @abstractmethod
+    def values(self, nodes: np.ndarray, times: np.ndarray, t_now: float) -> np.ndarray:
+        """Value of a free vehicle for each (node, time) pair."""

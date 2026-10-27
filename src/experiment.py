@@ -20,6 +20,7 @@ from src.components.batch_controller import BatchController
 from src.components.graph_builder.rtv_trip_centric import TripCentricRTVGraphBuilder
 from src.components.graph_builder.rtv_vehicle_centric import VehicleCentricRTVGraphBuilder
 from src.components.graph_builder.rv_builder import RVGraphBuilder
+from src.components.joint_assignment_solver import JointAssignmentSolver, ZeroValue
 from src.components.network_service import NetworkXService
 from src.components.objectives import DelayObjective, ProfitObjective
 from src.components.demand import HistoricalDemandModel
@@ -38,6 +39,7 @@ from src.interfaces import (
     IRebalancingSolver,
     IRTVGraphBuilder,
     ITripSolver,
+    IVehicleValue,
 )
 from src.interfaces.stats import BatchStatistics
 from src.simulator import Simulator
@@ -64,6 +66,7 @@ class ExperimentConfig:
     rebalancing: str = "reactive"
     oracle_horizon_min: float = 10.0
     demand_horizon_min: float = 15.0  # look-ahead of the demand rebalancer
+    vehicle_value: str = "zero"  # V(node, time) used by the joint solver
     travel_time_factor: float = config.TRAVEL_TIME_FACTOR
     read_only: bool = False
 
@@ -106,9 +109,15 @@ RTV_BUILDERS: dict[str, Callable[[ITripSolver], IRTVGraphBuilder]] = {
     "trip": TripCentricRTVGraphBuilder,
     "vehicle": VehicleCentricRTVGraphBuilder,
 }
+VEHICLE_VALUES: dict[str, Callable[[Context], IVehicleValue]] = {
+    "zero": lambda ctx: ZeroValue(),
+}
 ASSIGNMENT_SOLVERS: dict[str, Callable[[Context, IObjective], IAssignmentSolver]] = {
     "gurobi": lambda ctx, objective: GurobiAssignmentSolver(objective),
     "highs": lambda ctx, objective: HighsAssignmentSolver(objective),
+    "joint": lambda ctx, objective: JointAssignmentSolver(
+        objective, ctx.network, ctx.zones, VEHICLE_VALUES[ctx.config.vehicle_value](ctx)
+    ),
 }
 
 
@@ -174,6 +183,7 @@ def run_experiment(cfg: ExperimentConfig) -> Path:
         ("rtv_builder", RTV_BUILDERS),
         ("assignment_solver", ASSIGNMENT_SOLVERS),
         ("rebalancing", REBALANCERS),
+        ("vehicle_value", VEHICLE_VALUES),
     ]:
         if getattr(cfg, key) not in registry:
             raise ValueError(f"Unknown {key} {getattr(cfg, key)!r}; choose from {list(registry)}")
