@@ -2,7 +2,7 @@ import hashlib
 import itertools
 import os
 from array import array
-from typing import Iterable
+from typing import Iterable, Iterator
 import time
 from functools import lru_cache
 from pathlib import Path
@@ -18,6 +18,14 @@ from src.interfaces import INetworkService
 from src.interfaces.data_models import NetworkPath, NetworkPathExtended
 
 logger = get_logger(__name__)
+
+
+def _save(path: Path, values: np.ndarray) -> None:
+    """np.save via a temporary file, so parallel runs never read half a file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.stem}.{os.getpid()}.tmp.npy")
+    np.save(tmp, values)
+    os.replace(tmp, path)
 # set debug level for this module
 
 
@@ -56,6 +64,8 @@ class NetworkXService(INetworkService):
         self._adjacency: csr_matrix | None = None  # fastest edge per node pair
         self._predecessors: dict[int, array] = {}  # shortest-path tree per origin
         self._tree_cache_dir = tree_cache_dir
+        # next hop, path time, path length per node pair; False: not usable
+        self._routes: tuple[np.ndarray, np.ndarray, np.ndarray] | bool | None = None
         self._trees: np.ndarray | None = None  # all trees, from tree_cache_dir
         self._fastest: dict[tuple[int, int], tuple[float, float]] | None = None
         self._fastest_scaled: dict[tuple[int, int], tuple[float, float]] = {}
@@ -280,12 +290,7 @@ class NetworkXService(INetworkService):
         """
         pred = self._predecessors.get(origin)
         if pred is None:
-            if self._adjacency is None:
-                times = {pair: t for pair, (t, _) in self._fastest_edges(scaled=False).items()}
-                rows, cols = zip(*times)
-                self._adjacency = csr_matrix(
-                    (list(times.values()), (rows, cols)), shape=(self.N, self.N)
-                )
+            self._adjacency_matrix()
             if self._tree_cache_dir is not None and self._trees is None:
                 self._trees = self._all_trees()
             if self._trees is not None:
@@ -302,21 +307,133 @@ class NetworkXService(INetworkService):
         nodes.reverse()
         return nodes
 
+    def _adjacency_matrix(self) -> csr_matrix:
+        """Free-flow time of the fastest edge per node pair, for scipy's Dijkstra."""
+        if self._adjacency is None:
+            times = {pair: t for pair, (t, _) in self._fastest_edges(scaled=False).items()}
+            rows, cols = zip(*times)
+            self._adjacency = csr_matrix(
+                (list(times.values()), (rows, cols)), shape=(self.N, self.N)
+            )
+        return self._adjacency
+
+    def _graph_key(self) -> str:
+        key = hashlib.sha1()
+        adjacency = self._adjacency_matrix()
+        for part in (adjacency.indptr, adjacency.indices, adjacency.data):
+            key.update(np.ascontiguousarray(part).tobytes())
+        return f"{self.N}_{key.hexdigest()[:16]}"
+
     def _all_trees(self) -> np.ndarray:
         """Predecessor rows of every origin (N x N int32), read from the cache
         directory or computed (~2.4 s for Manhattan) and stored there."""
-        key = hashlib.sha1()
-        for part in (self._adjacency.indptr, self._adjacency.indices, self._adjacency.data):
-            key.update(np.ascontiguousarray(part).tobytes())
-        path = self._tree_cache_dir / f"shortest_path_trees_{self.N}_{key.hexdigest()[:16]}.npy"
+        path = self._tree_cache_dir / f"shortest_path_trees_{self._graph_key()}.npy"
         if path.exists():
             return np.load(path, mmap_mode="r")
         _, trees = dijkstra(self._adjacency, return_predecessors=True)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(f"{path.stem}.{os.getpid()}.tmp.npy")
-        np.save(tmp, trees.astype(np.int32))
-        os.replace(tmp, path)  # atomic, so parallel runs never read half a file
+        _save(path, trees.astype(np.int32))
         return trees
+
+    def path_time_and_distance(
+        self, origin_node: int, destination_node: int
+    ) -> tuple[float, float] | None:
+        routes = self._route_arrays()
+        if routes is None:
+            return super().path_time_and_distance(origin_node, destination_node)
+        _, time, length = routes
+        travel_time = time[origin_node, destination_node]
+        if travel_time != travel_time:  # NaN: no path
+            return None
+        return float(travel_time), float(length[origin_node, destination_node])
+
+    def path_steps(self, origin_node: int, destination_node: int) -> Iterator[tuple[int, float]]:
+        routes = self._route_arrays()
+        if routes is None:
+            yield from super().path_steps(origin_node, destination_node)
+            return
+        hop, time, _ = routes
+        if time[origin_node, destination_node] != time[origin_node, destination_node]:
+            return  # no path
+        node = origin_node
+        while node != destination_node:
+            following = int(hop[node, destination_node])
+            yield following, float(time[node, following])  # time of the one edge
+            node = following
+
+    def _route_arrays(self) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+        """(next hop, path time, path length) for every node pair, or None.
+
+        next_hop[o, d] is the node after o on the path of
+        get_shortest_path_with_travel_time(o, d); time and length are that
+        path's travel_time and travel_distance, summed edge by edge from o as
+        _get_cached_path sums them. Walking next hops from o follows o's own path
+        only if every node's tree agrees with the trees of the nodes before it
+        (true on Manhattan: no exceptions among 21M pairs); this is checked
+        when the arrays are built, and None (use the paths) otherwise. Built in
+        ~6 s; kept in the tree cache directory when there is one.
+        """
+        if self._routes is not None:
+            return self._routes or None
+        key = self._graph_key()
+        factor = f"{self.travel_time_factor:g}"
+        names = (f"next_hop_{key}.npy", f"path_time_{key}_x{factor}.npy", f"path_length_{key}.npy")
+        cache = self._tree_cache_dir
+        if cache is not None and all((cache / n).exists() for n in names):
+            # Plain arrays over the mapped files: memmap indexing is slower.
+            routes = tuple(np.load(cache / n, mmap_mode="r").view(np.ndarray) for n in names)
+        else:
+            routes = self._build_route_arrays()
+            if routes is None:
+                logger.warning("Shortest-path trees disagree; paths are built one by one.")
+                self._routes = False
+                return None
+            if cache is not None:
+                for name, values in zip(names, routes):
+                    _save(cache / name, values)
+        # get_shortest_path_with_travel_time gives no path where the travel-time
+        # matrix has none; mark those pairs NaN so one lookup answers both.
+        hop, time, length = routes
+        no_path = ~np.isfinite(self._time_matrix) | (self._time_matrix < 0) | (self._time_matrix > 1e9)
+        self._routes = hop, np.where(no_path, np.nan, time), length
+        return self._routes
+
+    def _build_route_arrays(self) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+        n = self.N
+        dist, pred = dijkstra(self._adjacency_matrix(), return_predecessors=True)
+        order = np.argsort(dist, axis=1, kind="stable")  # parents before children
+        edges = self._fastest_edges()
+        keys = np.array([u * n + v for u, v in edges], dtype=np.int64)
+        sort = np.argsort(keys)
+        keys = keys[sort]
+        edge_time = np.array([t for t, _ in edges.values()])[sort]
+        edge_length = np.array([d for _, d in edges.values()])[sort]
+
+        hop = np.full((n, n), -1, dtype=np.int32)
+        time = np.full((n, n), np.nan)
+        length = np.full((n, n), np.nan)
+        rows = np.arange(n)
+        time[rows, rows] = 0.0
+        length[rows, rows] = 0.0
+        for rank in range(1, n):
+            node = order[:, rank]
+            parent = pred[rows, node]
+            o, node, parent = rows[parent >= 0], node[parent >= 0], parent[parent >= 0]
+            wanted = parent.astype(np.int64) * n + node
+            e = np.searchsorted(keys, wanted)
+            if (keys[np.minimum(e, len(keys) - 1)] != wanted).any():
+                raise RuntimeError("Tree edge missing from the fastest edges")
+            time[o, node] = time[o, parent] + edge_time[e]
+            length[o, node] = length[o, parent] + edge_length[e]
+            hop[o, node] = np.where(parent == o, node, hop[o, parent])
+
+        o, d = np.nonzero(pred >= 0)
+        if np.isnan(time[o, d]).any():
+            raise RuntimeError("Path times built out of order")
+        first = hop[o, d]
+        later = d != first
+        if (pred[first[later], d[later]] != pred[o[later], d[later]]).any():
+            return None
+        return hop, time, length
 
     def _fastest_edges(self, scaled: bool = True) -> dict[tuple[int, int], tuple[float, float]]:
         """(travel time, length) of the fastest edge per node pair; the first one

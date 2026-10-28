@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 import numpy as np
 
 from src.interfaces.data_models import (
@@ -40,6 +40,22 @@ class INetworkService(ABC):
         along with travel times between each consecutive node.
         """
         pass
+
+    def path_time_and_distance(
+        self, origin_node: int, destination_node: int
+    ) -> tuple[float, float] | None:
+        """travel_time and travel_distance of get_shortest_path_with_travel_time,
+        for callers that do not need the nodes. Implementations may answer
+        without building the path; the numbers must be the same."""
+        path = self.get_shortest_path_with_travel_time(origin_node, destination_node)
+        return None if path is None else (path.travel_time, path.travel_distance)
+
+    def path_steps(self, origin_node: int, destination_node: int) -> Iterator[tuple[int, float]]:
+        """(node, travel time of the edge into it) along the path of
+        get_shortest_path_with_travel_time after its first node, lazily."""
+        path = self.get_shortest_path_with_travel_time(origin_node, destination_node)
+        if path is not None:
+            yield from zip(path.nodes[1:], path.travel_times)
 
     @abstractmethod
     def get_travel_time(self, origin: int, destination: int) -> float:
