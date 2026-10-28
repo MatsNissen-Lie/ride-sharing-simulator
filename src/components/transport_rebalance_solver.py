@@ -62,11 +62,9 @@ class TransportRebalancingSolver(IRebalancingSolver):
         en_route: list[VehicleAvailability] = (),
     ) -> dict[str, Route]:
         zone_move = [v for v in en_route if v.remaining_stops_to_serve[-1].is_zone_move]
-        free = sorted(
-            [*idle_vehicles, *(v for v in en_route if v not in zone_move)],
-            key=lambda v: v.vehicle_id,
-        )
-        routes = {v.vehicle_id: STOP for v in en_route if v not in zone_move}
+        chasing = [v for v in en_route if not v.remaining_stops_to_serve[-1].is_zone_move]
+        free = sorted([*idle_vehicles, *chasing], key=lambda v: v.vehicle_id)
+        routes = {v.vehicle_id: STOP for v in chasing}
 
         with timed("serve_reachable"):
             routes.update(self._serve_reachable(free, unassigned_requests))
@@ -111,15 +109,10 @@ class TransportRebalancingSolver(IRebalancingSolver):
             [v.available_at_node for v in free], self._centres
         )
         reward = 2.0 * self._max_travel + 1.0  # filling a place beats any allowed move
-        rows, cols = [], []
-        for i in range(len(free)):
-            for z in range(len(self._zone_ids)):
-                if slots[z] > 0 and (z == home[i] or travel[i, z] <= self._max_travel):
-                    rows.append(i)
-                    cols.append(z)
-        if not rows:
+        own_zone = np.arange(len(self._zone_ids))[None, :] == np.array(home)[:, None]
+        rows, cols = np.nonzero((slots[None, :] > 0) & (own_zone | (travel <= self._max_travel)))
+        if not len(rows):
             return {}
-        rows, cols = np.array(rows), np.array(cols)
         cost = np.where(cols == np.array(home)[rows], 0.0, travel[rows, cols]) - reward
         n, m = len(free), len(self._zone_ids)
         k = np.arange(len(rows))
