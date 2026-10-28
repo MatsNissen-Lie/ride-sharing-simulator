@@ -2,11 +2,13 @@
 
     uv run python scripts/analysis/timing_report.py reports/<run>
     uv run python scripts/analysis/timing_report.py reports/<base> reports/<new>
+    uv run python scripts/analysis/timing_report.py reports/<base> reports/<a> reports/<b> ...
 
 One run: the section tree from timing.csv (total, share of the run, calls, per
 batch mean/p95/max). Two runs: section totals side by side with the speed-up,
 and a check that the simulation results are identical, i.e. every column of
-simulation_stats.csv except the time_* columns.
+simulation_stats.csv except the time_* columns. More runs: one line per run
+(run time, mean batch, speed-up and identical results versus the first).
 """
 
 import sys
@@ -63,11 +65,26 @@ def compare(base: Path, new: Path) -> str:
     return "\n".join(lines)
 
 
+def table(runs: list[Path]) -> str:
+    lines = [f"{'run':<44} {'run s':>8} {'ms/batch':>9} {'speed-up':>9}  results vs first"]
+    base = None
+    for run in runs:
+        s = load(run)
+        total = s.filter(pl.col("depth") == 0)["total_s"].sum()
+        batch = s.filter(pl.col("section") == "batch")["batch_mean_s"].item()
+        base = base or total
+        same = "identical" if not result_differences(runs[0], run) else "DIFFER"
+        lines.append(f"{run.name:<44} {total:>8.1f} {batch * 1000:>9.1f} {base / total:>8.2f}x  {same}")
+    return "\n".join(lines)
+
+
 if __name__ == "__main__":
     runs = [Path(p) for p in sys.argv[1:]]
     if len(runs) == 1:
         print(format_summary(load(runs[0])))
     elif len(runs) == 2:
         print(compare(*runs))
+    elif len(runs) > 2:
+        print(table(runs))
     else:
         sys.exit(__doc__)
