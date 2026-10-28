@@ -92,8 +92,27 @@ class SimulationDataProvider:
                 raise AssertionError(
                     f"Pickup datetimes in {path.name} are not sorted ascending"
                 )
-            for row in df.to_dicts():
-                yield self._request_from_row(row)
+            yield from self._requests_from_frame(df)
+
+    def _requests_from_frame(self, df: pl.DataFrame) -> Iterator[MetaRequest]:
+        """`_request_from_row` for every row, with the conversions done per column."""
+        first = self._request_counter + 1
+        self._request_counter += df.height
+        ids = df.select(
+            pl.col("pickup_datetime").dt.strftime("%m%d")
+            + "_"
+            + pl.int_range(first, first + pl.len()).cast(pl.Utf8)
+        ).to_series()
+        times = self._clock.to_relative_seconds_array(  # type: ignore[union-attr]
+            df["pickup_datetime"].dt.epoch("us").to_numpy()
+        )
+        for request_id, origin, destination, t in zip(
+            ids.to_list(),
+            df["orig_node"].cast(pl.Int64).to_list(),
+            df["dest_node"].cast(pl.Int64).to_list(),
+            times.tolist(),
+        ):
+            yield MetaRequest(request_id, origin, destination, t)
 
     def _request_from_row(self, row: dict) -> MetaRequest:
         pickup_dt = self._ensure_datetime(row["pickup_datetime"])

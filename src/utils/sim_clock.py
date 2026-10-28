@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import numpy as np
+
 
 class SimulationClock:
     """Tracks the first timestamp and converts values to/from relative seconds."""
@@ -15,6 +17,11 @@ class SimulationClock:
     def to_relative_seconds(self, value: datetime) -> float:
         epoch = self._to_epoch_seconds(value)
         return epoch - self._start_epoch
+
+    def to_relative_seconds_array(self, epoch_us: np.ndarray) -> np.ndarray:
+        """to_relative_seconds for microseconds since the Unix epoch, with the same
+        floats: datetime.timestamp() is also microseconds / 1e6, correctly rounded."""
+        return epoch_us / 1e6 - self._start_epoch
 
     def from_relative_seconds(self, offset: float) -> datetime:
         if self._start_epoch is None:
