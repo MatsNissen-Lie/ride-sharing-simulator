@@ -13,6 +13,8 @@ from functools import cached_property
 from pathlib import Path
 from typing import Callable
 
+import numpy as np
+
 import config.config as config
 from config import get_logger
 from src.components.assignment_solver import GurobiAssignmentSolver, HighsAssignmentSolver
@@ -25,6 +27,7 @@ from src.components.network_service import NetworkXService
 from src.components.objectives import DelayObjective, ProfitObjective
 from src.components.demand import HistoricalDemandModel
 from src.components.fleet_mpc import FleetMpcValue
+from src.components.flat_value import ZoneAveragedValue
 from src.components.mpc_rebalance_solver import MpcRebalancingSolver
 from src.components.zone_trips import ZoneTrips
 from src.components.demand_rebalance_solver import DemandRebalancingSolver
@@ -156,6 +159,9 @@ VEHICLE_VALUES: dict[str, Callable[[Context], IVehicleValue]] = {
     "mpc": lambda ctx: _mpc(ctx, pooling=MPC_POOLING),
     "mpc_p1": lambda ctx: _mpc(ctx, pooling=1.0),
     "mpc_half": lambda ctx: _mpc(ctx, pooling=MPC_POOLING, weight=0.5),
+    "mpc_flat": lambda ctx: ZoneAveragedValue(
+        _mpc(ctx, pooling=MPC_POOLING), np.array(list(ctx.zones.center_node.values()))
+    ),
 }
 ASSIGNMENT_SOLVERS: dict[str, Callable[[Context, IObjective], IAssignmentSolver]] = {
     "gurobi": lambda ctx, objective: GurobiAssignmentSolver(objective),

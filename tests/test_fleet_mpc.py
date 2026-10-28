@@ -278,3 +278,15 @@ def test_provider_reads_trips_with_destinations(tmp_path, monkeypatch):
     trips = sdp.SimulationDataProvider(rider_dir=tmp_path, rider_pattern="trips_*.parquet").request_trips()
     assert trips.columns == ["pickup_datetime", "orig_node", "dest_node"]
     assert trips["dest_node"].to_list() == [10, 11]
+
+
+def test_zone_averaged_value_keeps_time_and_drops_location(network):
+    from src.components.flat_value import ZoneAveragedValue
+
+    inner = mpc(network, {2: 0.1}, trip_time=180.0)
+    flat = ZoneAveragedValue(inner, np.array([14, 21]))
+    flat.prepare({idle("a", 0)}, set(), T_NOW)
+    times = np.array([T_NOW, T_NOW + 240])
+    expected = [inner.values(np.array([14, 21]), np.full(2, t), T_NOW).mean() for t in times]
+    assert flat.values(np.array([0, 5]), times, T_NOW) == pytest.approx(expected)
+    assert flat.values(np.array([0]), times[:1], T_NOW) == pytest.approx(flat.values(np.array([5]), times[:1], T_NOW))
