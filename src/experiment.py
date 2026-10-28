@@ -34,6 +34,7 @@ from src.components.objectives import DelayObjective, ProfitObjective
 from src.components.demand import HOLIDAYS, HistoricalDemandModel
 from src.components.fleet_mpc import FleetMpcValue
 from src.components.flat_value import ZoneAveragedValue
+from src.components.placebo_values import ZoneAveragedPlan, ZoneShuffledPlan
 from src.components.mpc_rebalance_solver import MpcRebalancingSolver
 from src.components.zone_trips import ZoneTrips
 from src.components.demand_rebalance_solver import DemandRebalancingSolver
@@ -245,6 +246,13 @@ VEHICLE_VALUES: dict[str, Callable[[Context], IVehicleValue]] = {
     "mpc_half": lambda ctx: _mpc(ctx, pooling=MPC_POOLING, weight=0.5),
     "mpc_flat": lambda ctx: ZoneAveragedValue(
         _mpc(ctx, pooling=MPC_POOLING), np.array(list(ctx.zones.center_node.values()))
+    ),    # Placebo controls: the scaled MPC plan and its moves, values without location meaning.
+    "mpc_shuffled": lambda ctx: ZoneShuffledPlan(
+        _mpc(ctx, pooling=MPC_POOLING, weight=ctx.config.vehicle_value_weight), ctx.zones
+    ),
+    "mpc_flat_plan": lambda ctx: ZoneAveragedPlan(
+        _mpc(ctx, pooling=MPC_POOLING, weight=ctx.config.vehicle_value_weight),
+        np.array(list(ctx.zones.center_node.values())),
     ),
 }
 REQUEST_SAMPLERS: dict[str, Callable[[Context], IRequestSampler]] = {
