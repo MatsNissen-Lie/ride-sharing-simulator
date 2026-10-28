@@ -48,6 +48,12 @@ from src.utils.timing import record, timed
 
 logger = get_logger("rv_graph_builder")
 
+# Stop order of each pair permutation (see _build_route_from_perm), as
+# positions in [o1, d1, o2, d2].
+_PERM_ORDER = np.array(
+    [[0, 2, 1, 3], [0, 2, 3, 1], [2, 0, 1, 3], [2, 0, 3, 1], [0, 1, 2, 3], [2, 3, 0, 1]]
+)
+
 # silence the logger if this is not the main process
 if __name__ != "__main__":
     logger.setLevel("WARNING")
@@ -305,11 +311,22 @@ class RVGraphBuilder(IRVGraphBuilder):
         valid_idx = np.where(valid)[0]
         if len(valid_idx) > 0:
             logger.info(f"RR Matrix: Found {len(valid_idx)} feasible edges.")
-            for k in valid_idx:
+            # Travel time and distance of the best order, leg by leg as in
+            # get_shortest_path (legs without a path add nothing).
+            ends = np.stack([o1, d1, o2, d2])[:, valid_idx].T
+            seq = np.take_along_axis(ends, _PERM_ORDER[best_perms[valid_idx]], axis=1)
+            leg_t = mat[seq[:, :-1], seq[:, 1:]]
+            leg_d = self._network.get_distance_matrix()[seq[:, :-1], seq[:, 1:]]
+            has_path = np.isfinite(leg_t) & (leg_t <= 1e9) & (leg_t >= 0)
+            leg_t = np.where(has_path, leg_t, 0.0)
+            leg_d = np.where(has_path, leg_d, 0.0)
+            total_t = (leg_t[:, 0] + leg_t[:, 1]) + leg_t[:, 2]
+            total_d = (leg_d[:, 0] + leg_d[:, 1]) + leg_d[:, 2]
+            for n, k in enumerate(valid_idx):
                 r1 = req_list[idx_i[k]]
                 r2 = req_list[idx_j[k]]
                 route = self._build_route_from_perm(
-                    best_perms[k], r1, r2, best_costs[k]
+                    best_perms[k], r1, r2, best_costs[k], float(total_t[n]), float(total_d[n])
                 )
                 graph.add_rr_edge(r1.id, r2.id, route)
 
@@ -518,7 +535,13 @@ class RVGraphBuilder(IRVGraphBuilder):
         graph.add_rv_edge(r.id, v.vehicle_id, route)
 
     def _build_route_from_perm(
-        self, perm_id: int, r1: Request, r2: Request, cost: float
+        self,
+        perm_id: int,
+        r1: Request,
+        r2: Request,
+        cost: float,
+        total_time: float,
+        total_dist: float,
     ) -> FeasibleRoute:
         """Helper to reconstruct the Stop sequence for the chosen best permutation."""
         # Sequence definitions matching the matrix logic above
@@ -549,21 +572,6 @@ class RVGraphBuilder(IRVGraphBuilder):
             seq = [s_o2, s_d2, s_o1, s_d1]
         else:
             raise ValueError(f"Invalid perm_id {perm_id}")
-
-        # Calculate metrics
-        total_time = 0.0
-        total_dist = 0.0
-
-        # Iterate through the sequence to sum up travel times and distances
-        # Note: The first stop is the start, so we iterate from 0 to N-1
-        current_node = seq[0].node
-        for i in range(1, len(seq)):
-            next_node = seq[i].node
-            path = self._network.get_shortest_path(current_node, next_node)
-            if path:
-                total_time += path.travel_time
-                total_dist += path.travel_distance
-            current_node = next_node
 
         return FeasibleRoute(
             route=Route(
