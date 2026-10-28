@@ -29,3 +29,23 @@ def test_requests_from_frame_match_rows():
     assert got == expected
     assert [r.request_time for r in got] == [r.request_time for r in expected]  # exact floats
     assert by_frame._request_counter == by_row._request_counter == 2041
+
+
+def test_requests_from_a_start_keep_the_ids_of_a_full_pass():
+    start = datetime(2025, 1, 1)
+    times = [start + timedelta(seconds=k * 3.5) for k in range(500)]
+    df = pl.DataFrame(
+        {"pickup_datetime": times, "orig_node": list(range(500)), "dest_node": list(range(500))}
+    ).with_columns(pl.col("pickup_datetime").cast(pl.Datetime).dt.replace_time_zone("America/New_York"))
+
+    def provider():
+        p = object.__new__(SimulationDataProvider)
+        p._clock = SimulationClock(start_time=start)
+        p._request_counter = 0
+        return p
+
+    full = list(provider()._requests_from_frame(df))
+    skipping = provider()
+    later = list(skipping._requests_from_frame(df, start=700.0))
+    assert later == [r for r in full if r.request_time >= 700.0]
+    assert skipping._request_counter == 500

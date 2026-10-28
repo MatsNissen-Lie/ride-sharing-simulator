@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Iterable, Iterator
 
 import networkx as nx
+import numpy as np
 import polars as pl
 
 from config import NUMBER_OF_VEHICLES, get_logger, RIDER_DIR, RIDER_PATTERN
@@ -62,7 +63,9 @@ class SimulationDataProvider:
     def iter_request_files(self) -> Iterable[Path]:
         return sorted(self._rider_dir.glob(self._rider_pattern))
 
-    def iter_requests(self) -> Iterator[MetaRequest]:
+    def iter_requests(self, start: float | None = None) -> Iterator[MetaRequest]:
+        """Requests in time order. With `start` (simulation seconds), requests
+        before it are skipped without being built; ids stay those of a full pass."""
         last_timestamp = None
         paths = list(self.iter_request_files())
         for idx, path in enumerate(paths):
@@ -92,20 +95,25 @@ class SimulationDataProvider:
                 raise AssertionError(
                     f"Pickup datetimes in {path.name} are not sorted ascending"
                 )
-            yield from self._requests_from_frame(df)
+            yield from self._requests_from_frame(df, start)
 
-    def _requests_from_frame(self, df: pl.DataFrame) -> Iterator[MetaRequest]:
-        """`_request_from_row` for every row, with the conversions done per column."""
-        first = self._request_counter + 1
+    def _requests_from_frame(
+        self, df: pl.DataFrame, start: float | None = None
+    ) -> Iterator[MetaRequest]:
+        """`_request_from_row` for every row from `start` on (rows are sorted by
+        time), with the conversions done per column."""
+        times = self._clock.to_relative_seconds_array(  # type: ignore[union-attr]
+            df["pickup_datetime"].dt.epoch("us").to_numpy()
+        )
+        skip = 0 if start is None else int(np.searchsorted(times, start, side="left"))
+        first = self._request_counter + 1 + skip
         self._request_counter += df.height
+        df, times = df[skip:], times[skip:]
         ids = df.select(
             pl.col("pickup_datetime").dt.strftime("%m%d")
             + "_"
             + pl.int_range(first, first + pl.len()).cast(pl.Utf8)
         ).to_series()
-        times = self._clock.to_relative_seconds_array(  # type: ignore[union-attr]
-            df["pickup_datetime"].dt.epoch("us").to_numpy()
-        )
         for request_id, origin, destination, t in zip(
             ids.to_list(),
             df["orig_node"].cast(pl.Int64).to_list(),
