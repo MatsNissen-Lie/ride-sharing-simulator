@@ -508,11 +508,12 @@ class RVGraphBuilder(IRVGraphBuilder):
         v_free = np.array([veh_list[i].capacity - len(veh_list[i].passengers_onboard) for i in vehicles])
         v_at = np.array([veh_list[i].available_at_node for i in vehicles])
         v_t0 = np.array([veh_list[i].available_from_time for i in vehicles])
-        reqs = [req_list[i] for i in r_idxs]
+        requests, r_pos = np.unique(r_idxs, return_inverse=True)
+        reqs = [req_list[i] for i in requests]
         r_nodes = np.array([(r.origin_node, r.destination_node) for r in reqs])
         r_deadlines = np.array([(r.latest_pickup_time, r.latest_dropoff_time) for r in reqs])
-        nodes = np.concatenate([v_nodes[v_pos], r_nodes], axis=1)
-        deadlines = np.concatenate([v_deadlines[v_pos], r_deadlines], axis=1)
+        nodes = np.concatenate([v_nodes[v_pos], r_nodes[r_pos]], axis=1)
+        deadlines = np.concatenate([v_deadlines[v_pos], r_deadlines[r_pos]], axis=1)
         done, free = v_padded[v_pos], v_free[v_pos]
         here, t = v_at[v_pos], v_t0[v_pos]
 
@@ -535,38 +536,36 @@ class RVGraphBuilder(IRVGraphBuilder):
         pair = np.flatnonzero(maybe)
         here, t, done, seats = here[pair], t[pair], done[pair], free[pair]
         full = (1 << n_stops) - 1
+        bits = 1 << np.arange(n_stops)
         feasible = np.zeros(n_pairs, dtype=bool)
+        depth = 0
         while len(pair):
-            new = [], [], [], [], [], []
-            for stop in range(n_stops):
-                bit = 1 << stop
-                allowed = (done & bit) == 0
-                if stop == k_max:
-                    allowed &= seats > 0
-                elif stop == k_max + 1:
-                    allowed &= (done & (1 << k_max)) != 0
-                c = np.flatnonzero(allowed)
-                p = pair[c]
-                arrival = t[c] + mat[here[c], nodes[p, stop]]
-                ok = arrival <= deadlines[p, stop]
-                c, p = c[ok], p[ok]
-                new[0].append(p)
-                new[1].append(nodes[p, stop])
-                new[2].append(arrival[ok])
-                new[3].append(done[c] | bit)
-                new[4].append(seats[c] + (-1 if stop == k_max else 1))
-                new[5].append(np.full(len(c), stop))
-            pair, here, t, done, seats, last = (np.concatenate(a) for a in new)
+            depth += 1
+            # Every next stop of every partial order at once.
+            visited = (done[:, None] & bits) != 0
+            allowed = ~visited
+            allowed[:, k_max] &= seats > 0
+            allowed[:, k_max + 1] &= visited[:, k_max]
+            arrival = t[:, None] + mat[here[:, None], nodes[pair]]
+            state, last = np.nonzero(allowed & (arrival <= deadlines[pair]))
+            pair, t = pair[state], arrival[state, last]
+            here = nodes[pair, last]
+            done = done[state] | bits[last]
+            seats = seats[state] + np.where(last == k_max, -1, 1)
             finished = done == full
             feasible[pair[finished]] = True
             alive = ~finished & ~feasible[pair]  # one route per pair is enough
             # Of partial orders with the same pair, visited stops and last stop,
-            # the earliest can finish whatever a later one can: keep only it.
-            key = (pair * (full + 1) + done) * n_stops + last
-            first = np.lexsort((t, key))
-            first = first[alive[first]]
-            if len(first):
-                first = first[np.r_[True, key[first][1:] != key[first][:-1]]]
+            # the earliest can finish whatever a later one can: keep only it
+            # (two orders can only meet like this after three stops).
+            if depth < 3:
+                first = np.flatnonzero(alive)
+            else:
+                key = (pair * (full + 1) + done) * n_stops + last
+                first = np.lexsort((t, key))
+                first = first[alive[first]]
+                if len(first):
+                    first = first[np.r_[True, key[first][1:] != key[first][:-1]]]
             pair, here, t, done, seats = pair[first], here[first], t[first], done[first], seats[first]
         return feasible
 
