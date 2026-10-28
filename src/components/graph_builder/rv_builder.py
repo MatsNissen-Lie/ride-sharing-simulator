@@ -477,43 +477,56 @@ class RVGraphBuilder(IRVGraphBuilder):
     ) -> np.ndarray:
         """False where no stop order can serve the request.
 
-        Extends partial stop orders (onboard drop-offs, the pickup, then its
-        drop-off; a free seat when picking up) for all pairs at once, keeping
-        only those that meet every deadline so far. Travel times are added in
-        the order the trip solver adds them (hard deadlines, no waiting), so a
-        route the solver finds survives and only pairs without any route are
-        skipped; on real batches that is 95% of them.
+        After two cheap lower bounds, extends partial stop orders (onboard
+        drop-offs, the pickup, then its drop-off; a free seat when picking up)
+        for all pairs at once, keeping only those that meet every deadline so
+        far. Travel times are added in the order the trip solver adds them (hard
+        deadlines, no waiting), so a route the solver finds survives and only
+        pairs without any route are skipped; on real batches that is 95% of them.
         """
         mat = self._network.get_l1_cache()
         n_pairs = len(v_idxs)
-        k_max = max(len(veh_list[i].passengers_onboard) for i in v_idxs)
+        # Per vehicle (once), then per pair by indexing.
+        vehicles, v_pos = np.unique(v_idxs, return_inverse=True)
+        riders = [[p.original_request for p in veh_list[i].passengers_onboard] for i in vehicles]
+        k_max = max(len(q) for q in riders)
         n_stops = k_max + 2
         # Stops 0..k_max-1: onboard drop-offs (unused ones count as visited);
         # k_max: the pickup; k_max + 1: its drop-off.
-        rows: dict[int, tuple[list[int], list[float], int]] = {}
-        nodes, deadlines, done = [], [], []
-        for vi, ri in zip(v_idxs, r_idxs):
-            if vi not in rows:
-                onboard = [p.original_request for p in veh_list[vi].passengers_onboard]
-                pad = k_max - len(onboard)
-                rows[vi] = (
-                    [q.destination_node for q in onboard] + [0] * pad,
-                    [q.latest_dropoff_time for q in onboard] + [0.0] * pad,
-                    ((1 << k_max) - 1) ^ ((1 << len(onboard)) - 1),
-                )
-            dests, latest, padded = rows[vi]
-            r = req_list[ri]
-            nodes.append(dests + [r.origin_node, r.destination_node])
-            deadlines.append(latest + [r.latest_pickup_time, r.latest_dropoff_time])
-            done.append(padded)
-        nodes, deadlines, done = np.array(nodes), np.array(deadlines), np.array(done)
-        free = np.array([veh_list[i].capacity - len(veh_list[i].passengers_onboard) for i in v_idxs])
+        v_nodes = np.array([[q.destination_node for q in r] + [0] * (k_max - len(r)) for r in riders])
+        v_deadlines = np.array(
+            [[q.latest_dropoff_time for q in r] + [0.0] * (k_max - len(r)) for r in riders]
+        )
+        v_padded = np.array([((1 << k_max) - 1) ^ ((1 << len(r)) - 1) for r in riders])
+        v_free = np.array([veh_list[i].capacity - len(veh_list[i].passengers_onboard) for i in vehicles])
+        v_at = np.array([veh_list[i].available_at_node for i in vehicles])
+        v_t0 = np.array([veh_list[i].available_from_time for i in vehicles])
+        reqs = [req_list[i] for i in r_idxs]
+        r_nodes = np.array([(r.origin_node, r.destination_node) for r in reqs])
+        r_deadlines = np.array([(r.latest_pickup_time, r.latest_dropoff_time) for r in reqs])
+        nodes = np.concatenate([v_nodes[v_pos], r_nodes], axis=1)
+        deadlines = np.concatenate([v_deadlines[v_pos], r_deadlines], axis=1)
+        done, free = v_padded[v_pos], v_free[v_pos]
+        here, t = v_at[v_pos], v_t0[v_pos]
+
+        # Cheap bounds first (about half the pairs fail them): a route picks the
+        # rider up first (a free seat, every onboard drop-off still reachable from
+        # the pickup) or drops some passenger j first (pickup via j's destination).
+        # The tolerance keeps float rounding of the triangle inequality from
+        # rejecting a feasible pair.
+        tol = 1e-6
+        onboard = (done[:, None] & (1 << np.arange(k_max))) == 0
+        origin, dest = nodes[:, k_max], nodes[:, :k_max]
+        pickup = t + mat[here, origin]
+        late = onboard & (pickup[:, None] + mat[origin[:, None], dest] > deadlines[:, :k_max] + tol)
+        via = t[:, None] + mat[here[:, None], dest] + mat[dest, origin[:, None]]
+        maybe = ((free > 0) & ~late.any(axis=1)) | (
+            onboard & (via <= deadlines[:, k_max, None] + tol)
+        ).any(axis=1)
 
         # Frontier of partial orders: pair, position, time, visited stops, free seats.
-        pair = np.arange(n_pairs)
-        here = np.array([veh_list[i].available_at_node for i in v_idxs])
-        t = np.array([veh_list[i].available_from_time for i in v_idxs])
-        seats = free
+        pair = np.flatnonzero(maybe)
+        here, t, done, seats = here[pair], t[pair], done[pair], free[pair]
         full = (1 << n_stops) - 1
         feasible = np.zeros(n_pairs, dtype=bool)
         while len(pair):
