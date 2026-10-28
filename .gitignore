@@ -19,6 +19,8 @@ rich_riders/
 
 *.duckdb
 *.duckdb*
+# All-pairs matrices cached next to the route database
+data/duckDB/*.npy
 
 /Sections/
 .pytest_cache/

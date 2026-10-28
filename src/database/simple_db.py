@@ -1,3 +1,4 @@
+import os
 from typing import Optional, Sequence, Set
 import numpy as np
 import duckdb
@@ -191,10 +192,38 @@ class DuckDBPathCache:
     def _pair_matrix(
         self, sources: list[int], targets: list[int], column: str, fill_value: float
     ) -> np.ndarray:
-        # Works in RO mode because TEMPORARY tables are process-local (in RAM)
         if not sources or not targets:
             return np.array([[]])
 
+        # The all-pairs matrix (nodes 0..n-1 both ways) is kept as a .npy next to
+        # the database: loading it takes ~0.1 s instead of ~5 s per run. It is
+        # rebuilt whenever the database file is newer.
+        cache = None
+        if sources == targets and sources == list(range(len(sources))):
+            cache = Path(self._db_path).with_name(
+                f"{Path(self._db_path).stem}.{column}_{len(sources)}.npy"
+            )
+        if cache is not None and cache.exists() and (
+            cache.stat().st_mtime >= Path(self._db_path).stat().st_mtime
+        ):
+            matrix = np.load(cache)
+        else:
+            matrix = self._query_pair_matrix(sources, targets, column)
+            if cache is not None:
+                tmp = cache.with_name(f"{cache.stem}.{os.getpid()}.tmp.npy")
+                np.save(tmp, matrix)
+                os.replace(tmp, cache)  # atomic, so parallel runs never read half a file
+
+        matrix[np.isnan(matrix)] = fill_value
+        matrix[matrix < 0] = fill_value
+
+        return matrix
+
+    def _query_pair_matrix(
+        self, sources: list[int], targets: list[int], column: str
+    ) -> np.ndarray:
+        """Values for every (source, target), NaN where the table has no row."""
+        # Works in RO mode because TEMPORARY tables are process-local (in RAM)
         n_rows = len(sources)
         n_cols = len(targets)
 
@@ -227,10 +256,6 @@ class DuckDBPathCache:
         matrix[result["row_idx"] - 1, result["col_idx"] - 1] = np.ma.filled(
             result["value"].astype(np.float64), np.nan
         )
-
-        matrix[np.isnan(matrix)] = fill_value
-        matrix[matrix < 0] = fill_value
-
         return matrix
 
     # ---------- helpers ----------
