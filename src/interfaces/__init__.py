@@ -16,6 +16,7 @@ from .data_models import (
 )
 from .services import (
     IAssignmentSolver,
+    IFleetReplay,
     INetworkService,
     IRTVGraphBuilder,
     IRVGraphBuilder,
@@ -34,6 +35,7 @@ from .sampling import IRequestSampler
 
 __all__ = [
     # SERVICES
+    "IFleetReplay",
     "IRebalancingSolver",
     "IDemandModel",
     "IRequestSampler",

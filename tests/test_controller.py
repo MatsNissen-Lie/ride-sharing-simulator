@@ -4,6 +4,7 @@ import pytest
 
 from config.config import OMEGA
 from src.components.batch_controller import BatchController
+from src.components.fleet_replay import ArrayFleetReplay
 from src.interfaces import Route, Stop, Vehicle
 from src.interfaces.data_models import Assignment, AssignmentResult, MetaRequest
 
@@ -19,7 +20,7 @@ def make_controller(network, nodes):
         )
         for k, node in enumerate(nodes)
     ]
-    return BatchController(network, fleet)
+    return BatchController(network, fleet, replay=ArrayFleetReplay(network))
 
 
 def assign(controller, t_now, vehicle_id, request):

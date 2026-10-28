@@ -54,6 +54,7 @@ field of `ExperimentConfig`:
 | Config field | Interface | Registry | Options |
 |---|---|---|---|
 | `controller` | `IBatchController` | `CONTROLLERS` | batch |
+| `fleet_replay` | `IFleetReplay` | `FLEET_REPLAYS` | arrays, paths (same results; arrays faster) |
 | `zoning` | `IZoneIndex` | `ZONINGS` | taxi |
 | `demand_model` | `IDemandModel` | `DEMAND_MODELS` | historical |
 | `fare_model` | `IFareModel` | `FARE_MODELS` | linear |

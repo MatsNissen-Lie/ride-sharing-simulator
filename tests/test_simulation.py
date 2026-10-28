@@ -7,6 +7,7 @@ import pytest
 
 from src.components.assignment_solver import GurobiAssignmentSolver, HighsAssignmentSolver
 from src.components.batch_controller import BatchController
+from src.components.fleet_replay import ArrayFleetReplay, PathFleetReplay
 from src.components.graph_builder.rtv_trip_centric import TripCentricRTVGraphBuilder
 from src.components.graph_builder.rtv_vehicle_centric import (
     VehicleCentricRTVGraphBuilder,
@@ -43,7 +44,7 @@ class CheckedController(BatchController):
 
 
 def run(network, rtv_builder, solver, seed=0, n_vehicles=5, n_requests=150, horizon=1800,
-        rebalancer=None):
+        rebalancer=None, replay=ArrayFleetReplay):
     rng = random.Random(seed)
     fleet = [
         Vehicle(f"v{k}", 4, set(), rng.randrange(network.N), 0.0) for k in range(n_vehicles)
@@ -52,7 +53,7 @@ def run(network, rtv_builder, solver, seed=0, n_vehicles=5, n_requests=150, hori
     metas = [
         MetaRequest(f"r{k}", *rng.sample(range(network.N), 2), t) for k, t in enumerate(times)
     ]
-    controller = CheckedController(network, fleet)
+    controller = CheckedController(network, fleet, replay=replay(network))
     trip_solver = AStarTripSolver(network.get_l1_cache())
     sim = Simulator(
         provider=Provider(),  # type: ignore[arg-type]
@@ -135,8 +136,8 @@ def test_profit_simulation_is_consistent(network):
             super().__init__(ProfitObjective(network, cost_per_km=0.25))
 
     class PricedController(CheckedController):
-        def __init__(self, network, fleet):
-            super().__init__(network, fleet, fare_model=LinearFareModel(network))
+        def __init__(self, network, fleet, replay):
+            super().__init__(network, fleet, replay=replay, fare_model=LinearFareModel(network))
 
     import tests.test_simulation as me
     original = me.CheckedController
@@ -182,3 +183,16 @@ def test_assignment_solver_can_rebalance(network):
                      rebalancer=spy)
     assert sum(b.vehicles_rebalanced for b in batches) > 0
     assert spy.heading_to_0 > 0  # the moves were applied and persist across batches
+
+
+@pytest.mark.parametrize("seed", range(3))
+def test_fleet_replays_give_the_same_simulation(network, seed):
+    stats = []
+    for replay in (PathFleetReplay, ArrayFleetReplay):
+        batches, _ = run(
+            network, TripCentricRTVGraphBuilder, HighsAssignmentSolver, seed=seed,
+            n_vehicles=8, n_requests=200, replay=replay,
+        )
+        stats.append([(b.requests_delivered, b.requests_expired, b.avg_wait_time, b.avg_total_delay,
+                       b.vehicle_km_loaded, b.vehicle_km_empty, b.objective_value) for b in batches])
+    assert stats[0] == stats[1]

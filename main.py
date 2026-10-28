@@ -5,6 +5,7 @@ from datetime import datetime
 
 from src.experiment import (
     ASSIGNMENT_SOLVERS,
+    FLEET_REPLAYS,
     OBJECTIVES,
     REBALANCERS,
     REQUEST_SAMPLERS,
@@ -40,6 +41,12 @@ def parse_args() -> ExperimentConfig:
         help="Variable cost per vehicle-km in USD (profit objective).",
     )
     parser.add_argument("--trip-solver", choices=TRIP_SOLVERS, default=DEFAULTS.trip_solver)
+    parser.add_argument(
+        "--fleet-replay",
+        choices=FLEET_REPLAYS,
+        default=DEFAULTS.fleet_replay,
+        help="How the controller moves vehicles to each batch time: arrays (fast) or paths (original); same results.",
+    )
     parser.add_argument(
         "--rtv",
         choices=RTV_BUILDERS,
@@ -111,6 +118,7 @@ def parse_args() -> ExperimentConfig:
         objective=a.objective,
         cost_per_km=a.cost_per_km,
         trip_solver=a.trip_solver,
+        fleet_replay=a.fleet_replay,
         rtv_builder=a.rtv,
         assignment_solver=a.solver,
         vehicle_value=a.vehicle_value,

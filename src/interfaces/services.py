@@ -10,9 +10,11 @@ from src.interfaces.data_models import (
     NetworkPath,
     NetworkPathExtended,
     Request,
+    Vehicle,
     VehicleAvailability,
 )
 from src.interfaces.graphs import RTVGraph, RVGraph
+from src.interfaces.stats import ControllerStats
 
 
 class INetworkService(ABC):
@@ -130,6 +132,27 @@ class INetworkService(ABC):
 #  An IObjective decides what an assignment costs; an ITripSolver implements
 #  travel(v, T). Implementations are chosen in src/experiment.py.
 # ---------------------------------------------------------------------------
+
+
+class IFleetReplay(ABC):
+    """Moves a fleet along its routes to a batch time (the controller's projection)."""
+
+    @abstractmethod
+    def replay(
+        self,
+        fleet: list[Vehicle],
+        t_now: float,
+        requests: dict[str, Request],
+        stats: ControllerStats,
+        last_processed_time: float,
+    ) -> tuple[set[VehicleAvailability], dict[str, float]]:
+        """
+        Serve the stops each vehicle reaches by t_now, place moving vehicles at
+        the next node of their leg, and return every vehicle's availability and
+        the promised pickup time of each request still on a route. Picked-up
+        requests leave `requests`; deliveries after last_processed_time and
+        vehicle-km go into `stats`. Vehicles are changed in place.
+        """
 
 
 class ITripSolver(ABC):

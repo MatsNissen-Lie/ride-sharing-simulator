@@ -24,6 +24,7 @@ from config import get_logger
 from config.paths import DATA_DIR
 from src.components.assignment_solver import GurobiAssignmentSolver, HighsAssignmentSolver
 from src.components.batch_controller import BatchController
+from src.components.fleet_replay import ArrayFleetReplay, PathFleetReplay
 from src.components.graph_builder.rtv_trip_centric import TripCentricRTVGraphBuilder
 from src.components.graph_builder.rtv_vehicle_centric import VehicleCentricRTVGraphBuilder
 from src.components.graph_builder.rv_builder import RVGraphBuilder
@@ -58,6 +59,7 @@ from src.database.simple_db import DuckDBPathCache
 from src.interfaces import (
     IAssignmentSolver,
     IDemandModel,
+    IFleetReplay,
     IRVGraphBuilder,
     IZoneIndex,
     IFareModel,
@@ -95,6 +97,7 @@ class ExperimentConfig:
     hours: float | None = None  # measured hours after warm-up; None uses config.END_TIME
     max_batches: int | None = None
     controller: str = "batch"
+    fleet_replay: str = "arrays"
     zoning: str = "taxi"
     demand_model: str = "historical"
     objective: str = "delay"
@@ -179,8 +182,13 @@ CONTROLLERS: dict[str, Callable[[Context], IBatchController]] = {
     "batch": lambda ctx: BatchController(
         ctx.network,
         ctx.provider.iter_vehicles(ctx.config.fleet),
+        replay=FLEET_REPLAYS[ctx.config.fleet_replay](ctx),
         fare_model=FARE_MODELS[ctx.config.fare_model](ctx),
     ),
+}
+FLEET_REPLAYS: dict[str, Callable[[Context], IFleetReplay]] = {
+    "arrays": lambda ctx: ArrayFleetReplay(ctx.network),  # leg totals from per-graph arrays
+    "paths": lambda ctx: PathFleetReplay(ctx.network),  # a path object per leg (original)
 }
 ZONINGS: dict[str, Callable[[Context], IZoneIndex]] = {
     "taxi": lambda ctx: ZoneIndex(ctx.provider.graph),
@@ -352,6 +360,7 @@ def run_experiment(cfg: ExperimentConfig) -> Path:
         ("assignment_solver", ASSIGNMENT_SOLVERS),
         ("rebalancing", REBALANCERS),
         ("controller", CONTROLLERS),
+        ("fleet_replay", FLEET_REPLAYS),
         ("zoning", ZONINGS),
         ("demand_model", DEMAND_MODELS),
         ("rv_builder", RV_BUILDERS),
