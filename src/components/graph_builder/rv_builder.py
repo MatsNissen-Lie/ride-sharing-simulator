@@ -101,9 +101,9 @@ class RVGraphBuilder(IRVGraphBuilder):
     ) -> None:
         self._network = network
         self._trip_solver = trip_solver
-        # Vectorised edges for empty and one-passenger vehicles are only valid
-        # when they reproduce the trip solver; otherwise use it for every edge.
-        self._closed_forms = getattr(trip_solver, "matches_rv_closed_forms", False)
+        # Vectorised edges and the occupied-pair filter are only valid when they
+        # reproduce the trip solver (see ITripSolver); otherwise use it for every edge.
+        self._closed_forms = trip_solver.matches_rv_closed_forms
         self._omega = omega
         self._delta = delta
         # Nodes within Omega + NEAR_MARGIN of each node, built on first use.

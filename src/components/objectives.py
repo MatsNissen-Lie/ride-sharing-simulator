@@ -1,5 +1,7 @@
 """Assignment objectives: what a trip assignment and an unserved request cost."""
 
+import numpy as np
+
 from src.interfaces import (
     FeasibleRoute,
     INetworkService,
@@ -44,7 +46,7 @@ class DelayObjective(IObjective):
             penalty *= 2.0
         return penalty
 
-    def rebalancing_cost(self, travel_time: float, distance_m: float) -> float:
+    def rebalancing_cost(self, travel_time: float | np.ndarray, distance_m: float | np.ndarray) -> float | np.ndarray:
         # Not in the paper (rebalancing is separate there): a second of empty
         # driving weighs like a second of passenger delay.
         return self._move_weight * travel_time
@@ -97,5 +99,5 @@ class ProfitObjective(IObjective):
     def unserved_penalty(self, request: Request, current_time: float) -> float:
         return self._promise_penalty if request.promised_pickup_time is not None else 0.0
 
-    def rebalancing_cost(self, travel_time: float, distance_m: float) -> float:
+    def rebalancing_cost(self, travel_time: float | np.ndarray, distance_m: float | np.ndarray) -> float | np.ndarray:
         return self._cost_per_km * distance_m / 1000

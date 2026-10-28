@@ -36,8 +36,8 @@ _BASELINE_CACHE_SIZE = 50_000
 class AStarTripSolver(ITripSolver):
     """Exact travel(v, T) minimising delay, by A* search over stop orders."""
 
-    # The RV builder's vectorised edges for empty and one-passenger vehicles
-    # reproduce this solver exactly (tests/test_graph_builders.py).
+    # See ITripSolver: the RV builder's closed forms reproduce this solver
+    # exactly (tests/test_graph_builders.py).
     matches_rv_closed_forms = True
 
     def __init__(self, time_matrix: np.ndarray):

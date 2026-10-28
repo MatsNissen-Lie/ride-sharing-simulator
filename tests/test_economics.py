@@ -3,11 +3,12 @@
 import itertools
 import random
 
+import numpy as np
 import pytest
 
 from src.components.assignment_solver import GurobiAssignmentSolver, HighsAssignmentSolver
 from src.components.network_service import NetworkXService
-from src.components.objectives import ProfitObjective
+from src.components.objectives import DelayObjective, ProfitObjective
 from src.components.pricing import LinearFareModel
 from src.interfaces import FeasibleRoute, Route, Stop
 from src.interfaces.data_models import MetaRequest
@@ -134,3 +135,15 @@ def test_controller_counts_revenue_and_empty_and_loaded_km(network):
     assert km_empty == pytest.approx(dist[0, 14] / 1000)
     assert km_loaded == pytest.approx(dist[14, 35] / 1000)
     assert revenue == pytest.approx(req.fare)
+
+
+@pytest.mark.parametrize(
+    "make", [lambda net: DelayObjective(move_weight=1.3), lambda net: ProfitObjective(net, cost_per_km=0.37)]
+)
+def test_rebalancing_cost_is_element_wise(network, make):
+    """IObjective contract: solvers score many moves at once, with the same cost per element."""
+    objective = make(network)
+    rng = np.random.default_rng(0)
+    times, dists = rng.uniform(0, 900, 50), rng.uniform(0, 9000, 50)
+    costs = objective.rebalancing_cost(times, dists)
+    assert costs.tolist() == [objective.rebalancing_cost(float(t), float(d)) for t, d in zip(times, dists)]

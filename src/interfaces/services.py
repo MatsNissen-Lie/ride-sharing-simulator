@@ -158,6 +158,14 @@ class IFleetReplay(ABC):
 class ITripSolver(ABC):
     """travel(v, T): the best feasible route for a vehicle serving a set of requests."""
 
+    # True only if the solver serves a stop order exactly when the RV builder's
+    # shortcuts say it can: hard pickup and drop-off deadlines, no waiting, and
+    # leg times added in stop order from the l1 matrix. The RV builder then
+    # computes edges of empty and one-passenger vehicles in closed form and
+    # skips pairs no stop order can serve; otherwise it asks the solver for
+    # every edge.
+    matches_rv_closed_forms: bool = False
+
     @abstractmethod
     def solve(
         self, requests: Iterable[Request], vehicle: VehicleAvailability
@@ -218,8 +226,14 @@ class IObjective(ABC):
         """Cost chi_r of leaving request r unassigned in this batch."""
 
     @abstractmethod
-    def rebalancing_cost(self, travel_time: float, distance_m: float) -> float:
-        """Cost of an empty move (used by solvers that rebalance in the assignment)."""
+    def rebalancing_cost(
+        self, travel_time: float | np.ndarray, distance_m: float | np.ndarray
+    ) -> float | np.ndarray:
+        """
+        Cost of an empty move (used by solvers that rebalance in the assignment).
+        Must work element-wise on arrays as well as on floats, with the same
+        result per element: solvers score many moves at once.
+        """
 
 
 class IRVGraphBuilder(ABC):
