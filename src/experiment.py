@@ -25,7 +25,7 @@ from src.components.graph_builder.rv_builder import RVGraphBuilder
 from src.components.joint_assignment_solver import JointAssignmentSolver, ZeroValue
 from src.components.network_service import NetworkXService
 from src.components.objectives import DelayObjective, ProfitObjective
-from src.components.demand import HistoricalDemandModel
+from src.components.demand import HOLIDAYS, HistoricalDemandModel
 from src.components.fleet_mpc import FleetMpcValue
 from src.components.flat_value import ZoneAveragedValue
 from src.components.mpc_rebalance_solver import MpcRebalancingSolver
@@ -35,6 +35,17 @@ from src.components.oracle_rebalance_solver import OracleRebalancingSolver
 from src.components.zones import ZoneIndex
 from src.components.pricing import LinearFareModel
 from src.components.rebalance_solver import NoRebalancingSolver, ReactiveRebalancingSolver
+from src.components.request_sampler import HistoricalRequestSampler
+from src.components.sampled_assignment_solver import (
+    BidirectionalChainSolver,
+    BidirectionalSampledSolver,
+    FullMatchingChainSolver,
+    FullMatchingSampledSolver,
+    SampledChainAssignmentSolver,
+    SampledRequestsAssignmentSolver,
+    SupplyMatchedChainSolver,
+    SupplyMatchedSampledSolver,
+)
 from src.components.simulation_data_provider import SimulationDataProvider
 from src.components.transport_rebalance_solver import TransportRebalancingSolver
 from src.components.trip_solver import AStarTripSolver
@@ -47,6 +58,7 @@ from src.interfaces import (
     IFareModel,
     IObjective,
     IRebalancingSolver,
+    IRequestSampler,
     IRTVGraphBuilder,
     ITripSolver,
     IVehicleValue,
@@ -83,6 +95,10 @@ class ExperimentConfig:
     oracle_horizon_min: float = 10.0
     demand_horizon_min: float = 15.0  # look-ahead of the demand rebalancer
     vehicle_value: str = "zero"  # V(node, time) used by the joint solver
+    request_sampler: str = "historical"  # virtual future requests for the sampled solver
+    sample_horizon_min: float = 5.0  # look-ahead of the sampled solver
+    virtual_weight: float = 0.05  # weight of a virtual rider relative to a real one
+    virtual_per_free: float = 1.0  # active virtual riders per free vehicle (*-matched solvers)
     travel_time_factor: float = config.TRAVEL_TIME_FACTOR
     read_only: bool = False
 
@@ -109,11 +125,12 @@ class Context:
     @cached_property
     def zone_trips(self) -> ZoneTrips:
         """Destination shares and trip times per pair of zones, without the simulated day."""
-        t0 = self.provider.first_request_time()
-        simulated_day = (t0 + timedelta(seconds=self.start_time)).date()
         return ZoneTrips.fit(
-            self.provider.request_trips(), self.zones, self.network.get_l1_cache(), t0,
-            exclude={simulated_day},
+            self.provider.request_trips(),
+            self.zones,
+            self.network.get_l1_cache(),
+            self.provider.first_request_time(),
+            exclude=self.excluded_days,
         )
 
     @cached_property
@@ -121,15 +138,19 @@ class Context:
         """One instance, shared by the joint solver and rebalancers that follow its plan."""
         return VEHICLE_VALUES[self.config.vehicle_value](self)
 
+    @cached_property
+    def excluded_days(self) -> set[date]:
+        """Every calendar day the run touches; models fitted on history leave them out."""
+        return simulated_days(self.provider.first_request_time(), self.start_time, self.end_time)
+
 
 def _historical_demand(ctx: Context) -> IDemandModel:
     """Fitted on every day except the simulated ones."""
-    t0 = ctx.provider.first_request_time()
     return HistoricalDemandModel.fit(
         ctx.provider.request_table(),
         ctx.zones,
-        t0,
-        exclude=simulated_days(t0, ctx.start_time, ctx.end_time),
+        ctx.provider.first_request_time(),
+        exclude=ctx.excluded_days,
     )
 
 
@@ -202,11 +223,54 @@ VEHICLE_VALUES: dict[str, Callable[[Context], IVehicleValue]] = {
         _mpc(ctx, pooling=MPC_POOLING), np.array(list(ctx.zones.center_node.values()))
     ),
 }
+REQUEST_SAMPLERS: dict[str, Callable[[Context], IRequestSampler]] = {
+    "historical": lambda ctx: HistoricalRequestSampler(
+        ctx.demand,
+        HistoricalRequestSampler.read_trips(ctx.provider.iter_request_files()),
+        ctx.zones,
+        ctx.provider.first_request_time(),
+        ctx.network,
+        exclude={*ctx.excluded_days, *HOLIDAYS},
+    ),
+}
+def _sampled(cls, ctx: Context, objective: IObjective, **kwargs) -> IAssignmentSolver:
+    return cls(
+        objective,
+        ctx.network,
+        ctx.zones,
+        ctx.vehicle_value,
+        REQUEST_SAMPLERS[ctx.config.request_sampler](ctx),
+        horizon=ctx.config.sample_horizon_min * 60,
+        weight=ctx.config.virtual_weight,
+        **kwargs,
+    )
+
+
 ASSIGNMENT_SOLVERS: dict[str, Callable[[Context, IObjective], IAssignmentSolver]] = {
     "gurobi": lambda ctx, objective: GurobiAssignmentSolver(objective),
     "highs": lambda ctx, objective: HighsAssignmentSolver(objective),
     "joint": lambda ctx, objective: JointAssignmentSolver(
         objective, ctx.network, ctx.zones, ctx.vehicle_value
+    ),
+    "sampled": lambda ctx, objective: _sampled(SampledRequestsAssignmentSolver, ctx, objective),
+    "sampled-chain": lambda ctx, objective: _sampled(SampledChainAssignmentSolver, ctx, objective),
+    "sampled-matched": lambda ctx, objective: _sampled(
+        SupplyMatchedSampledSolver, ctx, objective, virtual_per_free=ctx.config.virtual_per_free
+    ),
+    "sampled-chain-matched": lambda ctx, objective: _sampled(
+        SupplyMatchedChainSolver, ctx, objective, virtual_per_free=ctx.config.virtual_per_free
+    ),
+    "sampled-bidir": lambda ctx, objective: _sampled(
+        BidirectionalSampledSolver, ctx, objective, virtual_per_free=ctx.config.virtual_per_free
+    ),
+    "sampled-chain-bidir": lambda ctx, objective: _sampled(
+        BidirectionalChainSolver, ctx, objective, virtual_per_free=ctx.config.virtual_per_free
+    ),
+    "sampled-lsa": lambda ctx, objective: _sampled(
+        FullMatchingSampledSolver, ctx, objective, virtual_per_free=ctx.config.virtual_per_free
+    ),
+    "sampled-chain-lsa": lambda ctx, objective: _sampled(
+        FullMatchingChainSolver, ctx, objective, virtual_per_free=ctx.config.virtual_per_free
     ),
 }
 
@@ -278,6 +342,7 @@ def run_experiment(cfg: ExperimentConfig) -> Path:
         ("demand_model", DEMAND_MODELS),
         ("rv_builder", RV_BUILDERS),
         ("vehicle_value", VEHICLE_VALUES),
+        ("request_sampler", REQUEST_SAMPLERS),
     ]:
         if getattr(cfg, key) not in registry:
             raise ValueError(f"Unknown {key} {getattr(cfg, key)!r}; choose from {list(registry)}")

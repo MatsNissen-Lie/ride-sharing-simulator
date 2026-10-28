@@ -30,11 +30,13 @@ from .services import (
     RTVGraph,
     RVGraph,
 )
+from .sampling import IRequestSampler
 
 __all__ = [
     # SERVICES
     "IRebalancingSolver",
     "IDemandModel",
+    "IRequestSampler",
     "IVehicleValue",
     "IFleetPlan",
     "IZoneIndex",

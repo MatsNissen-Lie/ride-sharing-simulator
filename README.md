@@ -61,9 +61,10 @@ field of `ExperimentConfig`:
 | `trip_solver` | `ITripSolver` | `TRIP_SOLVERS` | astar |
 | `rv_builder` | `IRVGraphBuilder` | `RV_BUILDERS` | standard |
 | `rtv_builder` | `IRTVGraphBuilder` | `RTV_BUILDERS` | trip, vehicle |
-| `assignment_solver` | `IAssignmentSolver` | `ASSIGNMENT_SOLVERS` | gurobi, highs, joint |
-| `vehicle_value` | `IVehicleValue` | `VEHICLE_VALUES` | zero |
-| `rebalancing` | `IRebalancingSolver` | `REBALANCERS` | reactive, demand, transport, oracle, none |
+| `assignment_solver` | `IAssignmentSolver` | `ASSIGNMENT_SOLVERS` | gurobi, highs, joint, sampled-* (stage C option B) |
+| `vehicle_value` | `IVehicleValue` / `IFleetPlan` | `VEHICLE_VALUES` | zero, mpc, mpc_p1, mpc_half, mpc_flat (stage C option C) |
+| `request_sampler` | `IRequestSampler` | `REQUEST_SAMPLERS` | historical |
+| `rebalancing` | `IRebalancingSolver` | `REBALANCERS` | reactive, demand, transport, mpc, oracle, none |
 
 To try a new variant, implement the interface in a new file and register it;
 it is then selectable from `ExperimentConfig` (and the command line for the

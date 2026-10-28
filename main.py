@@ -7,6 +7,7 @@ from src.experiment import (
     ASSIGNMENT_SOLVERS,
     OBJECTIVES,
     REBALANCERS,
+    REQUEST_SAMPLERS,
     RTV_BUILDERS,
     TRIP_SOLVERS,
     VEHICLE_VALUES,
@@ -58,6 +59,30 @@ def parse_args() -> ExperimentConfig:
         help="Value of where vehicles end up, used by --solver joint.",
     )
     parser.add_argument(
+        "--request-sampler",
+        choices=REQUEST_SAMPLERS,
+        default=DEFAULTS.request_sampler,
+        help="Virtual future requests, used by --solver sampled.",
+    )
+    parser.add_argument(
+        "--sample-horizon",
+        type=float,
+        default=DEFAULTS.sample_horizon_min,
+        help="Look-ahead of --solver sampled in minutes.",
+    )
+    parser.add_argument(
+        "--virtual-weight",
+        type=float,
+        default=DEFAULTS.virtual_weight,
+        help="Weight of a virtual rider relative to a real one (--solver sampled).",
+    )
+    parser.add_argument(
+        "--virtual-per-free",
+        type=float,
+        default=DEFAULTS.virtual_per_free,
+        help="Active virtual riders per free vehicle (--solver sampled-matched, sampled-chain-matched).",
+    )
+    parser.add_argument(
         "--rebalancing",
         choices=REBALANCERS,
         default=DEFAULTS.rebalancing,
@@ -86,6 +111,10 @@ def parse_args() -> ExperimentConfig:
         rtv_builder=a.rtv,
         assignment_solver=a.solver,
         vehicle_value=a.vehicle_value,
+        request_sampler=a.request_sampler,
+        sample_horizon_min=a.sample_horizon,
+        virtual_weight=a.virtual_weight,
+        virtual_per_free=a.virtual_per_free,
         rebalancing=a.rebalancing,
         oracle_horizon_min=a.horizon,
         travel_time_factor=a.travel_time_factor,
