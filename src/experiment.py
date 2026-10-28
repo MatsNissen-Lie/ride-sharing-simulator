@@ -115,6 +115,7 @@ class ExperimentConfig:
     request_sampler: str = "historical"  # virtual future requests for the sampled solver
     sample_horizon_min: float = 5.0  # look-ahead of the sampled solver
     virtual_weight: float = 0.05  # weight of a virtual rider relative to a real one
+    vehicle_value_weight: float = 1.0  # scales the fleet-MPC values (0 = paper's ILP with MPC moves)
     virtual_per_free: float = 1.0  # active virtual riders per free vehicle (*-matched solvers)
     travel_time_factor: float = config.TRAVEL_TIME_FACTOR
     read_only: bool = False
@@ -239,7 +240,7 @@ def _mpc(ctx: Context, **kwargs) -> IVehicleValue:
 
 VEHICLE_VALUES: dict[str, Callable[[Context], IVehicleValue]] = {
     "zero": lambda ctx: ZeroValue(),
-    "mpc": lambda ctx: _mpc(ctx, pooling=MPC_POOLING),
+    "mpc": lambda ctx: _mpc(ctx, pooling=MPC_POOLING, weight=ctx.config.vehicle_value_weight),
     "mpc_p1": lambda ctx: _mpc(ctx, pooling=1.0),
     "mpc_half": lambda ctx: _mpc(ctx, pooling=MPC_POOLING, weight=0.5),
     "mpc_flat": lambda ctx: ZoneAveragedValue(

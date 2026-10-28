@@ -84,6 +84,12 @@ def parse_args() -> ExperimentConfig:
         help="Weight of a virtual rider relative to a real one (--solver sampled).",
     )
     parser.add_argument(
+        "--vehicle-value-weight",
+        type=float,
+        default=DEFAULTS.vehicle_value_weight,
+        help="Scale of the fleet-MPC values in the joint ILP (--vehicle-value mpc).",
+    )
+    parser.add_argument(
         "--virtual-per-free",
         type=float,
         default=DEFAULTS.virtual_per_free,
@@ -125,6 +131,7 @@ def parse_args() -> ExperimentConfig:
         request_sampler=a.request_sampler,
         sample_horizon_min=a.sample_horizon,
         virtual_weight=a.virtual_weight,
+        vehicle_value_weight=a.vehicle_value_weight,
         virtual_per_free=a.virtual_per_free,
         rebalancing=a.rebalancing,
         oracle_horizon_min=a.horizon,
