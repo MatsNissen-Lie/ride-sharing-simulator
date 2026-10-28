@@ -33,6 +33,8 @@ from src.components.request_sampler import HistoricalRequestSampler
 from src.components.sampled_assignment_solver import (
     BidirectionalChainSolver,
     BidirectionalSampledSolver,
+    FullMatchingChainSolver,
+    FullMatchingSampledSolver,
     SampledChainAssignmentSolver,
     SampledRequestsAssignmentSolver,
     SupplyMatchedChainSolver,
@@ -172,6 +174,12 @@ ASSIGNMENT_SOLVERS: dict[str, Callable[[Context, IObjective], IAssignmentSolver]
     ),
     "sampled-chain-bidir": lambda ctx, objective: _sampled(
         BidirectionalChainSolver, ctx, objective, virtual_per_free=ctx.config.virtual_per_free
+    ),
+    "sampled-lsa": lambda ctx, objective: _sampled(
+        FullMatchingSampledSolver, ctx, objective, virtual_per_free=ctx.config.virtual_per_free
+    ),
+    "sampled-chain-lsa": lambda ctx, objective: _sampled(
+        FullMatchingChainSolver, ctx, objective, virtual_per_free=ctx.config.virtual_per_free
     ),
 }
 

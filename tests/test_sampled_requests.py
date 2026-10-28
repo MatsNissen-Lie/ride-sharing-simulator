@@ -18,6 +18,7 @@ from src.components.request_sampler import HistoricalRequestSampler
 from src.components.sampled_assignment_solver import (
     BidirectionalChainSolver,
     BidirectionalSampledSolver,
+    FullMatchingSampledSolver,
     SampledChainAssignmentSolver,
     SampledRequestsAssignmentSolver,
     SupplyMatchedSampledSolver,
@@ -299,3 +300,14 @@ def test_chain_supply_counts_vehicles_free_within_the_horizon(network):
     solver = BidirectionalChainSolver(DelayObjective(), network, Zones(), ZeroValue(), FixedSampler())
     assert solver._supply({busy, idle("a", 0)}, T_NOW) == 2
     assert solver._supply({busy, idle("a", 0)}, T_NOW - 1000) == 1
+
+
+def test_full_matching_moves_every_vehicle_of_a_cluster(network):
+    """Three vehicles on one node, one option each: top-k alone moves one, the matching all three."""
+    vehicles = {idle(f"v{k}", 0, T_NOW) for k in range(3)}
+    riders = [virtual(network, k, node, dt=200) for k, node in enumerate([1, 6, 35])]
+    rtv = instance(network, vehicles, [])
+    args = (DelayObjective(), network, Zones(), ZeroValue(), FixedSampler(riders))
+    kw = {"n_virtual": 1, "virtual_per_free": 1.0}
+    assert len(SupplyMatchedSampledSolver(*args, **kw).solve(rtv, set(), vehicles, 30, T_NOW).rebalancing) == 1
+    assert len(FullMatchingSampledSolver(*args, **kw).solve(rtv, set(), vehicles, 30, T_NOW).rebalancing) == 3

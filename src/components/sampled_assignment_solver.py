@@ -1,6 +1,7 @@
 """Joint assignment with sampled future requests (scenario look-ahead)."""
 
 import numpy as np
+from scipy.optimize import linear_sum_assignment
 
 from config import get_logger
 from src.components.joint_assignment_solver import JointAssignmentSolver
@@ -352,8 +353,7 @@ class Bidirectional(SupplyMatched):
     SupplyMatched, and every active virtual rider is also offered to its
     `n_virtual` best free vehicles (not only every vehicle its best riders),
     so that free vehicles clustered in a quiet zone are not all left with the
-    same few nearby riders. For chains, supply also counts busy vehicles whose
-    current plan ends within the horizon, since they can claim riders too.
+    same few nearby riders.
     """
 
     def _candidates(self, gain):
@@ -372,12 +372,28 @@ class SupplyMatchedChainSolver(SupplyMatched, SampledChainAssignmentSolver):
     """`sampled-chain` with about `virtual_per_free` virtual riders per free vehicle."""
 
 
+class FullMatching(SupplyMatched):
+    """
+    SupplyMatched, and the columns always contain a complete min-cost matching
+    of free vehicles to active virtual riders (Hungarian method on the full
+    gain matrix) besides each vehicle's `n_virtual` best riders. With top-k
+    columns alone, vehicles clustered at the same few nodes share the same
+    nearest riders, so the ILP can move only a fraction of them.
+    """
+
+    def _candidates(self, gain):
+        keep = super()._candidates(gain)
+        rows, cols = linear_sum_assignment(np.where(gain > 0, -gain, 0.0))
+        keep[rows, cols] = True
+        return keep & (gain > 0)
+
+
 class BidirectionalSampledSolver(Bidirectional, SampledRequestsAssignmentSolver):
     """`sampled-matched` with columns chosen from both sides."""
 
 
-class BidirectionalChainSolver(Bidirectional, SampledChainAssignmentSolver):
-    """`sampled-chain-matched` with columns from both sides; supply includes vehicles free within the horizon."""
+class SoonFreeSupply:
+    """Mixin for matched chain solvers: supply also counts busy vehicles free within the horizon."""
 
     def _supply(self, vehicles, current_time):
         soon = sum(
@@ -386,3 +402,15 @@ class BidirectionalChainSolver(Bidirectional, SampledChainAssignmentSolver):
             and self._free_at(v, v.remaining_stops_to_serve)[1] <= current_time + self._horizon
         )
         return super()._supply(vehicles, current_time) + soon
+
+
+class BidirectionalChainSolver(SoonFreeSupply, Bidirectional, SampledChainAssignmentSolver):
+    """`sampled-chain-matched` with columns from both sides; supply includes vehicles free within the horizon."""
+
+
+class FullMatchingSampledSolver(FullMatching, SampledRequestsAssignmentSolver):
+    """`sampled-matched` whose columns contain a full matching of free vehicles to active riders."""
+
+
+class FullMatchingChainSolver(SoonFreeSupply, FullMatching, SampledChainAssignmentSolver):
+    """`sampled-chain-matched` whose columns contain a full matching; supply includes vehicles free within the horizon."""
