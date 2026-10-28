@@ -34,12 +34,15 @@ class JointAssignmentSolver(HighsAssignmentSolver):
 
         c'_{T,v} = c_{T,v}           - V(end of T)      + U_v
         c'_{z,v} = move_cost(v -> z) - V(zone z centre)  + U_v
-        U_v      = V(end of current plan) - cost of the move it is still making
+        U_v      = V(end of current plan)
 
+    A move already in progress counts as decided: the rest of it is not
+    credited to the other options, so with V = 0 a vehicle is never moved
+    elsewhere just because a nearer zone is cheaper than finishing its move.
     Only the `n_moves` best moves per vehicle with a positive gain become
     columns; moves longer than `max_move` seconds are not considered. With
-    V = 0 no move has a gain and trip costs are unchanged (for vehicles not
-    already rebalancing), so the ILP is the paper's.
+    V = 0 no move has a gain and trip costs are unchanged, so the ILP is the
+    paper's.
     """
 
     def __init__(
@@ -84,24 +87,14 @@ class JointAssignmentSolver(HighsAssignmentSolver):
         return node, t
 
     def _current_plan_values(self, vehicles: set[VehicleAvailability]) -> dict[str, float]:
-        ids, nodes, times, sunk = [], [], [], []
-        dist = self._network.get_distance_matrix()
+        ids, nodes, times = [], [], []
         for v in vehicles:
-            stops = v.remaining_stops_to_serve
-            node, t = self._end_state(v, stops)
+            node, t = self._end_state(v, v.remaining_stops_to_serve)
             ids.append(v.vehicle_id)
             nodes.append(node)
             times.append(t)
-            moving = bool(stops) and all(s.is_rebalancing for s in stops)
-            sunk.append(
-                self._objective.rebalancing_cost(
-                    t - v.available_from_time, dist[v.available_at_node, node]
-                )
-                if moving
-                else 0.0
-            )
         value = self._value.values(np.array(nodes, dtype=np.int64), np.array(times), self._t_now)
-        return {i: float(val - c) for i, val, c in zip(ids, value, sunk)}
+        return {i: float(val) for i, val in zip(ids, value)}
 
     def _edge_costs(self, rtv_graph, requests, vehicles) -> dict[tuple[TripId, str], float]:
         costs = super()._edge_costs(rtv_graph, requests, vehicles)

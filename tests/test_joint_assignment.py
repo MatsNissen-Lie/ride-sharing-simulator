@@ -129,3 +129,27 @@ def test_simulation_with_moves_keeps_every_deadline(network):
                      lambda: joint(network, value, max_move=1e6), rebalancer=NoRebalancingSolver())
     assert sum(b.vehicles_rebalanced for b in batches) > 0
     assert sum(b.requests_delivered for b in batches) > 50
+
+
+def test_zero_value_never_cuts_a_move_in_progress(network):
+    """A vehicle heading to a far zone is not redirected to a nearer one (bug found in stage C)."""
+    from src.interfaces import Stop
+
+    moving = VehicleAvailability("m", 4, 0, T_NOW, frozenset(), (Stop.zone_move(35, 9),))
+    vehicles = {moving, idle("i", 3)}
+    result = joint(network, ZeroValue(), max_move=1e6).solve(
+        instance(network, vehicles, []), set(), vehicles, 30, T_NOW
+    )
+    assert result.rebalancing == {}
+
+
+@pytest.mark.parametrize("seed", range(2))
+def test_zero_value_with_a_fallback_rebalancer_matches_the_paper(network, seed):
+    from src.components.rebalance_solver import ReactiveRebalancingSolver
+
+    plain, _ = run(network, TripCentricRTVGraphBuilder, HighsAssignmentSolver, seed=seed,
+                   rebalancer=ReactiveRebalancingSolver(network))
+    combined, _ = run(network, TripCentricRTVGraphBuilder, zero_joint(network), seed=seed,
+                      rebalancer=ReactiveRebalancingSolver(network))
+    assert [b.requests_delivered for b in combined] == [b.requests_delivered for b in plain]
+    assert [b.vehicles_rebalanced for b in combined] == [b.vehicles_rebalanced for b in plain]
