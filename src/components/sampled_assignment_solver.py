@@ -269,21 +269,29 @@ class SampledChainAssignmentSolver(SampledRequestsAssignmentSolver):
         if not bases or not self.virtual:
             return options
         ends = [self._free_at(veh[v_id], stops) for _, v_id, stops in bases]
-        nodes, times = [n for n, _ in ends], np.array([t for _, t in ends])
-        pickups = [q.origin_node for q in self.virtual]
+        nodes, times = np.array([n for n, _ in ends]), np.array([t for _, t in ends])
+        pickups = np.array([q.origin_node for q in self.virtual])
+        t_request = np.array([q.request_time for q in self.virtual])
         deadline = self._deadlines()
-        k = min(self._n_chain, len(pickups))
-        for lo in range(0, len(bases), self._chunk):
-            rows = slice(lo, lo + self._chunk)
-            travel = self._net.get_travel_time_matrix(nodes[rows], pickups)
-            dist = self._net.get_distance_matrix()[np.ix_(nodes[rows], pickups)]
+        # Most trips end after every virtual deadline: skip them, and give each
+        # chunk of options (sorted by end time) only the riders it could reach.
+        by_end = np.argsort(times)
+        by_end = by_end[times[by_end] < deadline.max()]
+        by_deadline = np.argsort(deadline)
+        for lo in range(0, len(by_end), self._chunk):
+            rows = by_end[lo : lo + self._chunk]
+            cols = by_deadline[np.searchsorted(deadline[by_deadline], times[rows[0]], side="right") :]
+            travel = self._net.get_travel_time_matrix(nodes[rows], pickups[cols])
+            dist = self._net.get_distance_matrix()[np.ix_(nodes[rows], pickups[cols])]
             arrival = times[rows, None] + travel
-            extra = self._weight * (self._costs.rebalancing_cost(travel, dist) + self._wait(arrival))
-            extra[~(arrival <= deadline[None, :])] = np.inf
+            wait = np.maximum(arrival - t_request[cols][None, :], 0.0)
+            extra = self._weight * (self._costs.rebalancing_cost(travel, dist) + wait)
+            extra[~(arrival <= deadline[cols][None, :])] = np.inf
+            k = min(self._n_chain, len(cols))
             for i, best in enumerate(np.argpartition(extra, k - 1, axis=1)[:, :k]):
-                trip, v_id, stops = bases[lo + i]
+                trip, v_id, stops = bases[rows[i]]
                 for j in best[np.isfinite(extra[i, best])]:
-                    q = self.virtual[j]
+                    q = self.virtual[cols[j]]
                     route = Route((*stops, Stop(q.origin_node, True, q.id)), 0.0, 0.0, 0.0)
                     options[(trip | {q.id}, v_id)] = (FeasibleRoute(route, 0.0), float(extra[i, j]))
         return options
