@@ -78,12 +78,13 @@ from src.utils.generate_plots import generate_plots
 from src.utils.output_manager import SimulationOutputManager
 from src.utils.stats_logger import SimulationStatsLogger
 from src.utils.timing import (
-    TIMER,
+    Timer,
     TimingLog,
     format_summary,
     summarize,
     time_garbage_collection,
     timed,
+    using_timer,
 )
 
 logger = get_logger(__name__)
@@ -381,7 +382,11 @@ def run_experiment(cfg: ExperimentConfig) -> Path:
     # batches (20% of the run). Collection does not change results.
     gc.set_threshold(50_000, 20, 20)
     time_garbage_collection()
-    TIMER.take()  # drop anything timed before this run
+    with using_timer(Timer()) as timer:  # this run's sections only
+        return _run(cfg, timer)
+
+
+def _run(cfg: ExperimentConfig, timer: Timer) -> Path:
     with timed("setup"):
         with timed("data"):  # graph and fleet; requests are read lazily
             provider = SimulationDataProvider()
@@ -410,7 +415,7 @@ def run_experiment(cfg: ExperimentConfig) -> Path:
             )
 
     timing = TimingLog()
-    timing.add("setup", 0, TIMER.take())
+    timing.add("setup", 0, timer.take())
     profiler = cProfile.Profile() if cfg.profile else None
     stats_logger = SimulationStatsLogger()
     try:
@@ -453,7 +458,7 @@ def run_experiment(cfg: ExperimentConfig) -> Path:
                 generate_plots(csv_path)
         else:
             logger.warning("No stats CSV found, skipping plot generation.")
-    timing.add("end", 0, TIMER.take())
+    timing.add("end", 0, timer.take())
     _save_timing(timing, run_dir)
     return run_dir
 

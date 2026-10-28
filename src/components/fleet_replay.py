@@ -16,10 +16,17 @@ from abc import abstractmethod
 from collections.abc import Iterator
 
 from config.logging import get_logger
-from src.interfaces import INetworkService, Passenger, Request, Vehicle, VehicleAvailability
+from src.interfaces import (
+    Delivery,
+    INetworkService,
+    Passenger,
+    ReplayResult,
+    Request,
+    Vehicle,
+    VehicleAvailability,
+)
 from src.interfaces.data_models import Route
 from src.interfaces.services import IFleetReplay
-from src.interfaces.stats import ControllerStats
 
 logger = get_logger(__name__)
 
@@ -39,13 +46,8 @@ class FleetReplay(IFleetReplay):
         """(node, travel time of the edge into it) along that path, lazily."""
 
     def replay(
-        self,
-        fleet: list[Vehicle],
-        t_now: float,
-        requests: dict[str, Request],
-        stats: ControllerStats,
-        last_processed_time: float,
-    ) -> tuple[set[VehicleAvailability], dict[str, float]]:
+        self, fleet: list[Vehicle], t_now: float, requests: dict[str, Request]
+    ) -> ReplayResult:
         """
         For each Vehicle in the fleet, compute an immutable
         VehicleAvailability snapshot at batch time t_now:
@@ -58,14 +60,16 @@ class FleetReplay(IFleetReplay):
                 available_from_time = (arrival time at that node) ≥ t_now.
             * Trim served stops; update passengers_onboard accordingly.
 
-        Picked-up requests leave `requests`; deliveries after
-        last_processed_time and vehicle-km are added to `stats`. Returns the
-        snapshots and the promised pickup time of each request still on a route.
+        Picked-up requests leave `requests`. Returns the snapshots, the
+        promised pickup time of each request still on a route, and every
+        stretch driven and drop-off, in order.
         """
 
         snapshots: set[VehicleAvailability] = set()
         # (request_id -> promised_pickup_time)
         last_promised: dict[str, float] = {}
+        driven: list[tuple[float, bool]] = []
+        deliveries: list[Delivery] = []
 
         def get_path(u: int, v: int) -> tuple[float, float]:
             """Travel time and distance of the fastest path from u to v."""
@@ -127,7 +131,7 @@ class FleetReplay(IFleetReplay):
 
                 if arrival <= vehicle_t_now:
                     # Fully reach this stop before or at vehicle_t_now → serve it
-                    self._count_distance(stats, travel_distance, loaded=bool(onboard))
+                    driven.append((travel_distance, bool(onboard)))
                     cur_time = arrival
                     cur_node = stop.node
 
@@ -151,40 +155,8 @@ class FleetReplay(IFleetReplay):
                             None,
                         )
 
-                        # Track stats if this is a new event
-                        if passenger and cur_time > last_processed_time:
-                            req = passenger.original_request
-
-                            # Validating constraint
-                            if cur_time > req.latest_dropoff_time + 1e-6:  # float tolerance
-                                raise RuntimeError(
-                                    f"HARD CONSTRAINT VIOLATION: Request {req.id} dropped off at {cur_time:.2f} "
-                                    f"but latest_dropoff_time is {req.latest_dropoff_time:.2f}. "
-                                    f"Delay: {cur_time - req.latest_dropoff_time:.2f}s"
-                                )
-
-                            wait_time = passenger.pickup_time - req.request_time
-
-                            direct_travel_time = self._network.get_travel_time(
-                                req.origin_node, req.destination_node
-                            )
-                            # Fallback if path not found (though it should be)
-                            if direct_travel_time == float("inf"):
-                                logger.warning(
-                                    f"Could not calc direct travel time for req {req.id}"
-                                )
-                                direct_travel_time = (
-                                    0.0  # Should not happen in connected graph
-                                )
-
-                            total_delay = (
-                                cur_time - req.request_time - direct_travel_time
-                            )
-
-                            stats.delivered_count += 1
-                            stats.sum_wait_time += wait_time
-                            stats.sum_total_delay += total_delay
-                            stats.revenue += req.fare
+                        if passenger:
+                            deliveries.append(Delivery(passenger, cur_time))
 
                         onboard = {
                             p for p in onboard if p.original_request.id != target_id
@@ -209,9 +181,7 @@ class FleetReplay(IFleetReplay):
 
                 if anchor_node != cur_node:
                     # Distance driven so far on this leg (a prefix of a shortest path).
-                    self._count_distance(stats, 
-                        get_path(cur_node, anchor_node)[1], loaded=bool(onboard)
-                    )
+                    driven.append((get_path(cur_node, anchor_node)[1], bool(onboard)))
 
                 if anchor_time < vehicle_t_now:
                     raise ValueError(
@@ -314,7 +284,7 @@ class FleetReplay(IFleetReplay):
                     f"Vehicle {snapshot.vehicle_id} projected availability {snapshot.available_from_time} is before batch time {t_now}"
                 )
 
-        return snapshots, last_promised
+        return ReplayResult(snapshots, last_promised, driven, deliveries)
 
     def _snap_to_next_node_on_leg(
         self,
@@ -365,13 +335,6 @@ class FleetReplay(IFleetReplay):
                 f"leg_start={leg_start_time}, leg={origin}->{destination}"
             )
         return node, t
-
-    @staticmethod
-    def _count_distance(stats: ControllerStats, metres: float, loaded: bool) -> None:
-        if loaded:
-            stats.km_loaded += metres / 1000
-        else:
-            stats.km_empty += metres / 1000
 
 
 class PathFleetReplay(FleetReplay):

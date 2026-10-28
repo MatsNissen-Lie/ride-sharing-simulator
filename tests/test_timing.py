@@ -1,18 +1,19 @@
 """Timing sections nest, reset on take, and the summary accounts for every second."""
 
 import gc
+import threading
 import time
 
 import pytest
 
 from src.utils.timing import (
-    TIMER,
     UNTIMED,
     Timer,
     TimingLog,
     summarize,
     time_garbage_collection,
     timed,
+    using_timer,
 )
 
 
@@ -57,7 +58,28 @@ def test_summary_shares_and_untimed_remainder():
 
 def test_garbage_collection_is_recorded_in_the_open_section():
     time_garbage_collection()
-    TIMER.take()
-    with timed("outer"):
+    with using_timer(Timer()) as timer, timed("outer"):
         gc.collect()
-    assert "outer/gc" in TIMER.take()
+    assert "outer/gc" in timer.take()
+
+
+def test_runs_record_in_their_own_timer():
+    """Each run's sections go to the timer it installed, also across threads."""
+    def run(name, out):
+        with using_timer(Timer()) as timer:
+            with timed(name):
+                time.sleep(0.01)
+            out[name] = timer.take()
+
+    out = {}
+    threads = [threading.Thread(target=run, args=(n, out)) for n in ("a", "b")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    with using_timer(Timer()) as outer:
+        run("c", out)
+        with timed("d"):
+            pass
+    assert {n: set(t) for n, t in out.items()} == {"a": {"a"}, "b": {"b"}, "c": {"c"}}
+    assert set(outer.take()) == {"d"}

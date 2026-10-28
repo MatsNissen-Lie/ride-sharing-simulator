@@ -299,3 +299,27 @@ class AssignmentResult:
     # Moves for idle vehicles chosen together with the assignment (joint
     # solvers); the separate rebalancer only sees vehicles not listed here.
     rebalancing: dict[str, "Route"] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Delivery:
+    """A rider dropped off during a fleet replay."""
+
+    passenger: Passenger
+    dropoff_time: float
+
+
+@dataclass
+class ReplayResult:
+    """
+    What a fleet replay saw up to the batch time, in the order it happened, for
+    the controller to record (the replay itself keeps no statistics).
+
+    driven: (metres, riders on board?) of every stretch driven, in order.
+    deliveries: every drop-off, in order.
+    """
+
+    snapshots: set[VehicleAvailability]
+    promised_pickups: dict[str, float]  # request id -> promised pickup time, for riders still on a route
+    driven: list[tuple[float, bool]] = field(default_factory=list)
+    deliveries: list[Delivery] = field(default_factory=list)

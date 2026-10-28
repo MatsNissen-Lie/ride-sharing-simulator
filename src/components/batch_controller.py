@@ -10,6 +10,7 @@ from src.interfaces.batch_control import IBatchController
 from src.interfaces import (
     VehicleAvailability,
     AssignmentResult,
+    Delivery,
     IFareModel,
     IFleetReplay,
     INetworkService,
@@ -78,10 +79,48 @@ class BatchController(IBatchController):
     def _project_fleet(
         self, t_now: float
     ) -> Tuple[Set[VehicleAvailability], dict[str, float]]:
-        """Move the fleet to t_now (the replay component; see IFleetReplay)."""
-        return self._replay.replay(
-            self._fleet, t_now, self._request_index, self._current_stats, self._last_processed_time
-        )
+        """Move the fleet to t_now (the replay component; see IFleetReplay) and
+        record what it drove and delivered."""
+        result = self._replay.replay(self._fleet, t_now, self._request_index)
+        stats = self._current_stats
+        for metres, loaded in result.driven:
+            if loaded:
+                stats.km_loaded += metres / 1000
+            else:
+                stats.km_empty += metres / 1000
+        for delivery in result.deliveries:
+            # Only new events: a replay can see drop-offs already counted.
+            if delivery.dropoff_time > self._last_processed_time:
+                self._record_delivery(delivery)
+        return result.snapshots, result.promised_pickups
+
+    def _record_delivery(self, delivery: Delivery) -> None:
+        passenger, cur_time = delivery.passenger, delivery.dropoff_time
+        stats = self._current_stats
+        req = passenger.original_request
+
+        # Validating constraint
+        if cur_time > req.latest_dropoff_time + 1e-6:  # float tolerance
+            raise RuntimeError(
+                f"HARD CONSTRAINT VIOLATION: Request {req.id} dropped off at {cur_time:.2f} "
+                f"but latest_dropoff_time is {req.latest_dropoff_time:.2f}. "
+                f"Delay: {cur_time - req.latest_dropoff_time:.2f}s"
+            )
+
+        wait_time = passenger.pickup_time - req.request_time
+
+        direct_travel_time = self._network.get_travel_time(req.origin_node, req.destination_node)
+        # Fallback if path not found (though it should be)
+        if direct_travel_time == float("inf"):
+            logger.warning(f"Could not calc direct travel time for req {req.id}")
+            direct_travel_time = 0.0  # Should not happen in connected graph
+
+        total_delay = cur_time - req.request_time - direct_travel_time
+
+        stats.delivered_count += 1
+        stats.sum_wait_time += wait_time
+        stats.sum_total_delay += total_delay
+        stats.revenue += req.fare
 
     def convert_meta_requests(self, new_meta: Iterable[MetaRequest]) -> Set[Request]:
         converted: Set[Request] = set()

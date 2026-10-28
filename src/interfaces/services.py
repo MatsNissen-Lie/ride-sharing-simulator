@@ -9,12 +9,12 @@ from src.interfaces.data_models import (
     Route,
     NetworkPath,
     NetworkPathExtended,
+    ReplayResult,
     Request,
     Vehicle,
     VehicleAvailability,
 )
 from src.interfaces.graphs import RTVGraph, RVGraph
-from src.interfaces.stats import ControllerStats
 
 
 class INetworkService(ABC):
@@ -139,19 +139,15 @@ class IFleetReplay(ABC):
 
     @abstractmethod
     def replay(
-        self,
-        fleet: list[Vehicle],
-        t_now: float,
-        requests: dict[str, Request],
-        stats: ControllerStats,
-        last_processed_time: float,
-    ) -> tuple[set[VehicleAvailability], dict[str, float]]:
+        self, fleet: list[Vehicle], t_now: float, requests: dict[str, Request]
+    ) -> ReplayResult:
         """
         Serve the stops each vehicle reaches by t_now, place moving vehicles at
-        the next node of their leg, and return every vehicle's availability and
-        the promised pickup time of each request still on a route. Picked-up
-        requests leave `requests`; deliveries after last_processed_time and
-        vehicle-km go into `stats`. Vehicles are changed in place.
+        the next node of their leg, and return every vehicle's availability,
+        the promised pickup time of each request still on a route, and what
+        was driven and delivered on the way. Picked-up requests leave
+        `requests`; vehicles are changed in place. Statistics are the
+        controller's to keep.
         """
 
 

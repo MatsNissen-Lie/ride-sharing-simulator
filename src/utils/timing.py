@@ -7,9 +7,12 @@
             ...
 
 A section opened inside another is recorded under the path "outer/inner", so a
-report shows a total and its parts. The run loop calls `TIMER.take()` after
-setup, after every batch and at the end, so every second of the run lands in
-exactly one record (`timing.csv` in the run folder). Time phases with it, not
+report shows a total and its parts. Sections go to the current timer: each run
+installs its own with `using_timer`, so runs never mix (also not runs in other
+threads). The run loop calls its timer's `take()` after setup, after every batch
+and at the end, so every second of the run lands in exactly one record
+(`timing.csv` in the run folder). Outside a run, sections go to a fallback
+timer that nobody reads. Time phases with it, not
 code that runs thousands of times per batch: a section costs about a microsecond.
 
     uv run python scripts/analysis/timing_report.py reports/<run>
@@ -17,6 +20,9 @@ code that runs thousands of times per batch: a section costs about a microsecond
 
 import gc
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 import polars as pl
 
@@ -75,12 +81,27 @@ class Timer:
         return taken
 
 
-TIMER = Timer()
+_current: ContextVar[Timer] = ContextVar("timer", default=Timer())
+
+
+def current_timer() -> Timer:
+    """The timer that sections are recorded in here (thread and context local)."""
+    return _current.get()
+
+
+@contextmanager
+def using_timer(timer: Timer) -> Iterator[Timer]:
+    """Record the sections timed inside the block (in this thread) in `timer`."""
+    token = _current.set(timer)
+    try:
+        yield timer
+    finally:
+        _current.reset(token)
 
 
 def timed(name: str) -> Section:
     """Time a block as a section of the run (nested in any open section)."""
-    return TIMER.section(name)
+    return _current.get().section(name)
 
 
 def record(name: str, since: float) -> None:
@@ -88,7 +109,7 @@ def record(name: str, since: float) -> None:
 
     For a stretch of code that a with-block would have to re-indent.
     """
-    TIMER.record(name, time.perf_counter() - since)
+    _current.get().record(name, time.perf_counter() - since)
 
 
 def time_garbage_collection() -> None:
@@ -107,7 +128,7 @@ def _on_gc(phase: str, info: dict) -> None:
     if phase == "start":
         _gc_start = time.perf_counter()
     else:
-        TIMER.record("gc", time.perf_counter() - _gc_start)
+        _current.get().record("gc", time.perf_counter() - _gc_start)
 
 
 class TimingLog:

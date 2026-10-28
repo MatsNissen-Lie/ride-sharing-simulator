@@ -25,7 +25,7 @@ from src.components.simulation_data_provider import SimulationDataProvider
 from src.interfaces.stats import BatchStatistics
 from src.utils.rtv_plot import plot_rtv_graph
 from src.utils.rv_plot import plot_rv_graph
-from src.utils.timing import TIMER, record, timed
+from src.utils.timing import current_timer, record, timed
 
 logger = get_logger(__name__)
 
@@ -78,7 +78,7 @@ class Simulator:
                 )
             if batch_stats is None:
                 break
-            batch_stats.timings = TIMER.take()
+            batch_stats.timings = current_timer().take()
             yield batch_stats
 
     def _run_batch(
