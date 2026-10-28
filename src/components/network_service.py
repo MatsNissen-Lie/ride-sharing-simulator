@@ -1,8 +1,12 @@
+import hashlib
 import itertools
+import os
 from array import array
 from typing import Iterable
 import time
 from functools import lru_cache
+from pathlib import Path
+
 import networkx as nx
 import numpy as np
 from scipy.sparse import csr_matrix
@@ -31,12 +35,17 @@ class NetworkXService(INetworkService):
         max_node_id: int | None = None,
         prefetch: bool = True,
         travel_time_factor: float = 1.0,
+        tree_cache_dir: Path | None = None,
     ):
         """
         travel_time_factor scales every travel time this service hands out
         (matrix, paths, single lookups) relative to the free-flow times in the
         graph and database, e.g. 2.9 for Manhattan evening traffic. The stored
         database is never changed.
+
+        With tree_cache_dir, the shortest-path trees of all origins are computed
+        once per graph and kept there (named by a hash of the edge weights);
+        otherwise each origin's tree is computed when first needed.
         """
         if graph is not None and not isinstance(graph, nx.MultiDiGraph):
             raise TypeError("NetworkXService requires an nx.MultiDiGraph")
@@ -46,6 +55,8 @@ class NetworkXService(INetworkService):
         self.travel_time_factor = travel_time_factor
         self._adjacency: csr_matrix | None = None  # fastest edge per node pair
         self._predecessors: dict[int, array] = {}  # shortest-path tree per origin
+        self._tree_cache_dir = tree_cache_dir
+        self._trees: np.ndarray | None = None  # all trees, from tree_cache_dir
         self._fastest: dict[tuple[int, int], tuple[float, float]] | None = None
         self._fastest_scaled: dict[tuple[int, int], tuple[float, float]] = {}
         self._distances_loaded = False
@@ -275,7 +286,12 @@ class NetworkXService(INetworkService):
                 self._adjacency = csr_matrix(
                     (list(times.values()), (rows, cols)), shape=(self.N, self.N)
                 )
-            _, tree = dijkstra(self._adjacency, indices=origin, return_predecessors=True)
+            if self._tree_cache_dir is not None and self._trees is None:
+                self._trees = self._all_trees()
+            if self._trees is not None:
+                tree = self._trees[origin]
+            else:
+                _, tree = dijkstra(self._adjacency, indices=origin, return_predecessors=True)
             pred = array("i", tree.astype(np.int32).tobytes())  # fast item reads
             self._predecessors[origin] = pred
         if destination != origin and pred[destination] < 0:
@@ -285,6 +301,22 @@ class NetworkXService(INetworkService):
             nodes.append(pred[nodes[-1]])
         nodes.reverse()
         return nodes
+
+    def _all_trees(self) -> np.ndarray:
+        """Predecessor rows of every origin (N x N int32), read from the cache
+        directory or computed (~2.4 s for Manhattan) and stored there."""
+        key = hashlib.sha1()
+        for part in (self._adjacency.indptr, self._adjacency.indices, self._adjacency.data):
+            key.update(np.ascontiguousarray(part).tobytes())
+        path = self._tree_cache_dir / f"shortest_path_trees_{self.N}_{key.hexdigest()[:16]}.npy"
+        if path.exists():
+            return np.load(path, mmap_mode="r")
+        _, trees = dijkstra(self._adjacency, return_predecessors=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f"{path.stem}.{os.getpid()}.tmp.npy")
+        np.save(tmp, trees.astype(np.int32))
+        os.replace(tmp, path)  # atomic, so parallel runs never read half a file
+        return trees
 
     def _fastest_edges(self, scaled: bool = True) -> dict[tuple[int, int], tuple[float, float]]:
         """(travel time, length) of the fastest edge per node pair; the first one

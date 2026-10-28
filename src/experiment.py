@@ -21,6 +21,7 @@ import numpy as np
 
 import config.config as config
 from config import get_logger
+from config.paths import DATA_DIR
 from src.components.assignment_solver import GurobiAssignmentSolver, HighsAssignmentSolver
 from src.components.batch_controller import BatchController
 from src.components.graph_builder.rtv_trip_centric import TripCentricRTVGraphBuilder
@@ -383,7 +384,10 @@ def run_experiment(cfg: ExperimentConfig) -> Path:
         with timed("network"):  # all-pairs travel times into memory
             db_cache = DuckDBPathCache(read_only=cfg.read_only)
             network = NetworkXService(
-                provider.graph, db=db_cache, travel_time_factor=cfg.travel_time_factor
+                provider.graph,
+                db=db_cache,
+                travel_time_factor=cfg.travel_time_factor,
+                tree_cache_dir=DATA_DIR / "cache",
             )
         with timed("components"):
             simulator = build_simulator(
