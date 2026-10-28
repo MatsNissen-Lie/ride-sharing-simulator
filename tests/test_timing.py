@@ -1,10 +1,19 @@
 """Timing sections nest, reset on take, and the summary accounts for every second."""
 
+import gc
 import time
 
 import pytest
 
-from src.utils.timing import Timer, TimingLog, UNTIMED, summarize
+from src.utils.timing import (
+    TIMER,
+    UNTIMED,
+    Timer,
+    TimingLog,
+    summarize,
+    time_garbage_collection,
+    timed,
+)
 
 
 def test_sections_nest_and_take_resets():
@@ -44,3 +53,11 @@ def test_summary_shares_and_untimed_remainder():
     assert rows[f"batch/{UNTIMED}"]["total_s"] == pytest.approx(1.0)
     assert rows["batch"]["batch_mean_s"] == pytest.approx(1.5)
     assert s["section"].to_list()[:2] == ["batch", "batch/rv"]  # tree order, largest first
+
+
+def test_garbage_collection_is_recorded_in_the_open_section():
+    time_garbage_collection()
+    TIMER.take()
+    with timed("outer"):
+        gc.collect()
+    assert "outer/gc" in TIMER.take()

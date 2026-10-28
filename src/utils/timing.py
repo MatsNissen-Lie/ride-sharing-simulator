@@ -15,6 +15,7 @@ code that runs thousands of times per batch: a section costs about a microsecond
     uv run python scripts/analysis/timing_report.py reports/<run>
 """
 
+import gc
 import time
 
 import polars as pl
@@ -88,6 +89,25 @@ def record(name: str, since: float) -> None:
     For a stretch of code that a with-block would have to re-indent.
     """
     TIMER.record(name, time.perf_counter() - since)
+
+
+def time_garbage_collection() -> None:
+    """Record every cyclic garbage collection as a "gc" section inside the section
+    it interrupts (or at the top level between sections)."""
+    if _on_gc in gc.callbacks:
+        return
+    gc.callbacks.append(_on_gc)
+
+
+_gc_start = 0.0
+
+
+def _on_gc(phase: str, info: dict) -> None:
+    global _gc_start
+    if phase == "start":
+        _gc_start = time.perf_counter()
+    else:
+        TIMER.record("gc", time.perf_counter() - _gc_start)
 
 
 class TimingLog:

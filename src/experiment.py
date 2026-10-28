@@ -7,6 +7,7 @@ To add a component, implement its interface and register a factory below.
 """
 
 import cProfile
+import gc
 import io
 import os
 import pstats
@@ -73,7 +74,14 @@ from src.simulator import Simulator
 from src.utils.generate_plots import generate_plots
 from src.utils.output_manager import SimulationOutputManager
 from src.utils.stats_logger import SimulationStatsLogger
-from src.utils.timing import TIMER, TimingLog, format_summary, summarize, timed
+from src.utils.timing import (
+    TIMER,
+    TimingLog,
+    format_summary,
+    summarize,
+    time_garbage_collection,
+    timed,
+)
 
 logger = get_logger(__name__)
 
@@ -352,6 +360,11 @@ def run_experiment(cfg: ExperimentConfig) -> Path:
         if getattr(cfg, key) not in registry:
             raise ValueError(f"Unknown {key} {getattr(cfg, key)!r}; choose from {list(registry)}")
 
+    # Requests, routes and graphs are short-lived, but with the default
+    # thresholds the collector ran ~60 full passes over the whole heap per 150
+    # batches (20% of the run). Collection does not change results.
+    gc.set_threshold(50_000, 20, 20)
+    time_garbage_collection()
     TIMER.take()  # drop anything timed before this run
     with timed("setup"):
         with timed("data"):  # graph and fleet; requests are read lazily
