@@ -153,3 +153,16 @@ def test_reachable_pairs_match_every_pair(network, seed):
         v_idx, r_idx, arr = builder._reachable_pairs(locs, times, origins, latest)
         assert (v_idx == expected[0]).all() and (r_idx == expected[1]).all()
         assert (arr == arrival[expected]).all()
+
+
+def test_reused_builder_gives_the_graph_of_a_fresh_one(network):
+    rng = random.Random(5)
+    trip_solver = AStarTripSolver(network.get_l1_cache())
+    requests = random_requests(network, rng, 40, T_NOW)
+    vehicles = [random_vehicle(network, rng, f"v{k}", T_NOW, rng.choice([0, 1, 2])) for k in range(8)]
+    builder = RVGraphBuilder(network, trip_solver)
+    builder.build_graph(set(requests[:30]), set(vehicles))
+    reused = builder.build_graph(set(requests[10:]), set(vehicles))
+    fresh = RVGraphBuilder(network, trip_solver).build_graph(set(requests[10:]), set(vehicles))
+    assert reused == fresh
+    assert list(reused.rr_details) == list(fresh.rr_details)  # same insertion order

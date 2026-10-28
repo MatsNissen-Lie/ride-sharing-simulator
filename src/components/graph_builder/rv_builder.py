@@ -106,8 +106,9 @@ class RVGraphBuilder(IRVGraphBuilder):
         self._closed_forms = getattr(trip_solver, "matches_rv_closed_forms", False)
         self._omega = omega
         self._delta = delta
-        # Nodes within NEAR_RADIUS of each node, built on first use.
+        # Nodes within Omega + NEAR_MARGIN of each node, built on first use.
         self._near: tuple[np.ndarray, np.ndarray] | None = None
+        self._rr_routes: dict[tuple[str, str], FeasibleRoute] = {}  # last batch's
 
     def build_graph(
         self, requests: set[Request], vehicles: set[VehicleAvailability]
@@ -240,7 +241,7 @@ class RVGraphBuilder(IRVGraphBuilder):
         """(vehicle, request) pairs with arrival <= latest pickup, as np.where
         orders them (by vehicle, then request), and their arrival times.
 
-        Only vehicles at nodes within NEAR_RADIUS of a pickup can make it when
+        Only vehicles at nodes within Omega + NEAR_MARGIN of a pickup can make it when
         every budget (latest pickup - vehicle time) is below the radius, which
         holds since budgets are at most Omega; only those pairs are checked
         (about 1% of them). Otherwise every pair is checked.
@@ -393,12 +394,18 @@ class RVGraphBuilder(IRVGraphBuilder):
             leg_d = np.where(has_path, leg_d, 0.0)
             total_t = (leg_t[:, 0] + leg_t[:, 1]) + leg_t[:, 2]
             total_d = (leg_d[:, 0] + leg_d[:, 1]) + leg_d[:, 2]
+            # A pair's route depends only on the two requests' times and nodes,
+            # which never change, so last batch's routes are reused.
+            previous, self._rr_routes = self._rr_routes, {}
             for n, k in enumerate(valid_idx):
                 r1 = req_list[idx_i[k]]
                 r2 = req_list[idx_j[k]]
-                route = self._build_route_from_perm(
-                    best_perms[k], r1, r2, best_costs[k], float(total_t[n]), float(total_d[n])
-                )
+                route = previous.get((r1.id, r2.id))
+                if route is None:
+                    route = self._build_route_from_perm(
+                        best_perms[k], r1, r2, best_costs[k], float(total_t[n]), float(total_d[n])
+                    )
+                self._rr_routes[r1.id, r2.id] = route
                 graph.add_rr_edge(r1.id, r2.id, route)
 
     def _solve_rv_matrix_empty(
