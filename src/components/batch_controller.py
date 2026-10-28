@@ -17,7 +17,7 @@ from src.interfaces import (
     Request,
     Vehicle,
 )
-from src.interfaces.data_models import NetworkPathExtended, Route
+from src.interfaces.data_models import Route
 from src.interfaces.stats import ControllerStats
 from src.utils.timing import timed
 
@@ -97,8 +97,9 @@ class BatchController(IBatchController):
         # (request_id -> promised_pickup_time)
         last_promised: dict[str, float] = {}
 
-        def get_path(u: int, v: int) -> NetworkPathExtended:
-            path = self._network.get_shortest_path_with_travel_time(u, v)
+        def get_path(u: int, v: int) -> tuple[float, float]:
+            """Travel time and distance of the fastest path from u to v."""
+            path = self._network.path_time_and_distance(u, v)
             if path is None:
                 raise RuntimeError(f"No path found from {u} to {v}")
             return path
@@ -151,12 +152,12 @@ class BatchController(IBatchController):
             route_finished = True
 
             for idx, stop in enumerate(stops):
-                path = get_path(cur_node, stop.node)
-                arrival = cur_time + path.travel_time
+                travel_time, travel_distance = get_path(cur_node, stop.node)
+                arrival = cur_time + travel_time
 
                 if arrival <= vehicle_t_now:
                     # Fully reach this stop before or at vehicle_t_now → serve it
-                    self._count_distance(path.travel_distance, loaded=bool(onboard))
+                    self._count_distance(travel_distance, loaded=bool(onboard))
                     cur_time = arrival
                     cur_node = stop.node
 
@@ -230,7 +231,8 @@ class BatchController(IBatchController):
 
                 # 1) Snap physical location along this leg to a graph node
                 anchor_node, anchor_time = self._snap_to_next_node_on_leg(
-                    path=path,
+                    origin=cur_node,
+                    destination=stop.node,
                     leg_start_time=cur_time,
                     t_now=vehicle_t_now,
                 )
@@ -238,15 +240,14 @@ class BatchController(IBatchController):
                 if anchor_node != cur_node:
                     # Distance driven so far on this leg (a prefix of a shortest path).
                     self._count_distance(
-                        get_path(cur_node, anchor_node).travel_distance, loaded=bool(onboard)
+                        get_path(cur_node, anchor_node)[1], loaded=bool(onboard)
                     )
 
                 if anchor_time < vehicle_t_now:
-                    path_sum = sum(path.travel_times) if path.travel_times else 0
                     raise ValueError(
                         f"Snap failed for {v.id}: anchor_time={anchor_time} < t_now={vehicle_t_now}. "
-                        f"cur_time={cur_time}, path_tt={path.travel_time}, path_sum={path_sum}, "
-                        f"arrival={arrival}, path_nodes={path.nodes}, path_times={path.travel_times}"
+                        f"cur_time={cur_time}, path_tt={travel_time}, arrival={arrival}, "
+                        f"leg={cur_node}->{stop.node}"
                     )
 
                 # 2) Compute original scheduled arrival times for *all remaining* stops
@@ -254,8 +255,7 @@ class BatchController(IBatchController):
                 leg_prev_node = cur_node
                 leg_prev_time = cur_time
                 for stop2 in stops[idx:]:
-                    path2 = get_path(leg_prev_node, stop2.node)
-                    arrival2 = leg_prev_time + path2.travel_time
+                    arrival2 = leg_prev_time + get_path(leg_prev_node, stop2.node)[0]
 
                     if stop2.is_pickup:
                         req = self._request_index.get(stop2.request_id)
@@ -348,13 +348,15 @@ class BatchController(IBatchController):
 
     def _snap_to_next_node_on_leg(
         self,
-        path: NetworkPathExtended,
+        origin: int,
+        destination: int,
         leg_start_time: float,
         t_now: float,
     ) -> tuple[int, float]:
         """
-        Given a NetworkPath and the time we started traversing it,
-        find the next graph node after t_now and the time we reach it.
+        Given a leg (the network's fastest path from origin to destination) and
+        the time we started traversing it, find the next graph node after t_now
+        and the time we reach it.
 
         Guarantees returned_time >= t_now (unless the leg has zero length,
         in which case we just return the final node at leg_start_time).
@@ -363,30 +365,24 @@ class BatchController(IBatchController):
         first downstream node. If t_now is beyond the leg (should not
         happen if caller checked), we fall back to the last node.
         """
-
-        # Degenerate leg: no movement
-        if not path.nodes:
-            raise RuntimeError("NetworkPath has no nodes")
-
-        if not path.travel_times or len(path.nodes) == 1:
-            # Zero-length leg (u == v): we are already at the final node
-            return path.nodes[-1], leg_start_time
+        # Degenerate leg (u == v): we are already at the final node
+        if origin == destination:
+            return destination, leg_start_time
 
         t = leg_start_time
 
         # The vehicle has not left the leg's first node yet: it stays there.
         if t >= t_now:
-            return path.nodes[0], t
+            return origin, t
 
-        for i, dt in enumerate(path.travel_times):
-            # travel_times is length len(nodes) - 1 by contract
-            # so i+1 is always a valid index here
-            next_node = path.nodes[i + 1]
+        # Walk the edges only as far as needed; times add up as along the path.
+        node = origin
+        for node, dt in self._network.path_steps(origin, destination):
             t_next = t + dt
 
             if t_next >= t_now:
                 # This is the first downstream node whose arrival is >= t_now
-                return next_node, t_next
+                return node, t_next
 
             # Otherwise we fully passed this edge before t_now; advance along the path
             t = t_next
@@ -396,9 +392,9 @@ class BatchController(IBatchController):
         if t < t_now:
             raise ValueError(
                 f"Snap reached end of leg but t={t} < t_now={t_now}. "
-                f"leg_start={leg_start_time}, path_times={path.travel_times}"
+                f"leg_start={leg_start_time}, leg={origin}->{destination}"
             )
-        return path.nodes[-1], t
+        return node, t
 
     def convert_meta_requests(self, new_meta: Iterable[MetaRequest]) -> Set[Request]:
         converted: Set[Request] = set()
