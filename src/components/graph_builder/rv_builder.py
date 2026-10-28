@@ -115,6 +115,9 @@ class RVGraphBuilder(IRVGraphBuilder):
         self._rr_next = 0
         self._rr_a = np.zeros(0, dtype=np.int64)
         self._rr_b = np.zeros(0, dtype=np.int64)
+        # (best cost, stop order) with request a first, and with b first
+        self._rr_ab = np.zeros((0, 2))
+        self._rr_ba = np.zeros((0, 2))
 
     def build_graph(
         self, requests: set[Request], vehicles: set[VehicleAvailability]
@@ -138,31 +141,19 @@ class RVGraphBuilder(IRVGraphBuilder):
         req_dests = np.array([r.destination_node for r in req_list])
         req_times = np.array([r.request_time for r in req_list])
 
-        # B. Vectorized Pruning (only pairs with a request new to this batch are
-        # checked; see _shareable_pairs)
-        rr_idx_i, rr_idx_j = self._shareable_pairs(req_list, req_origins, req_times)
+        # B. Vectorized Pruning and solving: shareable pairs with their best cost
+        # and stop order (only pairs with a request new to this batch are
+        # computed; see _shareable_pairs)
+        rr_idx_i, rr_idx_j, rr_costs, rr_perms = self._shareable_pairs(
+            req_list, req_origins, req_dests, req_times
+        )
         record("rr_prune", t0)
 
-        # C. Vectorized Solving
+        # C. Routes of the shareable pairs
         if len(rr_idx_i) > 0:
-            logger.info(f"RR Pruning: evaluating {len(rr_idx_i)} pairs.")
-
-            # O->O times in both directions, for the solver
-            mat = self._network.get_l1_cache()
-            t_o1_o2 = mat[req_origins[rr_idx_i], req_origins[rr_idx_j]]
-            t_o2_o1 = mat[req_origins[rr_idx_j], req_origins[rr_idx_i]]
-
             with timed("rr_pairs"):
-                self._solve_rr_matrix_fast(
-                    rr_idx_i,
-                    rr_idx_j,
-                    req_list,
-                    req_times,
-                    req_origins,
-                    req_dests,
-                    t_o1_o2,
-                    t_o2_o1,  # Pass pre-calculated times
-                    graph,
+                self._add_rr_edges(
+                    rr_idx_i, rr_idx_j, rr_costs, rr_perms, req_list, req_origins, req_dests, graph
                 )
 
         # --- 2. RV PIPELINE (Split Execution) ---
@@ -221,17 +212,23 @@ class RVGraphBuilder(IRVGraphBuilder):
         return graph
 
     def _shareable_pairs(
-        self, req_list: list[Request], req_origins: np.ndarray, req_times: np.ndarray
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Request pairs (i, j), i < j, that pass the pruning, as np.where on the
-        upper triangle orders them.
+        self,
+        req_list: list[Request],
+        req_origins: np.ndarray,
+        req_dests: np.ndarray,
+        req_times: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Shareable request pairs (i, j), i < j, as np.where on the upper
+        triangle orders them, with the best cost and stop order of serving
+        req_list[i] and req_list[j] together (_pair_costs).
 
-        Necessary condition: whichever origin is visited first, the second
-        pickup is no earlier than t_first + tau(o_first, o_second), and must
-        happen by t_second + Omega. The test depends only on the two requests
-        and is symmetric (the same floats either way round), so a pair is
-        tested once, in the first batch holding both, and kept while both stay
-        in the pool. Request ids are unique within a run.
+        Pruning (necessary condition): whichever origin is visited first, the
+        second pickup is no earlier than t_first + tau(o_first, o_second), and
+        must happen by t_second + Omega. The test and the costs depend only on
+        the two requests, and the test is symmetric (the same floats either way
+        round), so a pair is tested and solved (both ways round) once, in the
+        first batch holding both, and kept while both stay in the pool if it can
+        be served. Request ids are unique within a run.
         """
         mat = self._network.get_l1_cache()
         first_new = self._rr_next
@@ -244,9 +241,8 @@ class RVGraphBuilder(IRVGraphBuilder):
         pos[num] = np.arange(len(num))
 
         # Pairs from earlier batches whose requests are both still waiting.
-        a, b = self._rr_a, self._rr_b
-        alive = (pos[a] >= 0) & (pos[b] >= 0)
-        a, b = a[alive], b[alive]
+        alive = (pos[self._rr_a] >= 0) & (pos[self._rr_b] >= 0)
+        a, b, ab, ba = self._rr_a[alive], self._rr_b[alive], self._rr_ab[alive], self._rr_ba[alive]
         # Pairs with a new request: test it against every request.
         new = np.flatnonzero(is_new)
         if len(new):
@@ -257,14 +253,24 @@ class RVGraphBuilder(IRVGraphBuilder):
             k, j = np.nonzero(ok)
             k = new[k]
             once = (k != j) & (~is_new[j] | (k < j))  # a pair of two new ones once
-            k, j = num[k[once]], num[j[once]]
-            a = np.concatenate([a, np.minimum(k, j)])
-            b = np.concatenate([b, np.maximum(k, j)])
-        self._rr_a, self._rr_b = a, b
+            k, j = k[once], j[once]
+            first, second = np.where(num[k] < num[j], k, j), np.where(num[k] < num[j], j, k)
+            new_ab = np.stack(self._pair_costs(first, second, req_origins, req_dests, req_times))
+            new_ba = np.stack(self._pair_costs(second, first, req_origins, req_dests, req_times))
+            served = np.isfinite(new_ab[0]) | np.isfinite(new_ba[0])
+            a = np.concatenate([a, num[first[served]]])
+            b = np.concatenate([b, num[second[served]]])
+            ab = np.concatenate([ab, new_ab[:, served].T])
+            ba = np.concatenate([ba, new_ba[:, served].T])
+        self._rr_a, self._rr_b, self._rr_ab, self._rr_ba = a, b, ab, ba
 
-        i, j = np.minimum(pos[a], pos[b]), np.maximum(pos[a], pos[b])
+        a_first = pos[a] < pos[b]
+        i, j = np.where(a_first, pos[a], pos[b]), np.where(a_first, pos[b], pos[a])
+        cost_perm = np.where(a_first[:, None], ab, ba)
+        valid = np.isfinite(cost_perm[:, 0])
+        i, j, cost_perm = i[valid], j[valid], cost_perm[valid]
         order = np.lexsort((j, i))
-        return i[order], j[order]
+        return i[order], j[order], cost_perm[order, 0], cost_perm[order, 1].astype(np.int64)
 
     def _reachable_pairs(
         self,
@@ -313,26 +319,19 @@ class RVGraphBuilder(IRVGraphBuilder):
         order = np.lexsort((r_idx[ok], v_idx[ok]))
         return v_idx[ok][order], r_idx[ok][order], arrival[ok][order]
 
-    def _solve_rr_matrix_fast(
+    def _pair_costs(
         self,
         idx_i: np.ndarray,
         idx_j: np.ndarray,
-        req_list: list[Request],
-        req_times: np.ndarray,
         req_origins: np.ndarray,
         req_dests: np.ndarray,
-        t_o1_o2: np.ndarray,
-        t_o2_o1: np.ndarray,  # Pre-calculated
-        graph: RVGraph,
-    ):
-        """
-        Solved RR matrix using pre-fetched O-O times.
-        Only fetches O-D and D-D times from cache.
-        """
-        # 1. Gather remaining data
-        # Origins are not needed, we have t_o1_o2
+        req_times: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Best cost (total delay) and stop order (row of _PERM_ORDER) of serving
+        request idx_i (as r1) and idx_j (as r2) together; inf if no order meets
+        both requests' Omega and Delta."""
+        # 1. Gather data
         d1, d2 = req_dests[idx_i], req_dests[idx_j]
-        # Origins ARE needed for O->D lookup
         o1, o2 = req_origins[idx_i], req_origins[idx_j]
         t1, t2 = req_times[idx_i], req_times[idx_j]
 
@@ -342,6 +341,8 @@ class RVGraphBuilder(IRVGraphBuilder):
         def get_v(u, v):
             return mat[u, v]
 
+        t_o1_o2 = get_v(o1, o2)
+        t_o2_o1 = get_v(o2, o1)
         t_o1_d1 = get_v(o1, d1)
         t_o1_d2 = get_v(o1, d2)
         t_o2_d1 = get_v(o2, d1)
@@ -410,38 +411,54 @@ class RVGraphBuilder(IRVGraphBuilder):
         d1_5 = p1_5 + t_o1_d1
         check(5, p1_5, p2_5, d1_5, d2_5)
 
-        # 4. Reduce & Add
-        best_costs = np.min(costs, axis=0)
-        best_perms = np.argmin(costs, axis=0)
-        valid = np.isfinite(best_costs)
+        # 4. Reduce
+        return np.min(costs, axis=0), np.argmin(costs, axis=0)
 
-        valid_idx = np.where(valid)[0]
-        if len(valid_idx) > 0:
-            logger.info(f"RR Matrix: Found {len(valid_idx)} feasible edges.")
+    def _add_rr_edges(
+        self,
+        idx_i: np.ndarray,
+        idx_j: np.ndarray,
+        best_costs: np.ndarray,
+        best_perms: np.ndarray,
+        req_list: list[Request],
+        req_origins: np.ndarray,
+        req_dests: np.ndarray,
+        graph: RVGraph,
+    ) -> None:
+        """Add the shareable pairs to the graph with their routes, in order."""
+        # A pair's route depends only on the two requests' times and nodes,
+        # which never change, so last batch's routes are reused.
+        previous, self._rr_routes = self._rr_routes, {}
+        keys = [(req_list[i].id, req_list[j].id) for i, j in zip(idx_i, idx_j)]
+        missing = np.array([k not in previous for k in keys], dtype=bool)
+        if missing.any():
             # Travel time and distance of the best order, leg by leg as in
             # get_shortest_path (legs without a path add nothing).
-            ends = np.stack([o1, d1, o2, d2])[:, valid_idx].T
-            seq = np.take_along_axis(ends, _PERM_ORDER[best_perms[valid_idx]], axis=1)
+            mat = self._network.get_l1_cache()
+            mi, mj = idx_i[missing], idx_j[missing]
+            ends = np.stack([req_origins[mi], req_dests[mi], req_origins[mj], req_dests[mj]]).T
+            seq = np.take_along_axis(ends, _PERM_ORDER[best_perms[missing]], axis=1)
             leg_t = mat[seq[:, :-1], seq[:, 1:]]
             leg_d = self._network.get_distance_matrix()[seq[:, :-1], seq[:, 1:]]
             has_path = np.isfinite(leg_t) & (leg_t <= 1e9) & (leg_t >= 0)
             leg_t = np.where(has_path, leg_t, 0.0)
             leg_d = np.where(has_path, leg_d, 0.0)
-            total_t = (leg_t[:, 0] + leg_t[:, 1]) + leg_t[:, 2]
-            total_d = (leg_d[:, 0] + leg_d[:, 1]) + leg_d[:, 2]
-            # A pair's route depends only on the two requests' times and nodes,
-            # which never change, so last batch's routes are reused.
-            previous, self._rr_routes = self._rr_routes, {}
-            for n, k in enumerate(valid_idx):
-                r1 = req_list[idx_i[k]]
-                r2 = req_list[idx_j[k]]
-                route = previous.get((r1.id, r2.id))
-                if route is None:
-                    route = self._build_route_from_perm(
-                        best_perms[k], r1, r2, best_costs[k], float(total_t[n]), float(total_d[n])
-                    )
-                self._rr_routes[r1.id, r2.id] = route
-                graph.add_rr_edge(r1.id, r2.id, route)
+            totals = iter(
+                zip(
+                    ((leg_t[:, 0] + leg_t[:, 1]) + leg_t[:, 2]).tolist(),
+                    ((leg_d[:, 0] + leg_d[:, 1]) + leg_d[:, 2]).tolist(),
+                )
+            )
+        for k, key in enumerate(keys):
+            route = previous.get(key)
+            if route is None:
+                total_t, total_d = next(totals)
+                route = self._build_route_from_perm(
+                    best_perms[k], req_list[idx_i[k]], req_list[idx_j[k]], best_costs[k],
+                    total_t, total_d,
+                )
+            self._rr_routes[key] = route
+            graph.add_rr_edge(*key, route)
 
     def _solve_rv_matrix_empty(
         self,

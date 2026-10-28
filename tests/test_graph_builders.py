@@ -161,8 +161,8 @@ def test_reused_builder_gives_the_graph_of_a_fresh_one(network):
     requests = random_requests(network, rng, 40, T_NOW)
     vehicles = [random_vehicle(network, rng, f"v{k}", T_NOW, rng.choice([0, 1, 2])) for k in range(8)]
     builder = RVGraphBuilder(network, trip_solver)
-    builder.build_graph(set(requests[:30]), set(vehicles))
-    reused = builder.build_graph(set(requests[10:]), set(vehicles))
-    fresh = RVGraphBuilder(network, trip_solver).build_graph(set(requests[10:]), set(vehicles))
-    assert reused == fresh
-    assert list(reused.rr_details) == list(fresh.rr_details)  # same insertion order
+    for window in (requests[:30], requests[10:], requests[5:35], list(reversed(requests[20:]))):
+        reused = builder.build_graph(set(window), set(vehicles))
+        fresh = RVGraphBuilder(network, trip_solver).build_graph(set(window), set(vehicles))
+        assert reused == fresh
+        assert list(reused.rr_details) == list(fresh.rr_details)  # same insertion order
