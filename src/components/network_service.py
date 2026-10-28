@@ -72,7 +72,10 @@ class NetworkXService(INetworkService):
             )
 
         # 1. Time Matrix (float64 so planned and replayed times agree)
-        self._time_matrix = np.full((self.N, self.N), np.nan, dtype=np.float64)
+        if prefetch:  # every entry is written below
+            self._time_matrix = np.empty((self.N, self.N), dtype=np.float64)
+        else:
+            self._time_matrix = np.full((self.N, self.N), np.nan, dtype=np.float64)
 
         # 2. Distance Matrix (Optional, if you need it for costs)
         self._dist_matrix = np.full((self.N, self.N), np.nan, dtype=np.float64)
@@ -153,7 +156,10 @@ class NetworkXService(INetworkService):
         grid_indices = np.ix_(nodes, nodes)
 
         # Bulk write
-        self._time_matrix[grid_indices] = self._scaled(db_matrix_time)
+        if nodes == list(range(self.N)):
+            self._time_matrix[...] = self._scaled(db_matrix_time)  # no index arrays
+        else:
+            self._time_matrix[grid_indices] = self._scaled(db_matrix_time)
 
         # Note: We are not populating _dist_matrix here because get_travel_time_matrix
         # only returns times. Distances will be fetched on-demand via L2 fallback
@@ -305,7 +311,9 @@ class NetworkXService(INetworkService):
         if self.travel_time_factor == 1.0:
             return free_flow
         if isinstance(free_flow, np.ndarray):
-            return np.where(free_flow < 0, free_flow, free_flow * self.travel_time_factor)
+            scaled = free_flow * self.travel_time_factor
+            np.copyto(scaled, free_flow, where=free_flow < 0)
+            return scaled
         return free_flow if free_flow < 0 else free_flow * self.travel_time_factor
 
     def get_travel_time(self, origin: int, destination: int) -> float:
@@ -366,7 +374,7 @@ class NetworkXService(INetworkService):
         """All-pairs shortest-path distances in metres (loaded on first use)."""
         if not self._distances_loaded:
             nodes = list(range(self.N))
-            self._dist_matrix[np.ix_(nodes, nodes)] = self._db.get_distance_matrix(nodes, nodes)
+            self._dist_matrix[...] = self._db.get_distance_matrix(nodes, nodes)
             self._distances_loaded = True
         return self._dist_matrix
 
