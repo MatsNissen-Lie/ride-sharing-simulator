@@ -111,7 +111,7 @@ class AStarTripSolver(ITripSolver):
             node_indices.append(r.destination_node)
             is_pickup.append(False)
             hard_latest.append(r.latest_dropoff_time)
-            req_times.append(r.request_time + time_matrix[r.origin_node, r.destination_node])
+            req_times.append(float(r.request_time + time_matrix[r.origin_node, r.destination_node]))
             req_ids_ordered.append(r.id)
 
         n_onboard = len(node_indices)
@@ -121,7 +121,7 @@ class AStarTripSolver(ITripSolver):
         prereqs = [0] * n_onboard
 
         for r in requests:
-            t_star = r.request_time + time_matrix[r.origin_node, r.destination_node]
+            t_star = float(r.request_time + time_matrix[r.origin_node, r.destination_node])
             node_indices.append(r.origin_node)
             is_pickup.append(True)
             hard_latest.append(r.latest_pickup_time)
@@ -144,25 +144,28 @@ class AStarTripSolver(ITripSolver):
         full_mask = (1 << total_stops) - 1
 
         nodes_arr = np.array(node_indices, dtype=np.int32)
+        # Travel times between the start (local index 0) and the stops (stop i at
+        # i + 1) as Python floats: one lookup per element of the NumPy matrix
+        # dominated the search.
+        local_nodes = np.array([v_node, *node_indices])
+        tt = time_matrix[local_nodes[:, None], local_nodes].tolist()
         load_deltas = [1 if p else -1 for p in is_pickup]
         cost_mask = [not p for p in is_pickup]
 
         # --- HEURISTIC PRE-CALCULATION ---
         onboard_data = []
         for i in range(n_onboard):
-            onboard_data.append((i, node_indices[i], req_times[i], hard_latest[i]))
+            onboard_data.append((i, i + 1, req_times[i], hard_latest[i]))
 
         waiting_data = []
         for i in range(n_onboard, total_stops, 2):
-            origin = node_indices[i]
-            dest = node_indices[i + 1]
-            static_dist = time_matrix[origin, dest]
+            static_dist = tt[i + 1][i + 2]
             waiting_data.append(
                 (
                     i,
                     i + 1,
-                    origin,
-                    dest,
+                    i + 1,  # local index of the origin
+                    i + 2,  # and of the destination
                     req_times[i],
                     static_dist,
                     hard_latest[i],
@@ -184,7 +187,7 @@ class AStarTripSolver(ITripSolver):
         # Actually, for A* to work best, we should calc h for start node.
 
         # Let's define the heuristic function to reuse
-        def calc_heuristic(u_idx, c_time, mask):
+        def calc_heuristic(u_loc, c_time, mask):
             # h(s) = |R_unserved| * t_now + sum(MinRemainingTime(r)) - sum(t_req^r)
 
             unserved_count = 0
@@ -195,7 +198,7 @@ class AStarTripSolver(ITripSolver):
             for i, dest_idx, r_time, limit in onboard_data:
                 if not ((mask >> i) & 1):
                     # Unserved
-                    dist = time_matrix[u_idx, dest_idx]
+                    dist = tt[u_loc][dest_idx]
                     arrival_est = c_time + dist
 
                     # Pruning check
@@ -227,7 +230,7 @@ class AStarTripSolver(ITripSolver):
 
                 if not ((mask >> pk_i) & 1):
                     # Not picked up yet: Current -> Pickup -> Drop
-                    dist_u_pk = time_matrix[u_idx, origin]
+                    dist_u_pk = tt[u_loc][origin]
                     # MinRemaining = dist(u, pk) + dist(pk, dp)
                     # Note: static = dist(pk, dp)
 
@@ -241,7 +244,7 @@ class AStarTripSolver(ITripSolver):
 
                 else:
                     # Picked up, not dropped: Current -> Drop
-                    dist_u_dp = time_matrix[u_idx, dest]
+                    dist_u_dp = tt[u_loc][dest]
 
                     # Pruning checks
                     arr_dp = c_time + dist_u_dp
@@ -253,7 +256,7 @@ class AStarTripSolver(ITripSolver):
             h = (unserved_count * c_time) + sum_min_remaining - sum_req_times
             return h
 
-        h_start = calc_heuristic(v_node, v_start, 0)
+        h_start = calc_heuristic(0, v_start, 0)
         if h_start == INF:
             return Infeasible(reason="Initial state infeasible")
 
@@ -314,6 +317,7 @@ class AStarTripSolver(ITripSolver):
 
             # Expand
             # Iterate over all possible next stops v
+            u_times = tt[path[-1] + 1 if path else 0]
             for v in range(total_stops):
                 # 1. Check if already visited
                 if (mask >> v) & 1:
@@ -330,7 +334,7 @@ class AStarTripSolver(ITripSolver):
 
                 # 4. Calculate Time & Cost
                 v_global_idx = nodes_arr[v]
-                dist = time_matrix[u_idx, v_global_idx]
+                dist = u_times[v + 1]
                 arrival = c_time + dist
 
                 # 5. Check Hard Time Window
@@ -345,7 +349,7 @@ class AStarTripSolver(ITripSolver):
                 new_mask = mask | (1 << v)
 
                 # 6. Calculate Heuristic
-                h = calc_heuristic(v_global_idx, arrival, new_mask)
+                h = calc_heuristic(v + 1, arrival, new_mask)
                 if h == INF:
                     continue
 
