@@ -3,6 +3,7 @@
 import itertools
 import random
 
+import numpy as np
 import pytest
 
 from config.config import MAX_REQUESTS_ABOVE_CAPACITY
@@ -116,3 +117,22 @@ def test_rv_builder_uses_any_trip_solver_for_every_edge(network):
     assert plain.rv_details.keys() == fast.rv_details.keys()
     for key, route in plain.rv_details.items():
         assert route.cost == pytest.approx(fast.rv_details[key].cost)
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_occupied_filter_keeps_every_pair_the_solver_can_serve(network, seed):
+    rng = random.Random(seed)
+    solver = AStarTripSolver(network.get_l1_cache())
+    builder = RVGraphBuilder(network, solver)
+    requests = random_requests(network, rng, 40, T_NOW)
+    vehicles = [
+        random_vehicle(network, rng, f"v{k}", T_NOW, rng.choice([2, 3, 4]), capacity=rng.choice([4, 5]))
+        for k in range(20)
+    ]
+    v_idx, r_idx = (a.ravel() for a in np.meshgrid(range(len(vehicles)), range(len(requests))))
+    keep = builder._may_be_feasible(v_idx, r_idx, vehicles, requests)
+    feasible = np.array(
+        [solver.solve([requests[r]], vehicles[v]).is_feasible for v, r in zip(v_idx, r_idx)]
+    )
+    assert not (feasible & ~keep).any()
+    assert (~keep).any() and feasible.any()

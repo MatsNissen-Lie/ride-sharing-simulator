@@ -1,4 +1,5 @@
 import itertools
+from array import array
 from typing import Iterable
 import time
 from functools import lru_cache
@@ -44,7 +45,7 @@ class NetworkXService(INetworkService):
         self.G = graph
         self.travel_time_factor = travel_time_factor
         self._adjacency: csr_matrix | None = None  # fastest edge per node pair
-        self._predecessors: dict[int, np.ndarray] = {}  # shortest-path tree per origin
+        self._predecessors: dict[int, array] = {}  # shortest-path tree per origin
         self._fastest: dict[tuple[int, int], tuple[float, float]] | None = None
         self._fastest_scaled: dict[tuple[int, int], tuple[float, float]] = {}
         self._distances_loaded = False
@@ -268,13 +269,14 @@ class NetworkXService(INetworkService):
                 self._adjacency = csr_matrix(
                     (list(times.values()), (rows, cols)), shape=(self.N, self.N)
                 )
-            _, pred = dijkstra(self._adjacency, indices=origin, return_predecessors=True)
+            _, tree = dijkstra(self._adjacency, indices=origin, return_predecessors=True)
+            pred = array("i", tree.astype(np.int32).tobytes())  # fast item reads
             self._predecessors[origin] = pred
         if destination != origin and pred[destination] < 0:
             return None
         nodes = [destination]
         while nodes[-1] != origin:
-            nodes.append(int(pred[nodes[-1]]))
+            nodes.append(pred[nodes[-1]])
         nodes.reverse()
         return nodes
 
