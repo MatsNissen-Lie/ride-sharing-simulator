@@ -56,7 +56,7 @@ class DemandRebalancingSolver(IRebalancingSolver):
     ) -> dict[str, Route]:
         # Vehicles chasing a rider are re-planned every batch; zone moves persist.
         zone_move = [v for v in en_route if v.remaining_stops_to_serve[-1].is_zone_move]
-        chasing = [v for v in en_route if v not in zone_move]
+        chasing = [v for v in en_route if not v.remaining_stops_to_serve[-1].is_zone_move]
         with timed("reactive"):
             routes = self._reactive.solve(idle_vehicles, unassigned_requests, t_now, chasing)
         free = [
