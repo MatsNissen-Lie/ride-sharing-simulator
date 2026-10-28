@@ -13,6 +13,8 @@ from functools import cached_property
 from pathlib import Path
 from typing import Callable
 
+import numpy as np
+
 import config.config as config
 from config import get_logger
 from src.components.assignment_solver import GurobiAssignmentSolver, HighsAssignmentSolver
@@ -24,6 +26,10 @@ from src.components.joint_assignment_solver import JointAssignmentSolver, ZeroVa
 from src.components.network_service import NetworkXService
 from src.components.objectives import DelayObjective, ProfitObjective
 from src.components.demand import HistoricalDemandModel
+from src.components.fleet_mpc import FleetMpcValue
+from src.components.flat_value import ZoneAveragedValue
+from src.components.mpc_rebalance_solver import MpcRebalancingSolver
+from src.components.zone_trips import ZoneTrips
 from src.components.demand_rebalance_solver import DemandRebalancingSolver
 from src.components.oracle_rebalance_solver import OracleRebalancingSolver
 from src.components.zones import ZoneIndex
@@ -44,6 +50,7 @@ from src.interfaces import (
     IRTVGraphBuilder,
     ITripSolver,
     IVehicleValue,
+    Request,
 )
 from src.interfaces.batch_control import IBatchController
 from src.interfaces.stats import BatchStatistics
@@ -99,6 +106,21 @@ class Context:
     def demand(self) -> IDemandModel:
         return DEMAND_MODELS[self.config.demand_model](self)
 
+    @cached_property
+    def zone_trips(self) -> ZoneTrips:
+        """Destination shares and trip times per pair of zones, without the simulated day."""
+        t0 = self.provider.first_request_time()
+        simulated_day = (t0 + timedelta(seconds=self.start_time)).date()
+        return ZoneTrips.fit(
+            self.provider.request_trips(), self.zones, self.network.get_l1_cache(), t0,
+            exclude={simulated_day},
+        )
+
+    @cached_property
+    def vehicle_value(self) -> IVehicleValue:
+        """One instance, shared by the joint solver and rebalancers that follow its plan."""
+        return VEHICLE_VALUES[self.config.vehicle_value](self)
+
 
 def _historical_demand(ctx: Context) -> IDemandModel:
     """Fitted on every day except the simulated ones."""
@@ -148,14 +170,43 @@ RTV_BUILDERS: dict[str, Callable[[ITripSolver], IRTVGraphBuilder]] = {
     "trip": TripCentricRTVGraphBuilder,
     "vehicle": VehicleCentricRTVGraphBuilder,
 }
+
+
+# Riders served per vehicle per average trip time in highs + none on the tuning day
+# Tue 2025-01-14 (scripts/analysis/pooling_factor.py): 1.66.
+MPC_POOLING = 1.6
+
+
+def _mpc(ctx: Context, **kwargs) -> IVehicleValue:
+    """
+    Fleet MPC values. A rider is worth what leaving a new rider unserved costs
+    (delay objective: its base penalty); where that is nothing (profit), the
+    mean fare of training trips.
+    """
+    objective = OBJECTIVES[ctx.config.objective](ctx)
+    fresh = Request("mpc_reward", 0, 0, 0.0, latest_dropoff_time=0.0, latest_pickup_time=0.0)
+    reward = objective.unserved_penalty(fresh, 0.0)
+    if reward <= 0:
+        fares = FARE_MODELS[ctx.config.fare_model](ctx)
+        sample = ctx.provider.request_trips().sample(2000, seed=0)
+        reward = sum(fares.price(o, d) for o, d in zip(sample["orig_node"], sample["dest_node"])) / 2000
+    return FleetMpcValue(ctx.network, ctx.zones, ctx.demand, ctx.zone_trips, objective, reward, **kwargs)
+
+
 VEHICLE_VALUES: dict[str, Callable[[Context], IVehicleValue]] = {
     "zero": lambda ctx: ZeroValue(),
+    "mpc": lambda ctx: _mpc(ctx, pooling=MPC_POOLING),
+    "mpc_p1": lambda ctx: _mpc(ctx, pooling=1.0),
+    "mpc_half": lambda ctx: _mpc(ctx, pooling=MPC_POOLING, weight=0.5),
+    "mpc_flat": lambda ctx: ZoneAveragedValue(
+        _mpc(ctx, pooling=MPC_POOLING), np.array(list(ctx.zones.center_node.values()))
+    ),
 }
 ASSIGNMENT_SOLVERS: dict[str, Callable[[Context, IObjective], IAssignmentSolver]] = {
     "gurobi": lambda ctx, objective: GurobiAssignmentSolver(objective),
     "highs": lambda ctx, objective: HighsAssignmentSolver(objective),
     "joint": lambda ctx, objective: JointAssignmentSolver(
-        objective, ctx.network, ctx.zones, VEHICLE_VALUES[ctx.config.vehicle_value](ctx)
+        objective, ctx.network, ctx.zones, ctx.vehicle_value
     ),
 }
 
@@ -182,6 +233,7 @@ REBALANCERS: dict[str, Callable[[Context], IRebalancingSolver]] = {
         ctx.network, ctx.zones, ctx.demand, horizon=ctx.config.demand_horizon_min * 60
     ),
     "none": lambda ctx: NoRebalancingSolver(),
+    "mpc": lambda ctx: MpcRebalancingSolver(ctx.network, ctx.zones, ctx.vehicle_value),
 }
 
 

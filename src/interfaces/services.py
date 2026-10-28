@@ -274,3 +274,17 @@ class IVehicleValue(ABC):
     @abstractmethod
     def values(self, nodes: np.ndarray, times: np.ndarray, t_now: float) -> np.ndarray:
         """Value of a free vehicle for each (node, time) pair."""
+
+
+class IFleetPlan(IVehicleValue):
+    """A vehicle value that also plans empty moves between zones (e.g. a fleet MPC)."""
+
+    @property
+    @abstractmethod
+    def t_solved(self) -> float | None:
+        """Simulation time of the plan in `moves` (None before the first plan)."""
+
+    @property
+    @abstractmethod
+    def moves(self) -> np.ndarray:
+        """Planned empty moves now: vehicles from zone i to zone j, in zone_ids order."""
