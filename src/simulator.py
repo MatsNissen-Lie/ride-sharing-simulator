@@ -25,7 +25,7 @@ from src.components.simulation_data_provider import SimulationDataProvider
 from src.interfaces.stats import BatchStatistics
 from src.utils.rtv_plot import plot_rtv_graph
 from src.utils.rv_plot import plot_rv_graph
-from src.utils.timing import TIMER, timed
+from src.utils.timing import TIMER, record, timed
 
 logger = get_logger(__name__)
 
@@ -246,11 +246,12 @@ class Simulator:
         logger.info("Batch completed in %.4f seconds.", loop_duration)
 
         # --- Capture & Aggregated Stats ---
+        t0 = time.perf_counter()
         c_stats = self.controller.get_and_reset_metrics()
 
         # 1. Candidate Trip Stats (from RTV Graph)
         # trip_counts_by_size is a dict {size: count}
-        candidate_trip_stats, _ = rtv_graph.get_trip_stats()
+        candidate_trip_stats = trip_stats
 
         # 2. Assigned Trip Stats (from Solver Result)
         assigned_trip_stats = {}
@@ -301,6 +302,7 @@ class Simulator:
             vehicles_rebalanced=vehicles_rebalanced,
         )
 
+        record("batch_stats", t0)
         if c_stats.delivered_count > 0:
             logger.info(f"📦 Delivered {c_stats.delivered_count} passengers.")
         if c_stats.expired_count > 0:
