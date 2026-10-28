@@ -94,6 +94,7 @@ class SampledRequestsAssignmentSolver(JointAssignmentSolver):
         self._weight = weight
         self._n_virtual = n_virtual
         self.virtual: list[Request] = []
+        self.active: list[Request] = []  # the virtual riders offered to vehicles this batch
         self._sampled_until: float | None = None
         self._real_graph = RTVGraph()
         self._virtual_costs: dict[tuple[TripId, str], float] = {}
@@ -115,6 +116,7 @@ class SampledRequestsAssignmentSolver(JointAssignmentSolver):
         self.virtual = [q for q in self.virtual if q.latest_pickup_time > current_time]
         self._virtual_ids.clear()
         self._virtual_ids.update(q.id for q in self.virtual)
+        self.active = self._active(vehicles)
 
         options = self._virtual_options(rtv_graph, vehicles)
         self._real_graph = rtv_graph
@@ -127,7 +129,7 @@ class SampledRequestsAssignmentSolver(JointAssignmentSolver):
         virtual = {q for q in self.virtual if q.id in used}
         result = super().solve(graph, requests | virtual, vehicles, solver_timeout, current_time)
         logger.info(
-            f"Virtual riders: {len(self.virtual)} sampled, {len(virtual)} with options, "
+            f"Virtual riders: {len(self.virtual)} sampled, {len(self.active)} active, {len(virtual)} with options, "
             f"{len(options)} options; {len(result.rebalancing)} vehicles sent to one."
         )
         return AssignmentResult(
@@ -155,10 +157,10 @@ class SampledRequestsAssignmentSolver(JointAssignmentSolver):
             key=lambda v: v.vehicle_id,
         )
         self._free = {v.vehicle_id for v in free}
-        if not free or not self.virtual:
+        if not free or not self.active:
             return {}
         origins = [v.available_at_node for v in free]
-        pickups = [q.origin_node for q in self.virtual]
+        pickups = [q.origin_node for q in self.active]
         travel = self._net.get_travel_time_matrix(origins, pickups)
         dist = self._net.get_distance_matrix()[np.ix_(origins, pickups)]
         arrival = np.array([v.available_from_time for v in free])[:, None] + travel
@@ -174,21 +176,25 @@ class SampledRequestsAssignmentSolver(JointAssignmentSolver):
         for i, v in enumerate(free):
             best = np.argsort(-gain[i])[: self._n_virtual]
             for j in best[gain[i, best] > 0]:
-                q = self.virtual[j]
+                q = self.active[j]
                 route = Route((Stop(q.origin_node, True, q.id),), float(travel[i, j]), float(dist[i, j]), 0.0)
                 options[(frozenset({q.id}), v.vehicle_id)] = (FeasibleRoute(route, 0.0), float(cost[i, j]))
         return options
 
+    def _active(self, vehicles: set[VehicleAvailability]) -> list[Request]:
+        """Virtual riders offered to vehicles this batch: all of them."""
+        return self.virtual
+
     def _wait(self, arrival: np.ndarray) -> np.ndarray:
         """Wait of each virtual rider (columns) for a vehicle arriving at `arrival`."""
-        return np.maximum(arrival - np.array([q.request_time for q in self.virtual])[None, :], 0.0)
+        return np.maximum(arrival - np.array([q.request_time for q in self.active])[None, :], 0.0)
 
     def _deadlines(self) -> np.ndarray:
-        return np.array([q.latest_pickup_time for q in self.virtual])
+        return np.array([q.latest_pickup_time for q in self.active])
 
     def _reward(self) -> np.ndarray:
         """w * chi of each virtual rider: what serving it saves in the ILP."""
-        return np.array([self._costs.unserved_penalty(q, q.request_time) for q in self.virtual])
+        return np.array([self._costs.unserved_penalty(q, q.request_time) for q in self.active])
 
     def _free_at(self, vehicle: VehicleAvailability, stops) -> tuple[int, float]:
         """Node and time at which `vehicle` is free after driving `stops`."""
@@ -266,12 +272,12 @@ class SampledChainAssignmentSolver(SampledRequestsAssignmentSolver):
         veh = {v.vehicle_id: v for v in vehicles}
         bases = [(trip, v_id, fr.route.stops) for (trip, v_id), fr in rtv_graph.trip_vehicle_details.items()]
         bases += [(frozenset(), v.vehicle_id, v.remaining_stops_to_serve) for v in vehicles if v.passengers_onboard]
-        if not bases or not self.virtual:
+        if not bases or not self.active:
             return options
         ends = [self._free_at(veh[v_id], stops) for _, v_id, stops in bases]
         nodes, times = np.array([n for n, _ in ends]), np.array([t for _, t in ends])
-        pickups = np.array([q.origin_node for q in self.virtual])
-        t_request = np.array([q.request_time for q in self.virtual])
+        pickups = np.array([q.origin_node for q in self.active])
+        t_request = np.array([q.request_time for q in self.active])
         deadline = self._deadlines()
         # Most trips end after every virtual deadline: skip them, and give each
         # chunk of options (sorted by end time) only the riders it could reach.
@@ -291,7 +297,49 @@ class SampledChainAssignmentSolver(SampledRequestsAssignmentSolver):
             for i, best in enumerate(np.argpartition(extra, k - 1, axis=1)[:, :k]):
                 trip, v_id, stops = bases[rows[i]]
                 for j in best[np.isfinite(extra[i, best])]:
-                    q = self.virtual[cols[j]]
+                    q = self.active[cols[j]]
                     route = Route((*stops, Stop(q.origin_node, True, q.id)), 0.0, 0.0, 0.0)
                     options[(trip | {q.id}, v_id)] = (FeasibleRoute(route, 0.0), float(extra[i, j]))
         return options
+
+
+class SupplyMatched:
+    """
+    Mixin for the sampled solvers: offer only about `virtual_per_free` virtual
+    riders per free vehicle. In the scarce regime future riders outnumber free
+    vehicles several times everywhere, so with every virtual rider offered each
+    free vehicle finds one next to it and hardly anyone moves. Matching free
+    vehicles to a demand-distributed sample of about their own number spreads
+    them like the demand instead (the vehicle-level counterpart of
+    demand-proportional zone targets).
+
+    Each virtual rider draws a fixed mark u ~ U(0, 1) when sampled; riders with
+    u < min(1, virtual_per_free * free vehicles / virtual riders) are active.
+    The active set is a random thinning of the scenario that changes little
+    between batches, so moves stay stable.
+    """
+
+    def __init__(self, *args, virtual_per_free: float = 1.0, seed: int = 0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._per_free = virtual_per_free
+        self._marks_rng = np.random.default_rng(seed)
+        self._marks: dict[str, float] = {}
+
+    def _active(self, vehicles):
+        self._marks = {
+            q.id: self._marks[q.id] if q.id in self._marks else self._marks_rng.random() for q in self.virtual
+        }
+        n_free = sum(
+            1 for v in vehicles
+            if not v.passengers_onboard and all(s.is_rebalancing for s in v.remaining_stops_to_serve)
+        )
+        share = min(1.0, self._per_free * n_free / max(len(self.virtual), 1))
+        return [q for q in self.virtual if self._marks[q.id] < share]
+
+
+class SupplyMatchedSampledSolver(SupplyMatched, SampledRequestsAssignmentSolver):
+    """`sampled` with about `virtual_per_free` virtual riders per free vehicle."""
+
+
+class SupplyMatchedChainSolver(SupplyMatched, SampledChainAssignmentSolver):
+    """`sampled-chain` with about `virtual_per_free` virtual riders per free vehicle."""

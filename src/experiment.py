@@ -33,6 +33,8 @@ from src.components.request_sampler import HistoricalRequestSampler
 from src.components.sampled_assignment_solver import (
     SampledChainAssignmentSolver,
     SampledRequestsAssignmentSolver,
+    SupplyMatchedChainSolver,
+    SupplyMatchedSampledSolver,
 )
 from src.components.simulation_data_provider import SimulationDataProvider
 from src.components.trip_solver import AStarTripSolver
@@ -76,6 +78,7 @@ class ExperimentConfig:
     request_sampler: str = "historical"  # virtual future requests for the sampled solver
     sample_horizon_min: float = 5.0  # look-ahead of the sampled solver
     virtual_weight: float = 0.05  # weight of a virtual rider relative to a real one
+    virtual_per_free: float = 1.0  # active virtual riders per free vehicle (*-matched solvers)
     travel_time_factor: float = config.TRAVEL_TIME_FACTOR
     read_only: bool = False
 
@@ -135,29 +138,32 @@ REQUEST_SAMPLERS: dict[str, Callable[[Context], IRequestSampler]] = {
         exclude={ctx.simulated_day, *HOLIDAYS},
     ),
 }
+def _sampled(cls, ctx: Context, objective: IObjective, **kwargs) -> IAssignmentSolver:
+    return cls(
+        objective,
+        ctx.network,
+        ctx.zones,
+        VEHICLE_VALUES[ctx.config.vehicle_value](ctx),
+        REQUEST_SAMPLERS[ctx.config.request_sampler](ctx),
+        horizon=ctx.config.sample_horizon_min * 60,
+        weight=ctx.config.virtual_weight,
+        **kwargs,
+    )
+
+
 ASSIGNMENT_SOLVERS: dict[str, Callable[[Context, IObjective], IAssignmentSolver]] = {
     "gurobi": lambda ctx, objective: GurobiAssignmentSolver(objective),
     "highs": lambda ctx, objective: HighsAssignmentSolver(objective),
     "joint": lambda ctx, objective: JointAssignmentSolver(
         objective, ctx.network, ctx.zones, VEHICLE_VALUES[ctx.config.vehicle_value](ctx)
     ),
-    "sampled": lambda ctx, objective: SampledRequestsAssignmentSolver(
-        objective,
-        ctx.network,
-        ctx.zones,
-        VEHICLE_VALUES[ctx.config.vehicle_value](ctx),
-        REQUEST_SAMPLERS[ctx.config.request_sampler](ctx),
-        horizon=ctx.config.sample_horizon_min * 60,
-        weight=ctx.config.virtual_weight,
+    "sampled": lambda ctx, objective: _sampled(SampledRequestsAssignmentSolver, ctx, objective),
+    "sampled-chain": lambda ctx, objective: _sampled(SampledChainAssignmentSolver, ctx, objective),
+    "sampled-matched": lambda ctx, objective: _sampled(
+        SupplyMatchedSampledSolver, ctx, objective, virtual_per_free=ctx.config.virtual_per_free
     ),
-    "sampled-chain": lambda ctx, objective: SampledChainAssignmentSolver(
-        objective,
-        ctx.network,
-        ctx.zones,
-        VEHICLE_VALUES[ctx.config.vehicle_value](ctx),
-        REQUEST_SAMPLERS[ctx.config.request_sampler](ctx),
-        horizon=ctx.config.sample_horizon_min * 60,
-        weight=ctx.config.virtual_weight,
+    "sampled-chain-matched": lambda ctx, objective: _sampled(
+        SupplyMatchedChainSolver, ctx, objective, virtual_per_free=ctx.config.virtual_per_free
     ),
 }
 

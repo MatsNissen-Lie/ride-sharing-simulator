@@ -18,6 +18,7 @@ from src.components.request_sampler import HistoricalRequestSampler
 from src.components.sampled_assignment_solver import (
     SampledChainAssignmentSolver,
     SampledRequestsAssignmentSolver,
+    SupplyMatchedSampledSolver,
 )
 from src.interfaces import IRequestSampler, Passenger, Stop, VehicleAvailability
 from tests.conftest import make_request, random_requests, random_vehicle
@@ -252,3 +253,28 @@ def test_chain_without_virtual_requests_is_the_papers_ilp(network, seed):
     rtv = instance(network, vehicles, requests)
     plain = HighsAssignmentSolver().solve(rtv, requests, vehicles, 30, T_NOW)
     assert chain(network).solve(rtv, requests, vehicles, 30, T_NOW).total_cost == pytest.approx(plain.total_cost)
+
+
+def test_supply_matched_offers_about_one_virtual_rider_per_free_vehicle(network):
+    riders = [virtual(network, k, k % network.N, dt=1 + k % 200) for k in range(400)]
+    vehicles = {idle(f"v{k}", k) for k in range(20)}
+    solver = SupplyMatchedSampledSolver(
+        DelayObjective(), network, Zones(), ZeroValue(), FixedSampler(riders), virtual_per_free=2.0
+    )
+    rtv = instance(network, vehicles, [])
+    solver.solve(rtv, set(), vehicles, 30, T_NOW)
+    first = {q.id for q in solver.active}
+    assert 20 <= len(first) <= 60  # about 2 * 20 of 400
+    solver.solve(rtv, set(), vehicles, 30, T_NOW + 10)
+    assert {q.id for q in solver.active} == first  # same marks, same share: stable
+
+
+def test_supply_matched_with_room_for_all_is_the_sampled_solver(network):
+    vehicles = {idle("a", 0), idle("b", 1)}
+    riders = [virtual(network, 1, 21)]
+    rtv = instance(network, vehicles, [])
+    matched = SupplyMatchedSampledSolver(
+        DelayObjective(), network, Zones(), ZeroValue(), FixedSampler(riders), virtual_per_free=1.0
+    ).solve(rtv, set(), vehicles, 30, T_NOW)
+    plain = sampled(network, riders).solve(rtv, set(), vehicles, 30, T_NOW)
+    assert matched.rebalancing == plain.rebalancing and len(plain.rebalancing) == 1

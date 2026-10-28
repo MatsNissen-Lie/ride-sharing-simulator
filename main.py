@@ -77,6 +77,12 @@ def parse_args() -> ExperimentConfig:
         help="Weight of a virtual rider relative to a real one (--solver sampled).",
     )
     parser.add_argument(
+        "--virtual-per-free",
+        type=float,
+        default=DEFAULTS.virtual_per_free,
+        help="Active virtual riders per free vehicle (--solver sampled-matched, sampled-chain-matched).",
+    )
+    parser.add_argument(
         "--rebalancing",
         choices=REBALANCERS,
         default=DEFAULTS.rebalancing,
@@ -108,6 +114,7 @@ def parse_args() -> ExperimentConfig:
         request_sampler=a.request_sampler,
         sample_horizon_min=a.sample_horizon,
         virtual_weight=a.virtual_weight,
+        virtual_per_free=a.virtual_per_free,
         rebalancing=a.rebalancing,
         oracle_horizon_min=a.horizon,
         travel_time_factor=a.travel_time_factor,
