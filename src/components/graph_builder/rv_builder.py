@@ -109,6 +109,12 @@ class RVGraphBuilder(IRVGraphBuilder):
         # Nodes within Omega + NEAR_MARGIN of each node, built on first use.
         self._near: tuple[np.ndarray, np.ndarray] | None = None
         self._rr_routes: dict[tuple[str, str], FeasibleRoute] = {}  # last batch's
+        # Shareable-pair test results across batches (see _shareable_pairs):
+        # requests numbered on first sight, and the pairs (a < b) that passed.
+        self._rr_num: dict[str, int] = {}
+        self._rr_next = 0
+        self._rr_a = np.zeros(0, dtype=np.int64)
+        self._rr_b = np.zeros(0, dtype=np.int64)
 
     def build_graph(
         self, requests: set[Request], vehicles: set[VehicleAvailability]
@@ -127,41 +133,24 @@ class RVGraphBuilder(IRVGraphBuilder):
         t0 = time.perf_counter()
 
         # --- 1. RR PIPELINE (Prune + Solve Integrated) ---
-        # A. Full Matrix Fetch (N x N)
-        # We fetch this once. We will use it for BOTH pruning AND the solver.
-        req_origins = [r.origin_node for r in req_list]
-        rr_matrix = self._network.get_travel_time_matrix(req_origins, req_origins)
-
         # --- PREPARATION: DATA ARRAYS ---
-        # Create numpy views for fast access
-        req_origins = np.array(req_origins)
+        req_origins = np.array([r.origin_node for r in req_list])
         req_dests = np.array([r.destination_node for r in req_list])
         req_times = np.array([r.request_time for r in req_list])
 
-        # B. Vectorized Pruning
-        # Necessary condition: whichever origin is visited first, the second
-        # pickup is no earlier than t_first + tau(o_first, o_second), and must
-        # happen by t_second + Omega. Upper triangle only (pairs are unordered).
-        t_gap = req_times[None, :] - req_times[:, None]  # t_j - t_i
-        rr_mask = np.triu(
-            (rr_matrix <= self._omega + t_gap) | (rr_matrix.T <= self._omega - t_gap),
-            k=1,
-        )
-
-        rr_idx_i, rr_idx_j = np.where(rr_mask)
+        # B. Vectorized Pruning (only pairs with a request new to this batch are
+        # checked; see _shareable_pairs)
+        rr_idx_i, rr_idx_j = self._shareable_pairs(req_list, req_origins, req_times)
         record("rr_prune", t0)
 
         # C. Vectorized Solving
         if len(rr_idx_i) > 0:
             logger.info(f"RR Pruning: evaluating {len(rr_idx_i)} pairs.")
 
-            # OPTIMIZATION: Extract the O->O times we already have!
-            # We need both directions: i->j and j->i
-            # rr_matrix[i, j] gives time(i->j)
-            # rr_matrix[j, i] gives time(j->i) -> This is equivalent to rr_matrix.T[i, j]
-
-            t_o1_o2 = rr_matrix[rr_idx_i, rr_idx_j]
-            t_o2_o1 = rr_matrix.T[rr_idx_i, rr_idx_j]
+            # O->O times in both directions, for the solver
+            mat = self._network.get_l1_cache()
+            t_o1_o2 = mat[req_origins[rr_idx_i], req_origins[rr_idx_j]]
+            t_o2_o1 = mat[req_origins[rr_idx_j], req_origins[rr_idx_i]]
 
             with timed("rr_pairs"):
                 self._solve_rr_matrix_fast(
@@ -230,6 +219,52 @@ class RVGraphBuilder(IRVGraphBuilder):
                         )
 
         return graph
+
+    def _shareable_pairs(
+        self, req_list: list[Request], req_origins: np.ndarray, req_times: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Request pairs (i, j), i < j, that pass the pruning, as np.where on the
+        upper triangle orders them.
+
+        Necessary condition: whichever origin is visited first, the second
+        pickup is no earlier than t_first + tau(o_first, o_second), and must
+        happen by t_second + Omega. The test depends only on the two requests
+        and is symmetric (the same floats either way round), so a pair is
+        tested once, in the first batch holding both, and kept while both stay
+        in the pool. Request ids are unique within a run.
+        """
+        mat = self._network.get_l1_cache()
+        first_new = self._rr_next
+        num = np.array([self._rr_num.get(r.id, -1) for r in req_list])
+        is_new = num < 0
+        num[is_new] = first_new + np.arange(int(is_new.sum()))
+        self._rr_next = first_new + int(is_new.sum())
+        self._rr_num = {r.id: int(k) for r, k in zip(req_list, num)}
+        pos = np.full(self._rr_next, -1)
+        pos[num] = np.arange(len(num))
+
+        # Pairs from earlier batches whose requests are both still waiting.
+        a, b = self._rr_a, self._rr_b
+        alive = (pos[a] >= 0) & (pos[b] >= 0)
+        a, b = a[alive], b[alive]
+        # Pairs with a new request: test it against every request.
+        new = np.flatnonzero(is_new)
+        if len(new):
+            gap = req_times[None, :] - req_times[new, None]  # t_j - t_new
+            ok = (mat[req_origins[new, None], req_origins[None, :]] <= self._omega + gap) | (
+                mat[req_origins[None, :], req_origins[new, None]] <= self._omega - gap
+            )
+            k, j = np.nonzero(ok)
+            k = new[k]
+            once = (k != j) & (~is_new[j] | (k < j))  # a pair of two new ones once
+            k, j = num[k[once]], num[j[once]]
+            a = np.concatenate([a, np.minimum(k, j)])
+            b = np.concatenate([b, np.maximum(k, j)])
+        self._rr_a, self._rr_b = a, b
+
+        i, j = np.minimum(pos[a], pos[b]), np.maximum(pos[a], pos[b])
+        order = np.lexsort((j, i))
+        return i[order], j[order]
 
     def _reachable_pairs(
         self,
