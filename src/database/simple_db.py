@@ -214,21 +214,19 @@ class DuckDBPathCache:
             [targets, targets],
         )
 
+        # Fetch the pairs that exist as columns and scatter them; pairs without
+        # a row stay NaN, like the NULLs of a left join.
         query = f"""
-            SELECT 
-                s.idx AS row_idx,
-                t.idx AS col_idx,
-                ts.{column}
+            SELECT s.idx AS row_idx, t.idx AS col_idx, ts.{column} AS value
             FROM v_sources s
-            CROSS JOIN v_targets t
-            LEFT JOIN time_simple ts 
-                ON s.node_id = ts.o AND t.node_id = ts.d
-            ORDER BY s.idx, t.idx
+            JOIN time_simple ts ON s.node_id = ts.o
+            JOIN v_targets t ON t.node_id = ts.d
         """
-
-        result = self.con.execute(query).fetchall()
-        data = [r[2] for r in result]
-        matrix = np.array(data, dtype=np.float64).reshape(n_rows, n_cols)
+        result = self.con.execute(query).fetchnumpy()
+        matrix = np.full((n_rows, n_cols), np.nan, dtype=np.float64)
+        matrix[result["row_idx"] - 1, result["col_idx"] - 1] = np.ma.filled(
+            result["value"].astype(np.float64), np.nan
+        )
 
         matrix[np.isnan(matrix)] = fill_value
         matrix[matrix < 0] = fill_value
