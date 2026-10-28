@@ -165,6 +165,9 @@ def _load_rider_demand_by_scc(node2scc: dict[int, int]) -> Counter[int]:
     files_processed = 0
     total_rows = 0
     matched_rows = 0
+    # node -> SCC id as an array (-1: not in any SCC), indexed by node id
+    scc_of = np.full(max(node2scc, default=-1) + 2, -1, dtype=np.int64)
+    scc_of[list(node2scc)] = list(node2scc.values())
     for path in files:
         try:
             df = pl.read_parquet(path, columns=["orig_node"])
@@ -176,13 +179,9 @@ def _load_rider_demand_by_scc(node2scc: dict[int, int]) -> Counter[int]:
         series = df.get_column("orig_node").drop_nulls()
         if series.is_empty():
             continue
-        nodes = series.to_numpy()
+        nodes = series.to_numpy().astype(np.int64)
         total_rows += len(nodes)
-        scc_array = np.fromiter(
-            (node2scc.get(int(node), -1) for node in nodes),
-            dtype=np.int64,
-            count=len(nodes),
-        )
+        scc_array = scc_of[np.clip(nodes, -1, len(scc_of) - 1)]  # out of range -> -1
         mask = scc_array >= 0
         if not np.any(mask):
             continue
