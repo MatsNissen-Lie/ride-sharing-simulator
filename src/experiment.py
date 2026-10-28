@@ -402,7 +402,7 @@ def run_experiment(cfg: ExperimentConfig) -> Path:
         if profiler:
             profiler.enable()
         for stats in simulator.run(
-            request_iterator=provider.iter_requests(),
+            request_iterator=provider.iter_requests(start=start_time),
             batch_duration=config.BATCH_DURATION,
             min_start_time=start_time,
             warmup_duration=config.WARMUP_DURATION,

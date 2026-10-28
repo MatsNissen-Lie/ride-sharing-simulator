@@ -463,10 +463,8 @@ class BatchController(IBatchController):
         except StopIteration:
             return
 
-        t_start = current.request_time
-
         # Fast-forward if needed
-        if t_start < min_start_time:
+        if current.request_time < min_start_time:
             while current is not None and current.request_time < min_start_time:
                 try:
                     current = next(meta_iter)
@@ -474,10 +472,9 @@ class BatchController(IBatchController):
                     current = None
                     return
 
-            # Now current.request_time >= min_start_time.
-            # We set t_start to min_start_time (or current.request_time?)
-            # To maintain batch alignment, we might want to start exactly at min_start_time.
-            t_start = min_start_time
+        # Batches start at min_start_time when one is given (the stream may
+        # already begin there), else at the first request.
+        t_start = min_start_time if min_start_time > 0 else current.request_time
 
         while True:
             t_window_end = t_start + batch_window
