@@ -106,6 +106,8 @@ class BatchStatistics:
     vehicle_km_loaded: float = 0.0
     vehicle_km_empty: float = 0.0
     vehicles_rebalanced: int = 0  # rebalancing moves started in this batch
+    # Controller preparation (fleet replay, new requests); not in time_total_batch
+    time_prepare: float = 0.0
 
     # Seconds and calls per timed section (src/utils/timing.py); not a CSV column
     timings: dict[str, tuple[float, int]] = field(default_factory=dict)

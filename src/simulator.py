@@ -91,7 +91,7 @@ class Simulator:
         end_time: float,
     ) -> BatchStatistics | None:
         """Plan one batch; None once the requests or the time window run out."""
-        with timed("prepare"):  # the controller projects the fleet, adds requests
+        with timed("prepare") as prepare:  # the controller projects the fleet, adds requests
             batch = next(batches, None)
         if batch is None:
             return None
@@ -280,6 +280,7 @@ class Simulator:
             time_assign=assignment_duration,
             time_rebal=rebalancing_duration,
             time_total_batch=loop_duration,
+            time_prepare=prepare.seconds,
             rv_edges=len(rv_graph.rv_details),
             trips_count=total_trips,
             objective_value=float(assignment_result.total_cost),

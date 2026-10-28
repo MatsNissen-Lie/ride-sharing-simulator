@@ -48,10 +48,13 @@ def generate_plots(csv_path):
     # Columns: time_rv, time_rtv, time_assign, time_rebal
 
     columns_and_labels = {
+        "time_prepare": "Fleet Replay & Requests",
         "time_rv": "RV Graph",
         "time_assign": "ILP Assignment",
         "time_rtv": "RTV Graph",
+        "time_rebal": "Rebalancing",
     }
+    columns_and_labels = {k: v for k, v in columns_and_labels.items() if k in df.columns}
 
     runtime_cols = list(columns_and_labels.keys())
     labels = list(columns_and_labels.values())
@@ -73,6 +76,8 @@ def generate_plots(csv_path):
     # Calculate Mean Runtime
     if "time_total_batch" in df.columns:
         mean_runtime = df["time_total_batch"].mean()
+        if "time_prepare" in df.columns:
+            mean_runtime += df["time_prepare"].mean()
     else:
         # Fallback if total column missing
         mean_runtime = df[runtime_cols].sum(axis=1).mean()
