@@ -290,3 +290,22 @@ def test_zone_averaged_value_keeps_time_and_drops_location(network):
     expected = [inner.values(np.array([14, 21]), np.full(2, t), T_NOW).mean() for t in times]
     assert flat.values(np.array([0, 5]), times, T_NOW) == pytest.approx(expected)
     assert flat.values(np.array([0]), times[:1], T_NOW) == pytest.approx(flat.values(np.array([5]), times[:1], T_NOW))
+
+
+def test_simplex_takes_over_when_interior_point_fails(monkeypatch):
+    """An interior-point solve error (HiGHS status 4, seen on Jan 30) must not end the run."""
+    import src.components.fleet_mpc as module
+
+    real = module.linprog
+    calls = []
+
+    def flaky(*args, method, **kwargs):
+        calls.append(method)
+        if method == "highs-ipm":
+            return type("Res", (), {"status": 4, "message": "Solve error"})()
+        return real(*args, method=method, **kwargs)
+
+    monkeypatch.setattr(module, "linprog", flaky)
+    values = lp(supply=[[1, 0, 0, 0]], demand=[[10, 10, 10, 10]], trip=[2])
+    assert calls == ["highs-ipm", "highs-ds"]
+    assert values[0] == pytest.approx([2, 2, 1, 1], abs=1e-6)

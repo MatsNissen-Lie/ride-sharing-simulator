@@ -12,6 +12,7 @@ import numpy as np
 from scipy.optimize import linprog
 from scipy.sparse import coo_matrix
 
+from config.logging import get_logger
 from src.components.zone_trips import ZoneTrips
 from src.interfaces import (
     IDemandModel,
@@ -23,6 +24,8 @@ from src.interfaces import (
     VehicleAvailability,
 )
 from src.utils.timing import timed
+
+logger = get_logger(__name__)
 
 
 def _split(steps: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -123,9 +126,15 @@ def fleet_lp_values(
         demand[xi, xk] * shares[xk, xi, xj] / pooling,
         np.full(zk.size + mi.size, np.inf),
     ])
+    bounds = np.column_stack([np.zeros(n_cols), upper])
     with timed("fleet_lp"):
-        res = linprog(cost, A_eq=a_eq, b_eq=b_eq, bounds=np.column_stack([np.zeros(n_cols), upper]),
-                      method="highs-ipm")
+        # Interior point is fast but can stop on a numerical error; the simplex
+        # method then solves the same LP (same optimum, slower).
+        for method in ("highs-ipm", "highs-ds"):
+            res = linprog(cost, A_eq=a_eq, b_eq=b_eq, bounds=bounds, method=method)
+            if res.status == 0:
+                break
+            logger.warning("Fleet LP: %s failed (%s)", method, res.message)
     if res.status != 0:
         raise RuntimeError(f"Fleet LP failed: {res.message}")
     moves = np.zeros((n_zones, n_zones))
