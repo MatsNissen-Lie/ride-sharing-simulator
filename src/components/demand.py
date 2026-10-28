@@ -62,17 +62,14 @@ class HistoricalDemandModel(IDemandModel):
         days = df.select("day").unique()["day"].to_list()
         n_days = {kind: sum(day_type(d) == kind for d in days) for kind in ("weekday", "weekend")}
         counts = (
-            df.with_columns(  # day_type per row; polars counts Monday = 1 .. Sunday = 7
-                pl.when(pl.col("day").dt.weekday() >= 6)
-                .then(pl.lit("weekend"))
-                .otherwise(pl.lit("weekday"))
-                .alias("kind")
-            )
-            .group_by("kind", "slot", "zone")
+            # day_type per row; polars counts Monday = 1 .. Sunday = 7
+            df.with_columns((pl.col("day").dt.weekday() >= 6).alias("weekend"))
+            .group_by("weekend", "slot", "zone")
             .len()
         )
         rates: dict[tuple[str, int], dict[int, float]] = {}
-        for kind, slot, zone, n in counts.iter_rows():
+        for weekend, slot, zone, n in counts.iter_rows():
+            kind = "weekend" if weekend else "weekday"
             rates.setdefault((kind, slot), {})[zone] = n / n_days[kind]
         return cls(rates, t0, slot_minutes)
 
