@@ -283,6 +283,12 @@ def _oracle(ctx: Context) -> IRebalancingSolver:
     )
 
 
+def _transport(ctx: Context) -> IRebalancingSolver:
+    return TransportRebalancingSolver(
+        ctx.network, ctx.zones, ctx.demand, horizon=ctx.config.demand_horizon_min * 60
+    )
+
+
 def _demand(ctx: Context) -> IRebalancingSolver:
     return DemandRebalancingSolver(
         ctx.network, ctx.zones, ctx.demand, horizon=ctx.config.demand_horizon_min * 60
@@ -292,10 +298,10 @@ def _demand(ctx: Context) -> IRebalancingSolver:
 REBALANCERS: dict[str, Callable[[Context], IRebalancingSolver]] = {
     "reactive": lambda ctx: ReactiveRebalancingSolver(ctx.network),
     "oracle": _oracle,
-    "demand": _demand,
-    "transport": lambda ctx: TransportRebalancingSolver(
-        ctx.network, ctx.zones, ctx.demand, horizon=ctx.config.demand_horizon_min * 60
-    ),
+    "forecast-greedy": _demand,  # chase every waiting rider, then fill zone targets greedily
+    "forecast-optimal": _transport,  # reachable riders only, then fewest-moves transport
+    "demand": _demand,  # old name of forecast-greedy, kept so earlier runs reproduce
+    "transport": _transport,  # old name of forecast-optimal
     "none": lambda ctx: NoRebalancingSolver(),
     "mpc": lambda ctx: MpcRebalancingSolver(ctx.network, ctx.zones, ctx.vehicle_value),
 }

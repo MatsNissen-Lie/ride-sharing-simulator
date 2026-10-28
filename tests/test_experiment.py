@@ -21,3 +21,10 @@ def test_demand_model_excludes_every_simulated_day():
     night = simulated_days(t0, 17 * day + 23.75 * 3600, 18 * day + 3 * 3600)
     assert evening == {date(2025, 1, 16)}
     assert night == {date(2025, 1, 18), date(2025, 1, 19)}
+
+
+def test_old_rebalancer_names_still_work():
+    from src.experiment import REBALANCERS
+
+    assert REBALANCERS["forecast-greedy"] is REBALANCERS["demand"]
+    assert REBALANCERS["forecast-optimal"] is REBALANCERS["transport"]

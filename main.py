@@ -86,7 +86,7 @@ def parse_args() -> ExperimentConfig:
         "--rebalancing",
         choices=REBALANCERS,
         default=DEFAULTS.rebalancing,
-        help="reactive (paper), demand (forecast, heuristic), transport (forecast, fewest moves), oracle (perfect information) or none.",
+        help="reactive (paper), forecast-greedy, forecast-optimal (fewest moves), mpc, oracle (perfect information) or none; demand/transport are old names.",
     )
     parser.add_argument(
         "--horizon", type=float, default=DEFAULTS.oracle_horizon_min, help="Oracle look-ahead in minutes."

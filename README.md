@@ -64,7 +64,7 @@ field of `ExperimentConfig`:
 | `assignment_solver` | `IAssignmentSolver` | `ASSIGNMENT_SOLVERS` | gurobi, highs, joint, sampled-* (stage C design C2) |
 | `vehicle_value` | `IVehicleValue` / `IFleetPlan` | `VEHICLE_VALUES` | zero, mpc, mpc_p1, mpc_half, mpc_flat (stage C design C3) |
 | `request_sampler` | `IRequestSampler` | `REQUEST_SAMPLERS` | historical |
-| `rebalancing` | `IRebalancingSolver` | `REBALANCERS` | reactive, demand, transport, mpc, oracle, none |
+| `rebalancing` | `IRebalancingSolver` | `REBALANCERS` | reactive, forecast-greedy, forecast-optimal, mpc, oracle, none (old names demand, transport still work) |
 
 To try a new variant, implement the interface in a new file and register it;
 it is then selectable from `ExperimentConfig` (and the command line for the
