@@ -14,6 +14,7 @@ from src.interfaces import (
     VehicleAvailability,
 )
 from src.interfaces.data_models import Route, Stop
+from src.utils.timing import timed
 
 
 class DemandRebalancingSolver(IRebalancingSolver):
@@ -56,7 +57,8 @@ class DemandRebalancingSolver(IRebalancingSolver):
         # Vehicles chasing a rider are re-planned every batch; zone moves persist.
         zone_move = [v for v in en_route if v.remaining_stops_to_serve[-1].is_zone_move]
         chasing = [v for v in en_route if v not in zone_move]
-        routes = self._reactive.solve(idle_vehicles, unassigned_requests, t_now, chasing)
+        with timed("reactive"):
+            routes = self._reactive.solve(idle_vehicles, unassigned_requests, t_now, chasing)
         free = [
             v for v in [*idle_vehicles, *chasing]
             if v.vehicle_id not in routes or not routes[v.vehicle_id].stops

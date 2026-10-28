@@ -7,6 +7,8 @@ s.t. sum_{T contains r} x_{T,v} + y_r = 1   for every request r
 c and chi come from an IObjective, so the same backends serve any objective.
 """
 
+import time
+
 import gurobipy as gp
 import numpy as np
 from gurobipy import GRB
@@ -23,6 +25,7 @@ from src.interfaces import (
 )
 from src.interfaces.data_models import Assignment
 from src.interfaces.graphs import RTVGraph, TripId
+from src.utils.timing import record, timed
 
 logger = get_logger(__name__)
 
@@ -103,9 +106,10 @@ class GurobiAssignmentSolver(AssignmentSolverBase):
         solver_timeout: float,
         current_time: float,
     ) -> AssignmentResult:
-        costs = self._edge_costs(rtv_graph, requests, vehicles)
+        with timed("costs"):
+            costs = self._edge_costs(rtv_graph, requests, vehicles)
 
-        with gp.Model("RideSharing_Assignment") as model:
+        with timed("model"), gp.Model("RideSharing_Assignment") as model:
             model.setParam(GRB.Param.OutputFlag, 0)
             model.setParam(GRB.Param.TimeLimit, solver_timeout)
             model.setParam(GRB.Param.MIPGap, 0.0)
@@ -145,7 +149,8 @@ class GurobiAssignmentSolver(AssignmentSolverBase):
                 )
 
             self._apply_greedy_warm_start(costs, requests, x_vars, y_vars)
-            model.optimize()
+            with timed("optimize"):
+                model.optimize()
 
             status = model.Status
             if status not in (GRB.OPTIMAL, GRB.TIME_LIMIT, GRB.SUBOPTIMAL):
@@ -194,10 +199,13 @@ class HighsAssignmentSolver(AssignmentSolverBase):
         from scipy.sparse import coo_matrix
 
         req_list = list(requests)
-        moves = self._moves(vehicles, current_time)
+        with timed("moves"):
+            moves = self._moves(vehicles, current_time)
         if not req_list and not moves:
             return AssignmentResult(set(), set(), 0.0, True)
-        costs = self._edge_costs(rtv_graph, requests, vehicles)
+        with timed("costs"):
+            costs = self._edge_costs(rtv_graph, requests, vehicles)
+        t0 = time.perf_counter()
         edges = list(costs)
         req_index = {r.id: k for k, r in enumerate(req_list)}
         veh_index = {v.vehicle_id: k for k, v in enumerate(vehicles)}
@@ -225,13 +233,15 @@ class HighsAssignmentSolver(AssignmentSolverBase):
         n_rows, n_cols = n_y + len(veh_index), n_x + n_m + n_y
         a = coo_matrix((np.ones(len(rows)), (rows, cols)), shape=(n_rows, n_cols)).tocsr()
         lower = np.concatenate([np.ones(n_y), np.zeros(len(veh_index))])
-        result = milp(
-            c=cost,
-            constraints=LinearConstraint(a, lower, np.ones(n_rows)),
-            integrality=np.ones(n_cols),
-            bounds=Bounds(0, 1),
-            options={"time_limit": solver_timeout, "mip_rel_gap": 0.0},
-        )
+        record("matrix", t0)
+        with timed("milp"):
+            result = milp(
+                c=cost,
+                constraints=LinearConstraint(a, lower, np.ones(n_rows)),
+                integrality=np.ones(n_cols),
+                bounds=Bounds(0, 1),
+                options={"time_limit": solver_timeout, "mip_rel_gap": 0.0},
+            )
         if result.x is None:
             raise RuntimeError(f"HiGHS failed to find a solution: {result.message}")
 

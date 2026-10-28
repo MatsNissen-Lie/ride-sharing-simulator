@@ -6,6 +6,7 @@ vehicles that can serve every one of its (k-1)-subsets. Produces the same RTV
 graph as the vehicle-centric builder, with fewer repeated joins.
 """
 
+import time
 from collections import defaultdict
 from typing import cast
 
@@ -14,6 +15,7 @@ from config.config import MAX_REQUESTS_ABOVE_CAPACITY
 from src.interfaces import FeasibleRoute, ITripSolver, Request, VehicleAvailability
 from src.interfaces.graphs import RTVGraph, RVGraph, TripId
 from src.interfaces.services import IRTVGraphBuilder
+from src.utils.timing import record
 
 logger = get_logger(__name__)
 
@@ -43,6 +45,7 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
         trips_by_size: dict[int, set[TripId]] = defaultdict(set)
 
         # T_1: one trip per request, with every RV edge.
+        t0 = time.perf_counter()
         for r_id, veh_ids in rv_graph.request_vehicle.items():
             trip: TripId = frozenset([r_id])
             valid = set()
@@ -55,7 +58,10 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
                 trips_by_size[1].add(trip)
                 trip_vehicles[trip] = frozenset(valid)
 
+        record("size_1", t0)
+
         # T_2: RR-adjacent pairs, checked on vehicles that can serve both.
+        t0 = time.perf_counter()
         for r1, r2, common in rv_graph.get_all_unique_shareable_pairs_with_vehicles():
             trip = frozenset((r1, r2))
             reqs = [req_map[r] for r in sorted(trip)]
@@ -74,11 +80,14 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
                 trips_by_size[2].add(trip)
                 trip_vehicles[trip] = frozenset(valid)
 
+        record("size_2", t0)
+
         max_k = max((trip_limit(v) for v in vehicles), default=0)
         # T_k for k >= 3: join trips sharing their first k-2 sorted requests.
         for k in range(3, max_k + 1):
             if not trips_by_size[k - 1]:
                 break
+            t0 = time.perf_counter()
             prev = sorted(sorted(t) for t in trips_by_size[k - 1])
             for i, trip_a in enumerate(prev):
                 for trip_b in prev[i + 1 :]:
@@ -114,5 +123,6 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
                     if valid:
                         trips_by_size[k].add(trip)
                         trip_vehicles[trip] = frozenset(valid)
+            record(f"size_{k}", t0)
 
         return rtv_graph

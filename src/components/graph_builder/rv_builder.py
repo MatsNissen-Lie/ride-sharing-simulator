@@ -23,8 +23,10 @@ one-passenger vehicles and request pairs use vectorised closed forms. The result
 :class:`RVGraph` defined below.
 """
 
-import numpy as np
+import time
 from typing import cast
+
+import numpy as np
 
 from config import get_logger
 from config.config import DELTA, OMEGA
@@ -41,6 +43,7 @@ from src.interfaces import (
 )
 from src.interfaces.graphs import RVGraph
 from src.interfaces.services import INetworkService
+from src.utils.timing import record, timed
 
 
 logger = get_logger("rv_graph_builder")
@@ -80,6 +83,7 @@ class RVGraphBuilder(IRVGraphBuilder):
 
         if n_req == 0:
             return graph
+        t0 = time.perf_counter()
 
         # --- 1. RR PIPELINE (Prune + Solve Integrated) ---
         # A. Full Matrix Fetch (N x N)
@@ -104,6 +108,7 @@ class RVGraphBuilder(IRVGraphBuilder):
         )
 
         rr_idx_i, rr_idx_j = np.where(rr_mask)
+        record("rr_prune", t0)
 
         # C. Vectorized Solving
         if len(rr_idx_i) > 0:
@@ -117,21 +122,23 @@ class RVGraphBuilder(IRVGraphBuilder):
             t_o1_o2 = rr_matrix[rr_idx_i, rr_idx_j]
             t_o2_o1 = rr_matrix.T[rr_idx_i, rr_idx_j]
 
-            self._solve_rr_matrix_fast(
-                rr_idx_i,
-                rr_idx_j,
-                req_list,
-                req_times,
-                req_origins,
-                req_dests,
-                t_o1_o2,
-                t_o2_o1,  # Pass pre-calculated times
-                graph,
-            )
+            with timed("rr_pairs"):
+                self._solve_rr_matrix_fast(
+                    rr_idx_i,
+                    rr_idx_j,
+                    req_list,
+                    req_times,
+                    req_origins,
+                    req_dests,
+                    t_o1_o2,
+                    t_o2_o1,  # Pass pre-calculated times
+                    graph,
+                )
 
         # --- 2. RV PIPELINE (Split Execution) ---
 
         if n_veh > 0:
+            t0 = time.perf_counter()
             veh_locs = [v.available_at_node for v in veh_list]
 
             # Broadcasting shapes
@@ -160,32 +167,36 @@ class RVGraphBuilder(IRVGraphBuilder):
                 occupancy = np.array(
                     [len(veh_list[i].passengers_onboard) for i in v_idx]
                 )
+                record("rv_prune", t0)
 
                 # --- CASE 0: EMPTY (m=0) ---
                 mask_0 = (occupancy == 0) & self._closed_forms
                 if np.any(mask_0):
-                    self._solve_rv_matrix_empty(
-                        v_idx[mask_0],
-                        r_idx[mask_0],
-                        veh_list,
-                        req_list,
-                        raw_diff[v_idx[mask_0], r_idx[mask_0]],  # delay_vals
-                        graph,
-                    )
+                    with timed("rv_empty"):
+                        self._solve_rv_matrix_empty(
+                            v_idx[mask_0],
+                            r_idx[mask_0],
+                            veh_list,
+                            req_list,
+                            raw_diff[v_idx[mask_0], r_idx[mask_0]],  # delay_vals
+                            graph,
+                        )
 
                 # --- CASE 1: 1 PASSENGER (m=1) ---
                 mask_1 = (occupancy == 1) & self._closed_forms
                 if np.any(mask_1):
-                    self._solve_rv_matrix_m1(
-                        v_idx[mask_1], r_idx[mask_1], veh_list, req_list, graph
-                    )
+                    with timed("rv_one_passenger"):
+                        self._solve_rv_matrix_m1(
+                            v_idx[mask_1], r_idx[mask_1], veh_list, req_list, graph
+                        )
 
                 # --- CASE 2+: COMPLEX (m >= 2) ---
                 mask_high = ~(mask_0 | mask_1)
                 if np.any(mask_high):
-                    self._solve_rv_occupied(
-                        v_idx[mask_high], r_idx[mask_high], veh_list, req_list, graph
-                    )
+                    with timed("rv_occupied"):
+                        self._solve_rv_occupied(
+                            v_idx[mask_high], r_idx[mask_high], veh_list, req_list, graph
+                        )
 
         return graph
 

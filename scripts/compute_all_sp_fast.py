@@ -147,7 +147,7 @@ def main():
         f"SCC {TARGET_SCC_ID}: {len(scc_nodes)} nodes, {H_scc.number_of_edges()} edges."
     )
 
-    cache = DuckDBPathCache()
+    cache = DuckDBPathCache(read_only=False)
     con = cache.con
 
     # Check existing work using GROUP BY

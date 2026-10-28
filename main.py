@@ -98,6 +98,9 @@ def parse_args() -> ExperimentConfig:
         help="Override config.TRAVEL_TIME_FACTOR (1.0 = free-flow speeds).",
     )
     parser.add_argument("--read-only", action="store_true", help="Do not write to the route database.")
+    parser.add_argument(
+        "--profile", action="store_true", help="cProfile the batches into profile.prof (slows the run)."
+    )
     a = parser.parse_args()
     return ExperimentConfig(
         name=a.name,
@@ -119,6 +122,7 @@ def parse_args() -> ExperimentConfig:
         oracle_horizon_min=a.horizon,
         travel_time_factor=a.travel_time_factor,
         read_only=a.read_only,
+        profile=a.profile,
     )
 
 

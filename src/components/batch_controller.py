@@ -19,6 +19,7 @@ from src.interfaces import (
 )
 from src.interfaces.data_models import NetworkPathExtended, Route
 from src.interfaces.stats import ControllerStats
+from src.utils.timing import timed
 
 logger = get_logger(__name__)
 
@@ -482,13 +483,14 @@ class BatchController(IBatchController):
             t_window_end = t_start + batch_window
             window_meta: list[MetaRequest] = []
 
-            while current is not None and current.request_time < t_window_end:
-                window_meta.append(current)
-                try:
-                    current = next(meta_iter)
-                except StopIteration:
-                    current = None
-                    break
+            with timed("read_requests"):
+                while current is not None and current.request_time < t_window_end:
+                    window_meta.append(current)
+                    try:
+                        current = next(meta_iter)
+                    except StopIteration:
+                        current = None
+                        break
 
             batch_requests, snapshots = self.prepare_batch(
                 t_now=t_window_end, new_meta=window_meta
@@ -496,11 +498,12 @@ class BatchController(IBatchController):
 
             # validate that all vehicle availabilities are >= t_window_end
             # and all request times are <= t_window_end
-            self._validate_batch_consistency(
-                t_now=t_window_end,
-                snapshots=snapshots,
-                requests=batch_requests,
-            )
+            with timed("validate"):
+                self._validate_batch_consistency(
+                    t_now=t_window_end,
+                    snapshots=snapshots,
+                    requests=batch_requests,
+                )
 
             # Record batch history
             self._batch_end_times.append(t_window_end)
@@ -528,13 +531,16 @@ class BatchController(IBatchController):
     ) -> Tuple[Set[Request], Set[VehicleAvailability]]:
 
         # 1) update vehicles and remove served requests
-        snapshots = self.project_fleet_and_update_requests(t_now)
+        with timed("project_fleet"):
+            snapshots = self.project_fleet_and_update_requests(t_now)
 
         # 2) Expire zombie requests
-        self._expire_stale_requests(t_now)
+        with timed("expire"):
+            self._expire_stale_requests(t_now)
 
         # 3) Convert new meta requests and add to index
-        new_requests = self.convert_meta_requests(new_meta)
+        with timed("new_requests"):
+            new_requests = self.convert_meta_requests(new_meta)
         self._current_stats.new_requests_count += len(new_requests)
         for req in new_requests:
             self._request_index[req.id] = req

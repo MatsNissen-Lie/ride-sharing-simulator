@@ -15,6 +15,7 @@ from src.interfaces import (
     VehicleAvailability,
 )
 from src.interfaces.graphs import RTVGraph, TripId
+from src.utils.timing import timed
 
 
 class ZeroValue(IVehicleValue):
@@ -73,8 +74,9 @@ class JointAssignmentSolver(HighsAssignmentSolver):
         current_time: float,
     ) -> AssignmentResult:
         self._t_now = current_time
-        self._value.prepare(vehicles, requests, current_time)
-        self._plan_value = self._current_plan_values(vehicles)
+        with timed("values"):
+            self._value.prepare(vehicles, requests, current_time)
+            self._plan_value = self._current_plan_values(vehicles)
         return super().solve(rtv_graph, requests, vehicles, solver_timeout, current_time)
 
     def _end_state(self, vehicle: VehicleAvailability, stops) -> tuple[int, float]:

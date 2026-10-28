@@ -1,7 +1,7 @@
 """Dataclasses for simulation statistics."""
 
 from datetime import datetime
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -106,6 +106,9 @@ class BatchStatistics:
     vehicle_km_loaded: float = 0.0
     vehicle_km_empty: float = 0.0
     vehicles_rebalanced: int = 0  # rebalancing moves started in this batch
+
+    # Seconds and calls per timed section (src/utils/timing.py); not a CSV column
+    timings: dict[str, tuple[float, int]] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return self.__dict__

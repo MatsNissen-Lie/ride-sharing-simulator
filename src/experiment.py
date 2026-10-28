@@ -6,7 +6,10 @@
 To add a component, implement its interface and register a factory below.
 """
 
+import cProfile
+import io
 import os
+import pstats
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime, timedelta
 from functools import cached_property
@@ -70,6 +73,7 @@ from src.simulator import Simulator
 from src.utils.generate_plots import generate_plots
 from src.utils.output_manager import SimulationOutputManager
 from src.utils.stats_logger import SimulationStatsLogger
+from src.utils.timing import TIMER, TimingLog, format_summary, summarize, timed
 
 logger = get_logger(__name__)
 
@@ -101,6 +105,7 @@ class ExperimentConfig:
     virtual_per_free: float = 1.0  # active virtual riders per free vehicle (*-matched solvers)
     travel_time_factor: float = config.TRAVEL_TIME_FACTOR
     read_only: bool = False
+    profile: bool = False  # cProfile the batches into profile.prof (slows the run)
 
 
 @dataclass
@@ -347,25 +352,38 @@ def run_experiment(cfg: ExperimentConfig) -> Path:
         if getattr(cfg, key) not in registry:
             raise ValueError(f"Unknown {key} {getattr(cfg, key)!r}; choose from {list(registry)}")
 
-    provider = SimulationDataProvider()
-    start_time, end_time = simulation_window(cfg, provider)
+    TIMER.take()  # drop anything timed before this run
+    with timed("setup"):
+        with timed("data"):  # graph and fleet; requests are read lazily
+            provider = SimulationDataProvider()
+        start_time, end_time = simulation_window(cfg, provider)
 
-    output = SimulationOutputManager(base_dir="reports", run_name=cfg.name)
-    metadata = {k: getattr(config, k) for k in dir(config) if k.isupper()}
-    metadata |= {"experiment": asdict(replace(cfg, start=str(cfg.start))), "start_time": start_time,
-                 "end_time": end_time}
-    output.save_metadata(metadata)
-    csv_path = os.path.join(output.get_run_dir(), "simulation_stats.csv")
+        output = SimulationOutputManager(base_dir="reports", run_name=cfg.name)
+        run_dir = Path(output.get_run_dir())
+        metadata = {k: getattr(config, k) for k in dir(config) if k.isupper()}
+        metadata |= {"experiment": asdict(replace(cfg, start=str(cfg.start))), "start_time": start_time,
+                     "end_time": end_time}
+        output.save_metadata(metadata)
+        csv_path = str(run_dir / "simulation_stats.csv")
 
-    logger.info("Initializing components...")
-    db_cache = DuckDBPathCache(read_only=cfg.read_only)
-    network = NetworkXService(
-        provider.graph, db=db_cache, travel_time_factor=cfg.travel_time_factor
-    )
-    simulator = build_simulator(Context(cfg, provider, network, start_time, end_time), db_cache)
+        logger.info("Initializing components...")
+        with timed("network"):  # all-pairs travel times into memory
+            db_cache = DuckDBPathCache(read_only=cfg.read_only)
+            network = NetworkXService(
+                provider.graph, db=db_cache, travel_time_factor=cfg.travel_time_factor
+            )
+        with timed("components"):
+            simulator = build_simulator(
+                Context(cfg, provider, network, start_time, end_time), db_cache
+            )
 
+    timing = TimingLog()
+    timing.add("setup", 0, TIMER.take())
+    profiler = cProfile.Profile() if cfg.profile else None
     stats_logger = SimulationStatsLogger()
     try:
+        if profiler:
+            profiler.enable()
         for stats in simulator.run(
             request_iterator=provider.iter_requests(),
             batch_duration=config.BATCH_DURATION,
@@ -376,22 +394,46 @@ def run_experiment(cfg: ExperimentConfig) -> Path:
         ):
             if not isinstance(stats, BatchStatistics):
                 continue
-            if stats.is_warmup:
-                logger.info(f"🔥 Warm-up batch {stats.batch_id}. Stats NOT logged.")
-                continue
-            stats_logger.log_batch(stats)
-            if stats.batch_id % 20 == 0:
-                stats_logger.flush_to_csv(csv_path)
+            with timed("stats"):
+                if stats.is_warmup:
+                    logger.info(f"🔥 Warm-up batch {stats.batch_id}. Stats NOT logged.")
+                else:
+                    stats_logger.log_batch(stats)
+                    if stats.batch_id % 20 == 0:
+                        stats_logger.flush_to_csv(csv_path)
+            # Logging this batch's stats is counted with the next batch.
+            timing.add("warmup" if stats.is_warmup else "measured", stats.batch_id, stats.timings)
         logger.info("🏁 Simulation complete.")
     except KeyboardInterrupt:
         logger.info("🛑 Simulation stopped by user (Ctrl+C).")
     finally:
-        stats_logger.flush_to_csv(csv_path)
-        stats_logger.print_summary()
+        if profiler:
+            profiler.disable()
+            _save_profile(profiler, run_dir)
+        with timed("end"):
+            stats_logger.flush_to_csv(csv_path)
+            stats_logger.print_summary()
 
-    if os.path.exists(csv_path):
-        logger.info("📊 Generating plots...")
-        generate_plots(csv_path)
-    else:
-        logger.warning("No stats CSV found, skipping plot generation.")
-    return Path(output.get_run_dir())
+    with timed("end"):
+        if os.path.exists(csv_path):
+            logger.info("📊 Generating plots...")
+            with timed("plots"):
+                generate_plots(csv_path)
+        else:
+            logger.warning("No stats CSV found, skipping plot generation.")
+    timing.add("end", 0, TIMER.take())
+    _save_timing(timing, run_dir)
+    return run_dir
+
+
+def _save_timing(timing: TimingLog, run_dir: Path) -> None:
+    frame = timing.frame()
+    frame.write_csv(run_dir / "timing.csv")
+    logger.info("⏱️ Where the time went (timing.csv):\n%s", format_summary(summarize(frame)))
+
+
+def _save_profile(profiler: cProfile.Profile, run_dir: Path) -> None:
+    profiler.dump_stats(run_dir / "profile.prof")
+    out = io.StringIO()
+    pstats.Stats(profiler, stream=out).sort_stats("tottime").print_stats(30)
+    logger.info("cProfile, top 30 by own time (profile.prof):\n%s", out.getvalue())

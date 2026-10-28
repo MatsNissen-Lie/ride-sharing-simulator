@@ -14,6 +14,7 @@ from src.interfaces import (
     VehicleAvailability,
 )
 from src.interfaces.data_models import Route, Stop
+from src.utils.timing import timed
 
 STOP = Route((), 0.0, 0.0, 0.0)
 
@@ -67,7 +68,8 @@ class TransportRebalancingSolver(IRebalancingSolver):
         )
         routes = {v.vehicle_id: STOP for v in en_route if v not in zone_move}
 
-        routes.update(self._serve_reachable(free, unassigned_requests))
+        with timed("serve_reachable"):
+            routes.update(self._serve_reachable(free, unassigned_requests))
         free = [v for v in free if routes.get(v.vehicle_id, STOP) is STOP]
 
         expected = zone_vector(
@@ -82,7 +84,8 @@ class TransportRebalancingSolver(IRebalancingSolver):
         target = integer_targets(expected / expected.sum() * n_total)
         for z in self._zones.zones_of(heading):
             target[self._col[int(z)]] -= 1
-        routes.update(self._transport(free, np.maximum(target, 0)))
+        with timed("transport"):
+            routes.update(self._transport(free, np.maximum(target, 0)))
         return routes
 
     def _serve_reachable(self, free, riders) -> dict[str, Route]:
