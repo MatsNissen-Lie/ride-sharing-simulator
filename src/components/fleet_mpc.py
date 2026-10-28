@@ -22,6 +22,7 @@ from src.interfaces import (
     Request,
     VehicleAvailability,
 )
+from src.utils.timing import timed
 
 
 def _split(steps: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -122,8 +123,9 @@ def fleet_lp_values(
         demand[xi, xk] * shares[xk, xi, xj] / pooling,
         np.full(zk.size + mi.size, np.inf),
     ])
-    res = linprog(cost, A_eq=a_eq, b_eq=b_eq, bounds=np.column_stack([np.zeros(n_cols), upper]),
-                  method="highs-ipm")
+    with timed("fleet_lp"):
+        res = linprog(cost, A_eq=a_eq, b_eq=b_eq, bounds=np.column_stack([np.zeros(n_cols), upper]),
+                      method="highs-ipm")
     if res.status != 0:
         raise RuntimeError(f"Fleet LP failed: {res.message}")
     moves = np.zeros((n_zones, n_zones))

@@ -48,7 +48,11 @@ class ZoneTrips:
 
         shares: dict[tuple[str, int], np.ndarray] = {}
         counts = (
-            df.with_columns(pl.col("day").map_elements(day_type, return_dtype=pl.String).alias("kind"))
+            # day_type, vectorized: polars weekdays run 1 (Monday) to 7.
+            df.with_columns(
+                pl.when(pl.col("day").dt.weekday() >= 6).then(pl.lit("weekend")).otherwise(pl.lit("weekday"))
+                .alias("kind")
+            )
             .group_by("kind", "hour", "o", "d").len()
         )
         for (kind, hour), g in counts.group_by("kind", "hour"):

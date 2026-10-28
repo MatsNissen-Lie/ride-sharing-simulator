@@ -19,6 +19,7 @@ from src.interfaces import (
     VehicleAvailability,
 )
 from src.interfaces.graphs import RTVGraph, TripId
+from src.utils.timing import timed
 
 logger = get_logger(__name__)
 
@@ -111,15 +112,17 @@ class SampledRequestsAssignmentSolver(JointAssignmentSolver):
     ) -> AssignmentResult:
         start = current_time if self._sampled_until is None else max(self._sampled_until, current_time)
         end = current_time + self._horizon
-        if end > start:
-            self.virtual += self._sampler.sample(start, end)
-            self._sampled_until = end
-        self.virtual = [q for q in self.virtual if q.latest_pickup_time > current_time]
-        self._virtual_ids.clear()
-        self._virtual_ids.update(q.id for q in self.virtual)
-        self.active = self._active(vehicles, current_time)
+        with timed("sample"):
+            if end > start:
+                self.virtual += self._sampler.sample(start, end)
+                self._sampled_until = end
+            self.virtual = [q for q in self.virtual if q.latest_pickup_time > current_time]
+            self._virtual_ids.clear()
+            self._virtual_ids.update(q.id for q in self.virtual)
+            self.active = self._active(vehicles, current_time)
 
-        options = self._virtual_options(rtv_graph, vehicles)
+        with timed("virtual_options"):
+            options = self._virtual_options(rtv_graph, vehicles)
         self._real_graph = rtv_graph
         self._virtual_costs = {key: cost for key, (_, cost) in options.items()}
         graph = RTVGraph(
@@ -164,21 +167,30 @@ class SampledRequestsAssignmentSolver(JointAssignmentSolver):
         origins = [v.available_at_node for v in free]
         pickups = [q.origin_node for q in self.active]
         travel = self._net.get_travel_time_matrix(origins, pickups)
-        dist = self._net.get_distance_matrix()[np.ix_(origins, pickups)]
         arrival = np.array([v.available_from_time for v in free])[:, None] + travel
+        # Costs only for the pairs in time (most are not); the rest gain -inf.
+        rows, cols = np.nonzero(arrival <= self._deadlines()[None, :])
+        travel, arrival = travel[rows, cols], arrival[rows, cols]
+        dist = self._net.get_distance_matrix()[np.array(origins)[rows], np.array(pickups)[cols]]
         cost = (
             self._costs.rebalancing_cost(travel, dist)
-            + self._weight * self._wait(arrival)
-            - np.array([self._move_left(v) for v in free])[:, None]
+            + self._weight * self._wait(arrival, cols)
+            - np.array([self._move_left(v) for v in free])[rows]
         )
-        gain = self._reward()[None, :] - cost
-        gain[~(arrival <= self._deadlines()[None, :])] = -np.inf
+        gain = np.full((len(free), len(self.active)), -np.inf)
+        gain[rows, cols] = self._reward()[cols] - cost
 
+        with timed("candidates"):
+            keep = self._candidates(gain)
         options = {}
-        for i, j in zip(*np.nonzero(self._candidates(gain))):
+        # Columns are a subset of the pairs in time, in the same (row-major) order.
+        pick = np.flatnonzero(keep[rows, cols])
+        for i, j, t, d, c in zip(
+            rows[pick].tolist(), cols[pick].tolist(), travel[pick].tolist(), dist[pick].tolist(), cost[pick].tolist()
+        ):
             v, q = free[i], self.active[j]
-            route = Route((Stop(q.origin_node, True, q.id),), float(travel[i, j]), float(dist[i, j]), 0.0)
-            options[(frozenset({q.id}), v.vehicle_id)] = (FeasibleRoute(route, 0.0), float(cost[i, j]))
+            route = Route((Stop(q.origin_node, True, q.id),), t, d, 0.0)
+            options[(frozenset({q.id}), v.vehicle_id)] = (FeasibleRoute(route, 0.0), c)
         return options
 
     def _candidates(self, gain: np.ndarray) -> np.ndarray:
@@ -193,9 +205,9 @@ class SampledRequestsAssignmentSolver(JointAssignmentSolver):
         """Virtual riders offered to vehicles this batch: all of them."""
         return self.virtual
 
-    def _wait(self, arrival: np.ndarray) -> np.ndarray:
-        """Wait of each virtual rider (columns) for a vehicle arriving at `arrival`."""
-        return np.maximum(arrival - np.array([q.request_time for q in self.active])[None, :], 0.0)
+    def _wait(self, arrival: np.ndarray, cols: np.ndarray) -> np.ndarray:
+        """Wait of virtual riders `cols` (indices into `active`) for vehicles arriving at `arrival`."""
+        return np.maximum(arrival - np.array([q.request_time for q in self.active])[cols], 0.0)
 
     def _deadlines(self) -> np.ndarray:
         return np.array([q.latest_pickup_time for q in self.active])

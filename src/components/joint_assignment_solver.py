@@ -135,19 +135,20 @@ class JointAssignmentSolver(HighsAssignmentSolver):
         rows, cols = np.nonzero(reachable)
         value = self._value.values(self._centres[cols], arrival[rows, cols], current_time)
 
+        cost = (
+            self._objective.rebalancing_cost(travel[rows, cols], dist[rows, cols])
+            - value
+            + np.array([self._plan_value[v.vehicle_id] for v in free])[rows]
+        )
+        # Per vehicle, the `n_moves` cheapest moves with a gain (ties: zone order).
+        gain = cost < 0
+        rows, cols, cost = rows[gain], cols[gain], cost[gain]
+        order = np.lexsort((cols, cost, rows))
+        rows, cols, cost = rows[order], cols[order], cost[order]
+        best = np.arange(len(rows)) - np.searchsorted(rows, rows) < self._n_moves
         moves: list[tuple[str, float, Route]] = []
-        by_vehicle: dict[int, list[tuple[float, int]]] = {}
-        for i, j, val in zip(rows, cols, value):
-            cost = (
-                self._objective.rebalancing_cost(float(travel[i, j]), float(dist[i, j]))
-                - float(val)
-                + self._plan_value[free[i].vehicle_id]
-            )
-            if cost < 0:
-                by_vehicle.setdefault(int(i), []).append((cost, int(j)))
-        for i, options in by_vehicle.items():
-            for cost, j in sorted(options)[: self._n_moves]:
-                stop = Stop.zone_move(int(self._centres[j]), self._zone_ids[j])
-                route = Route((stop,), float(travel[i, j]), float(dist[i, j]), 0.0)
-                moves.append((free[i].vehicle_id, cost, route))
+        for i, j, c in zip(rows[best].tolist(), cols[best].tolist(), cost[best].tolist()):
+            stop = Stop.zone_move(int(self._centres[j]), self._zone_ids[j])
+            route = Route((stop,), float(travel[i, j]), float(dist[i, j]), 0.0)
+            moves.append((free[i].vehicle_id, c, route))
         return moves
