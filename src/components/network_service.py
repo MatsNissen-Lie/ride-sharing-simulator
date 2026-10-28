@@ -329,7 +329,7 @@ class NetworkXService(INetworkService):
         directory or computed (~2.4 s for Manhattan) and stored there."""
         path = self._tree_cache_dir / f"shortest_path_trees_{self._graph_key()}.npy"
         if path.exists():
-            return np.load(path, mmap_mode="r")
+            return np.load(path)  # whole, as in _route_arrays
         _, trees = dijkstra(self._adjacency, return_predecessors=True)
         _save(path, trees.astype(np.int32))
         return trees
@@ -379,8 +379,9 @@ class NetworkXService(INetworkService):
         names = (f"next_hop_{key}.npy", f"path_time_{key}_x{factor}.npy", f"path_length_{key}.npy")
         cache = self._tree_cache_dir
         if cache is not None and all((cache / n).exists() for n in names):
-            # Plain arrays over the mapped files: memmap indexing is slower.
-            routes = tuple(np.load(cache / n, mmap_mode="r").view(np.ndarray) for n in names)
+            # Read whole: one sequential read beats page faults all over the
+            # files (~30 s on a cold disk cache), and plain arrays index faster.
+            routes = tuple(np.load(cache / n) for n in names)
         else:
             routes = self._build_route_arrays()
             if routes is None:
