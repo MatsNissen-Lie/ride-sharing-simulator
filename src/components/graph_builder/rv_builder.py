@@ -151,7 +151,6 @@ class RVGraphBuilder(IRVGraphBuilder):
             v_times_arr = np.array([v.available_from_time for v in veh_list])[
                 :, None
             ]  # (V, 1)
-            r_times_arr = req_times[None, :]  # (1, R)
 
             # A. Matrix Fetch & Pruning
             rv_matrix = self._network.get_travel_time_matrix(
@@ -159,9 +158,9 @@ class RVGraphBuilder(IRVGraphBuilder):
             )  # (V, R)
 
             # Pickup deadline (request_time + Omega, or the promised pickup time)
-            raw_diff = (v_times_arr + rv_matrix) - r_times_arr
+            arrival = v_times_arr + rv_matrix
             r_latest_pickup = np.array([r.latest_pickup_time for r in req_list])
-            rv_mask = (v_times_arr + rv_matrix) <= r_latest_pickup[None, :]
+            rv_mask = arrival <= r_latest_pickup[None, :]
 
             # Indices of ALL feasible pairs
             v_idx, r_idx = np.where(rv_mask)
@@ -171,8 +170,8 @@ class RVGraphBuilder(IRVGraphBuilder):
 
                 # 1. Compute Occupancy for ALL candidates once
                 occupancy = np.array(
-                    [len(veh_list[i].passengers_onboard) for i in v_idx]
-                )
+                    [len(v.passengers_onboard) for v in veh_list]
+                )[v_idx]
                 record("rv_prune", t0)
 
                 # --- CASE 0: EMPTY (m=0) ---
@@ -184,7 +183,8 @@ class RVGraphBuilder(IRVGraphBuilder):
                             r_idx[mask_0],
                             veh_list,
                             req_list,
-                            raw_diff[v_idx[mask_0], r_idx[mask_0]],  # delay_vals
+                            # delay_vals
+                        arrival[v_idx[mask_0], r_idx[mask_0]] - req_times[r_idx[mask_0]],
                             graph,
                         )
 
@@ -388,11 +388,56 @@ class RVGraphBuilder(IRVGraphBuilder):
         graph: RVGraph,
     ):
         """Exact trip solver for the edges without a closed form."""
+        if self._closed_forms and len(v_idxs):
+            keep = self._may_be_feasible(v_idxs, r_idxs, veh_list, req_list)
+            v_idxs, r_idxs = v_idxs[keep], r_idxs[keep]
         for v, r in zip(v_idxs, r_idxs):
             vehicle, req = veh_list[v], req_list[r]
             result = self._trip_solver.solve([req], vehicle)
             if result.is_feasible:
                 graph.add_rv_edge(req.id, vehicle.vehicle_id, cast(FeasibleRoute, result))
+
+    def _may_be_feasible(
+        self,
+        v_idxs: np.ndarray,
+        r_idxs: np.ndarray,
+        veh_list: list[VehicleAvailability],
+        req_list: list[Request],
+    ) -> np.ndarray:
+        """False where no route can serve the request (a necessary condition only).
+
+        A route either picks the rider up first (a free seat, and every onboard
+        passenger still reachable by their deadline from the pickup) or drops
+        some passenger j first (then the pickup is reached no earlier than via
+        j's destination). Both use the trip solver's rules: hard deadlines,
+        no waiting, travel times from the matrix. The tolerance keeps float
+        rounding of the triangle inequality from rejecting a feasible pair.
+        About half of these pairs are rejected without running the solver.
+        """
+        tol = 1e-6
+        mat = self._network.get_l1_cache()
+        vehicles = [veh_list[i] for i in v_idxs]
+        k = max(len(v.passengers_onboard) for v in vehicles)
+        dest = np.zeros((len(vehicles), k), dtype=np.int64)
+        deadline = np.full((len(vehicles), k), np.inf)
+        onboard = np.zeros((len(vehicles), k), dtype=bool)
+        for n, v in enumerate(vehicles):
+            for j, p in enumerate(v.passengers_onboard):
+                dest[n, j] = p.original_request.destination_node
+                deadline[n, j] = p.original_request.latest_dropoff_time
+                onboard[n, j] = True
+        at = np.array([v.available_at_node for v in vehicles])[:, None]
+        t0 = np.array([v.available_from_time for v in vehicles])[:, None]
+        seats = np.array([v.capacity - len(v.passengers_onboard) for v in vehicles])
+        origin = np.array([req_list[i].origin_node for i in r_idxs])[:, None]
+        latest_pickup = np.array([req_list[i].latest_pickup_time for i in r_idxs])[:, None]
+
+        pickup = t0 + mat[at, origin]
+        late = onboard & (pickup + mat[origin, dest] > deadline + tol)
+        pickup_first = (seats > 0) & ~late.any(axis=1)
+        via = t0 + mat[at, dest] + mat[dest, origin]
+        drop_first = (onboard & (via <= latest_pickup + tol)).any(axis=1)
+        return pickup_first | drop_first
 
     def _solve_rv_matrix_m1(
         self,

@@ -132,8 +132,8 @@ def summarize(timing: pl.DataFrame) -> pl.DataFrame:
     """Per section: total, share of the run, calls, and per-batch mean/p95/max.
 
     Rows are in tree order (children under their parent, largest first). A
-    parent whose children do not cover it gets a "(untimed)" child with the
-    remainder, so gaps in the instrumentation show up.
+    parent whose children (other than "gc") do not cover it gets a "(untimed)"
+    child with the remainder, so gaps in the instrumentation show up.
     """
     batches = timing.filter(pl.col("phase").is_in(["warmup", "measured"]))
     n_batches = max(batches["batch"].n_unique(), 1)
@@ -156,7 +156,7 @@ def summarize(timing: pl.DataFrame) -> pl.DataFrame:
         parent = path.rpartition("/")[0]
         children.setdefault(parent, []).append(path)
     for parent, kids in list(children.items()):
-        if not parent:
+        if not parent or all(k.endswith("/gc") for k in kids):
             continue
         rest = total[parent] - sum(total[k] for k in kids)
         if rest > 0.01 * total[parent]:
