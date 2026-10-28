@@ -116,7 +116,7 @@ class SampledRequestsAssignmentSolver(JointAssignmentSolver):
         self.virtual = [q for q in self.virtual if q.latest_pickup_time > current_time]
         self._virtual_ids.clear()
         self._virtual_ids.update(q.id for q in self.virtual)
-        self.active = self._active(vehicles)
+        self.active = self._active(vehicles, current_time)
 
         options = self._virtual_options(rtv_graph, vehicles)
         self._real_graph = rtv_graph
@@ -173,15 +173,21 @@ class SampledRequestsAssignmentSolver(JointAssignmentSolver):
         gain[~(arrival <= self._deadlines()[None, :])] = -np.inf
 
         options = {}
-        for i, v in enumerate(free):
-            best = np.argsort(-gain[i])[: self._n_virtual]
-            for j in best[gain[i, best] > 0]:
-                q = self.active[j]
-                route = Route((Stop(q.origin_node, True, q.id),), float(travel[i, j]), float(dist[i, j]), 0.0)
-                options[(frozenset({q.id}), v.vehicle_id)] = (FeasibleRoute(route, 0.0), float(cost[i, j]))
+        for i, j in zip(*np.nonzero(self._candidates(gain))):
+            v, q = free[i], self.active[j]
+            route = Route((Stop(q.origin_node, True, q.id),), float(travel[i, j]), float(dist[i, j]), 0.0)
+            options[(frozenset({q.id}), v.vehicle_id)] = (FeasibleRoute(route, 0.0), float(cost[i, j]))
         return options
 
-    def _active(self, vehicles: set[VehicleAvailability]) -> list[Request]:
+    def _candidates(self, gain: np.ndarray) -> np.ndarray:
+        """Which (free vehicle, virtual rider) pairs become columns: the `n_virtual` best per vehicle."""
+        keep = np.zeros(gain.shape, dtype=bool)
+        k = min(self._n_virtual, gain.shape[1])
+        rows = np.arange(gain.shape[0])[:, None]
+        keep[rows, np.argpartition(-gain, k - 1, axis=1)[:, :k]] = True
+        return keep & (gain > 0)
+
+    def _active(self, vehicles: set[VehicleAvailability], current_time: float) -> list[Request]:
         """Virtual riders offered to vehicles this batch: all of them."""
         return self.virtual
 
@@ -325,16 +331,36 @@ class SupplyMatched:
         self._marks_rng = np.random.default_rng(seed)
         self._marks: dict[str, float] = {}
 
-    def _active(self, vehicles):
+    def _active(self, vehicles, current_time):
         self._marks = {
             q.id: self._marks[q.id] if q.id in self._marks else self._marks_rng.random() for q in self.virtual
         }
-        n_free = sum(
+        share = min(1.0, self._per_free * self._supply(vehicles, current_time) / max(len(self.virtual), 1))
+        return [q for q in self.virtual if self._marks[q.id] < share]
+
+    def _supply(self, vehicles, current_time) -> int:
+        """Vehicles that can take a virtual rider: the free ones."""
+        return sum(
             1 for v in vehicles
             if not v.passengers_onboard and all(s.is_rebalancing for s in v.remaining_stops_to_serve)
         )
-        share = min(1.0, self._per_free * n_free / max(len(self.virtual), 1))
-        return [q for q in self.virtual if self._marks[q.id] < share]
+
+
+class Bidirectional(SupplyMatched):
+    """
+    SupplyMatched, and every active virtual rider is also offered to its
+    `n_virtual` best free vehicles (not only every vehicle its best riders),
+    so that free vehicles clustered in a quiet zone are not all left with the
+    same few nearby riders. For chains, supply also counts busy vehicles whose
+    current plan ends within the horizon, since they can claim riders too.
+    """
+
+    def _candidates(self, gain):
+        keep = super()._candidates(gain)
+        k = min(self._n_virtual, gain.shape[0])
+        cols = np.arange(gain.shape[1])[None, :]
+        keep[np.argpartition(-gain, k - 1, axis=0)[:k, :], cols] = True
+        return keep & (gain > 0)
 
 
 class SupplyMatchedSampledSolver(SupplyMatched, SampledRequestsAssignmentSolver):
@@ -343,3 +369,19 @@ class SupplyMatchedSampledSolver(SupplyMatched, SampledRequestsAssignmentSolver)
 
 class SupplyMatchedChainSolver(SupplyMatched, SampledChainAssignmentSolver):
     """`sampled-chain` with about `virtual_per_free` virtual riders per free vehicle."""
+
+
+class BidirectionalSampledSolver(Bidirectional, SampledRequestsAssignmentSolver):
+    """`sampled-matched` with columns chosen from both sides."""
+
+
+class BidirectionalChainSolver(Bidirectional, SampledChainAssignmentSolver):
+    """`sampled-chain-matched` with columns from both sides; supply includes vehicles free within the horizon."""
+
+    def _supply(self, vehicles, current_time):
+        soon = sum(
+            1 for v in vehicles
+            if v.passengers_onboard
+            and self._free_at(v, v.remaining_stops_to_serve)[1] <= current_time + self._horizon
+        )
+        return super()._supply(vehicles, current_time) + soon

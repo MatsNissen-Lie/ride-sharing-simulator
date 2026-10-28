@@ -16,6 +16,8 @@ from src.components.objectives import DelayObjective
 from src.components.rebalance_solver import NoRebalancingSolver
 from src.components.request_sampler import HistoricalRequestSampler
 from src.components.sampled_assignment_solver import (
+    BidirectionalChainSolver,
+    BidirectionalSampledSolver,
     SampledChainAssignmentSolver,
     SampledRequestsAssignmentSolver,
     SupplyMatchedSampledSolver,
@@ -278,3 +280,22 @@ def test_supply_matched_with_room_for_all_is_the_sampled_solver(network):
     ).solve(rtv, set(), vehicles, 30, T_NOW)
     plain = sampled(network, riders).solve(rtv, set(), vehicles, 30, T_NOW)
     assert matched.rebalancing == plain.rebalancing and len(plain.rebalancing) == 1
+
+
+def test_bidirectional_offers_each_rider_to_its_nearest_vehicles(network):
+    vehicles = {idle("a", 0), idle("b", 1)}
+    riders = [virtual(network, 1, 2, dt=200), virtual(network, 2, 35, dt=200)]
+    rtv = instance(network, vehicles, [])
+    args = (DelayObjective(), network, Zones(), ZeroValue(), FixedSampler(riders))
+    one_side = SupplyMatchedSampledSolver(*args, n_virtual=1).solve(rtv, set(), vehicles, 30, T_NOW)
+    both = BidirectionalSampledSolver(*args, n_virtual=1).solve(rtv, set(), vehicles, 30, T_NOW)
+    assert len(one_side.rebalancing) == 1 and len(both.rebalancing) == 2
+
+
+def test_chain_supply_counts_vehicles_free_within_the_horizon(network):
+    rider = make_request(network, "p", 14, 21, T_NOW - 100)
+    busy = VehicleAvailability("busy", 4, 20, T_NOW, frozenset({Passenger(rider, T_NOW - 60)}),
+                               (Stop(21, False, "p"),))
+    solver = BidirectionalChainSolver(DelayObjective(), network, Zones(), ZeroValue(), FixedSampler())
+    assert solver._supply({busy, idle("a", 0)}, T_NOW) == 2
+    assert solver._supply({busy, idle("a", 0)}, T_NOW - 1000) == 1

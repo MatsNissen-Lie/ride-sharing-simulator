@@ -31,6 +31,8 @@ from src.components.pricing import LinearFareModel
 from src.components.rebalance_solver import NoRebalancingSolver, ReactiveRebalancingSolver
 from src.components.request_sampler import HistoricalRequestSampler
 from src.components.sampled_assignment_solver import (
+    BidirectionalChainSolver,
+    BidirectionalSampledSolver,
     SampledChainAssignmentSolver,
     SampledRequestsAssignmentSolver,
     SupplyMatchedChainSolver,
@@ -164,6 +166,12 @@ ASSIGNMENT_SOLVERS: dict[str, Callable[[Context, IObjective], IAssignmentSolver]
     ),
     "sampled-chain-matched": lambda ctx, objective: _sampled(
         SupplyMatchedChainSolver, ctx, objective, virtual_per_free=ctx.config.virtual_per_free
+    ),
+    "sampled-bidir": lambda ctx, objective: _sampled(
+        BidirectionalSampledSolver, ctx, objective, virtual_per_free=ctx.config.virtual_per_free
+    ),
+    "sampled-chain-bidir": lambda ctx, objective: _sampled(
+        BidirectionalChainSolver, ctx, objective, virtual_per_free=ctx.config.virtual_per_free
     ),
 }
 
