@@ -1,6 +1,6 @@
 """Summarize simulation runs: service, wait, delay, sharing and economics.
 
-    uv run python scripts/analysis/summarize_runs.py reports/*peak29*
+    uv run python scripts/analysis/summarize_runs.py reports/<run> ...
 
 Profit = revenue - cost_per_km * vehicle-km, shown for each cost scenario so
 that runs can be compared under the same cost assumption.
@@ -56,4 +56,5 @@ if __name__ == "__main__":
     runs = [Path(p) for p in sys.argv[1:] if (Path(p) / "simulation_stats.csv").exists()]
     pl.Config.set_tbl_cols(30)
     pl.Config.set_tbl_width_chars(300)
+    pl.Config.set_tbl_rows(-1)  # every run, not only the first ten
     print(pl.DataFrame([summarize(r) for r in runs]).sort(["fleet", "objective", "cost_per_km"], nulls_last=False))
