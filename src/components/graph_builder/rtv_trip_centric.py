@@ -63,6 +63,8 @@ class TripCentricRTVGraphBuilder(IRTVGraphBuilder):
         # T_2: RR-adjacent pairs, checked on vehicles that can serve both.
         t0 = time.perf_counter()
         for r1, r2, common in rv_graph.get_all_unique_shareable_pairs_with_vehicles():
+            if not common:  # most pairs: no vehicle can serve both
+                continue
             trip = frozenset((r1, r2))
             reqs = [req_map[r] for r in sorted(trip)]
             valid = set()
