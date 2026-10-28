@@ -130,7 +130,8 @@ class SampledRequestsAssignmentSolver(JointAssignmentSolver):
         result = super().solve(graph, requests | virtual, vehicles, solver_timeout, current_time)
         logger.info(
             f"Virtual riders: {len(self.virtual)} sampled, {len(self.active)} active, {len(virtual)} with options, "
-            f"{len(options)} options; {len(result.rebalancing)} vehicles sent to one."
+            f"{len(options)} options; {len(self._free)} free vehicles, "
+            f"{len({v for _, v in options} & self._free)} with options, {len(result.rebalancing)} sent to one."
         )
         return AssignmentResult(
             assignments=result.assignments,
