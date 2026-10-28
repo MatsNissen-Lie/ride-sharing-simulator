@@ -61,8 +61,8 @@ field of `ExperimentConfig`:
 | `trip_solver` | `ITripSolver` | `TRIP_SOLVERS` | astar |
 | `rv_builder` | `IRVGraphBuilder` | `RV_BUILDERS` | standard |
 | `rtv_builder` | `IRTVGraphBuilder` | `RTV_BUILDERS` | trip, vehicle |
-| `assignment_solver` | `IAssignmentSolver` | `ASSIGNMENT_SOLVERS` | gurobi, highs, joint, sampled-* (stage C option B) |
-| `vehicle_value` | `IVehicleValue` / `IFleetPlan` | `VEHICLE_VALUES` | zero, mpc, mpc_p1, mpc_half, mpc_flat (stage C option C) |
+| `assignment_solver` | `IAssignmentSolver` | `ASSIGNMENT_SOLVERS` | gurobi, highs, joint, sampled-* (stage C design C2) |
+| `vehicle_value` | `IVehicleValue` / `IFleetPlan` | `VEHICLE_VALUES` | zero, mpc, mpc_p1, mpc_half, mpc_flat (stage C design C3) |
 | `request_sampler` | `IRequestSampler` | `REQUEST_SAMPLERS` | historical |
 | `rebalancing` | `IRebalancingSolver` | `REBALANCERS` | reactive, demand, transport, mpc, oracle, none |
 
