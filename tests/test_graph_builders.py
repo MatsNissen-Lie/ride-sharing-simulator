@@ -136,3 +136,20 @@ def test_occupied_filter_keeps_every_pair_the_solver_can_serve(network, seed):
     )
     assert not (feasible & ~keep).any()
     assert (~keep).any() and feasible.any()
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_reachable_pairs_match_every_pair(network, seed):
+    rng = random.Random(seed)
+    matrix = network.get_l1_cache()
+    builder = RVGraphBuilder(network, AStarTripSolver(matrix), omega=rng.choice([60.0, 120.0]))
+    locs = [rng.randrange(network.N) for _ in range(60)]
+    times = np.array([T_NOW + rng.choice([0.0, rng.uniform(0, 30)]) for _ in locs])
+    origins = np.array([rng.randrange(network.N) for _ in range(25)])
+    for spread in (builder._omega, 3 * builder._omega):  # near-node index, then every pair
+        latest = T_NOW + np.array([rng.uniform(0, spread) for _ in origins])
+        arrival = times[:, None] + matrix[np.ix_(locs, origins)]
+        expected = np.where(arrival <= latest[None, :])
+        v_idx, r_idx, arr = builder._reachable_pairs(locs, times, origins, latest)
+        assert (v_idx == expected[0]).all() and (r_idx == expected[1]).all()
+        assert (arr == arrival[expected]).all()

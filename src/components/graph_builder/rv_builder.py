@@ -50,6 +50,22 @@ from src.utils.timing import record, timed
 
 logger = get_logger("rv_graph_builder")
 
+# Pickup budgets are at most Omega; the near-node index reaches this much further
+# (seconds), so float rounding never drops a reachable pair.
+NEAR_MARGIN = 1.0
+
+
+def _expand(
+    starts: np.ndarray, lengths: np.ndarray, labels: np.ndarray | None = None
+) -> tuple[np.ndarray, np.ndarray]:
+    """For each k, the positions starts[k] .. starts[k] + lengths[k] - 1, with
+    the label of k (default k) repeated alongside."""
+    total = int(lengths.sum())
+    labels = np.arange(len(starts)) if labels is None else labels
+    offsets = np.cumsum(lengths) - lengths
+    positions = np.arange(total) - np.repeat(offsets - starts, lengths)
+    return np.repeat(labels, lengths), positions
+
 
 @cache
 def _stop_orders(n_onboard: int, capacity: int) -> np.ndarray:
@@ -90,6 +106,8 @@ class RVGraphBuilder(IRVGraphBuilder):
         self._closed_forms = getattr(trip_solver, "matches_rv_closed_forms", False)
         self._omega = omega
         self._delta = delta
+        # Nodes within NEAR_RADIUS of each node, built on first use.
+        self._near: tuple[np.ndarray, np.ndarray] | None = None
 
     def build_graph(
         self, requests: set[Request], vehicles: set[VehicleAvailability]
@@ -163,23 +181,14 @@ class RVGraphBuilder(IRVGraphBuilder):
             t0 = time.perf_counter()
             veh_locs = [v.available_at_node for v in veh_list]
 
-            # Broadcasting shapes
-            v_times_arr = np.array([v.available_from_time for v in veh_list])[
-                :, None
-            ]  # (V, 1)
+            v_times = np.array([v.available_from_time for v in veh_list])
 
-            # A. Matrix Fetch & Pruning
-            rv_matrix = self._network.get_travel_time_matrix(
-                veh_locs, req_origins.tolist()
-            )  # (V, R)
-
-            # Pickup deadline (request_time + Omega, or the promised pickup time)
-            arrival = v_times_arr + rv_matrix
+            # A. Pruning: pairs where the vehicle reaches the pickup by its
+            # deadline (request_time + Omega, or the promised pickup time)
             r_latest_pickup = np.array([r.latest_pickup_time for r in req_list])
-            rv_mask = arrival <= r_latest_pickup[None, :]
-
-            # Indices of ALL feasible pairs
-            v_idx, r_idx = np.where(rv_mask)
+            v_idx, r_idx, arrival = self._reachable_pairs(
+                veh_locs, v_times, req_origins, r_latest_pickup
+            )
 
             if len(v_idx) > 0:
                 # B. Split Execution based on Occupancy
@@ -199,8 +208,7 @@ class RVGraphBuilder(IRVGraphBuilder):
                             r_idx[mask_0],
                             veh_list,
                             req_list,
-                            # delay_vals
-                        arrival[v_idx[mask_0], r_idx[mask_0]] - req_times[r_idx[mask_0]],
+                            arrival[mask_0] - req_times[r_idx[mask_0]],  # delay_vals
                             graph,
                         )
 
@@ -221,6 +229,53 @@ class RVGraphBuilder(IRVGraphBuilder):
                         )
 
         return graph
+
+    def _reachable_pairs(
+        self,
+        veh_locs: list[int],
+        v_times: np.ndarray,
+        req_origins: np.ndarray,
+        latest_pickup: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """(vehicle, request) pairs with arrival <= latest pickup, as np.where
+        orders them (by vehicle, then request), and their arrival times.
+
+        Only vehicles at nodes within NEAR_RADIUS of a pickup can make it when
+        every budget (latest pickup - vehicle time) is below the radius, which
+        holds since budgets are at most Omega; only those pairs are checked
+        (about 1% of them). Otherwise every pair is checked.
+        """
+        budget = latest_pickup.max() - v_times.min()
+        if budget + 1.0 > self._omega + NEAR_MARGIN:
+            arrival = v_times[:, None] + self._network.get_travel_time_matrix(
+                veh_locs, req_origins.tolist()
+            )
+            v_idx, r_idx = np.where(arrival <= latest_pickup[None, :])
+            return v_idx, r_idx, arrival[v_idx, r_idx]
+
+        mat = self._network.get_l1_cache()
+        if self._near is None:
+            # near_nodes[ptr[o]:ptr[o + 1]]: nodes u with tau(u, o) <= radius
+            origin, node = np.nonzero(mat.T <= self._omega + NEAR_MARGIN)
+            ptr = np.zeros(len(mat) + 1, dtype=np.int64)
+            np.cumsum(np.bincount(origin, minlength=len(mat)), out=ptr[1:])
+            self._near = ptr, node
+        ptr, near_nodes = self._near
+
+        # Requests x nearby nodes, then x vehicles at those nodes.
+        locs = np.asarray(veh_locs)
+        by_node = np.argsort(locs, kind="stable")
+        count = np.bincount(locs, minlength=len(mat))
+        first = np.cumsum(count) - count
+        r_idx, node = _expand(ptr[req_origins], ptr[req_origins + 1] - ptr[req_origins])
+        node = near_nodes[node]
+        r_idx, slot = _expand(first[node], count[node], r_idx)
+        v_idx = by_node[slot]
+
+        arrival = v_times[v_idx] + mat[locs[v_idx], req_origins[r_idx]]
+        ok = arrival <= latest_pickup[r_idx]
+        order = np.lexsort((r_idx[ok], v_idx[ok]))
+        return v_idx[ok][order], r_idx[ok][order], arrival[ok][order]
 
     def _solve_rr_matrix_fast(
         self,
