@@ -45,6 +45,8 @@ class NetworkXService(INetworkService):
         self.travel_time_factor = travel_time_factor
         self._adjacency: csr_matrix | None = None  # fastest edge per node pair
         self._predecessors: dict[int, np.ndarray] = {}  # shortest-path tree per origin
+        self._fastest: dict[tuple[int, int], tuple[float, float]] | None = None
+        self._fastest_scaled: dict[tuple[int, int], tuple[float, float]] = {}
         self._distances_loaded = False
 
         if max_node_id is not None:
@@ -189,7 +191,7 @@ class NetworkXService(INetworkService):
         if self.is_nuclear:
             # 1. Extract Sub-Matrix (Vectorized)
             # We copy to avoid modifying the cache when we replace NaNs
-            sub_matrix = self._time_matrix[np.ix_(origins, destinations)].copy()
+            sub_matrix = self._time_matrix[np.ix_(origins, destinations)]  # a copy
 
             # 2. Convert NaN (Nuclear "No Path") to inf (Standard "No Path")
             # This ensures consistency with DuckDBPathCache behavior
@@ -232,28 +234,16 @@ class NetworkXService(INetworkService):
         if nodes is None:
             return None
 
-        # 3. Compute Metrics
+        # 3. Compute Metrics (on the fastest of parallel edges)
         total_time = 0.0
         total_dist = 0.0
         edge_times_list: list[float] = []
-        G = self.G
-
-        # Optimize: get edge attributes via G[u][v]
-        # MultiDiGraph stores multiple edges, we need the one with min travel_time
-        # This loop is unavoidable if we need the *sequence* of edge times/dist
+        fastest = self._fastest_edges()
 
         for u, v in zip(nodes, nodes[1:]):
-            # This is the most expensive part after Dijkstra
-            edge_data = G[u][v]
-            # Fast path for single edge
-            if len(edge_data) == 1:
-                edge_attr = next(iter(edge_data.values()))
-            else:
-                edge_attr = min(edge_data.values(), key=lambda a: a["travel_time"])
-
-            t = self._scaled(float(edge_attr["travel_time"]))
+            t, length = fastest[u, v]
             total_time += t
-            total_dist += float(edge_attr.get("length", 0.0))
+            total_dist += length
             edge_times_list.append(t)
 
         return NetworkPathExtended(
@@ -273,13 +263,10 @@ class NetworkXService(INetworkService):
         pred = self._predecessors.get(origin)
         if pred is None:
             if self._adjacency is None:
-                fastest: dict[tuple[int, int], float] = {}
-                for u, v, t in self.G.edges(data="travel_time"):
-                    if (u, v) not in fastest or t < fastest[(u, v)]:
-                        fastest[(u, v)] = float(t)
-                rows, cols = zip(*fastest)
+                times = {pair: t for pair, (t, _) in self._fastest_edges(scaled=False).items()}
+                rows, cols = zip(*times)
                 self._adjacency = csr_matrix(
-                    (list(fastest.values()), (rows, cols)), shape=(self.N, self.N)
+                    (list(times.values()), (rows, cols)), shape=(self.N, self.N)
                 )
             _, pred = dijkstra(self._adjacency, indices=origin, return_predecessors=True)
             self._predecessors[origin] = pred
@@ -290,6 +277,23 @@ class NetworkXService(INetworkService):
             nodes.append(int(pred[nodes[-1]]))
         nodes.reverse()
         return nodes
+
+    def _fastest_edges(self, scaled: bool = True) -> dict[tuple[int, int], tuple[float, float]]:
+        """(travel time, length) of the fastest edge per node pair; the first one
+        on ties, as min() over the parallel edges. Times scaled unless `scaled` is False."""
+        if self._fastest is None:
+            fastest: dict[tuple[int, int], dict] = {}
+            for u, v, attr in self.G.edges(data=True):
+                if (u, v) not in fastest or attr["travel_time"] < fastest[u, v]["travel_time"]:
+                    fastest[u, v] = attr
+            self._fastest = {
+                pair: (float(a["travel_time"]), float(a.get("length", 0.0)))
+                for pair, a in fastest.items()
+            }
+            self._fastest_scaled = {
+                pair: (self._scaled(t), length) for pair, (t, length) in self._fastest.items()
+            }
+        return self._fastest_scaled if scaled else self._fastest
 
     def _scaled(self, free_flow):
         """The single place where free-flow times become simulated times.
