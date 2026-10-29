@@ -96,6 +96,24 @@ def parse_args() -> ExperimentConfig:
         help="Active virtual riders per free vehicle (--solver sampled-matched, sampled-chain-matched).",
     )
     parser.add_argument(
+        "--scenarios",
+        type=int,
+        default=DEFAULTS.scenarios,
+        help="Sampled futures of --solver two-stage.",
+    )
+    parser.add_argument(
+        "--scenario-horizon",
+        type=float,
+        default=DEFAULTS.scenario_horizon_min,
+        help="Look-ahead of --solver two-stage in minutes.",
+    )
+    parser.add_argument(
+        "--scenario-weight",
+        type=float,
+        default=DEFAULTS.scenario_weight,
+        help="Weight of a future rider relative to a real one (--solver two-stage).",
+    )
+    parser.add_argument(
         "--rebalancing",
         choices=REBALANCERS,
         default=DEFAULTS.rebalancing,
@@ -133,6 +151,9 @@ def parse_args() -> ExperimentConfig:
         virtual_weight=a.virtual_weight,
         vehicle_value_weight=a.vehicle_value_weight,
         virtual_per_free=a.virtual_per_free,
+        scenarios=a.scenarios,
+        scenario_horizon_min=a.scenario_horizon,
+        scenario_weight=a.scenario_weight,
         rebalancing=a.rebalancing,
         oracle_horizon_min=a.horizon,
         travel_time_factor=a.travel_time_factor,

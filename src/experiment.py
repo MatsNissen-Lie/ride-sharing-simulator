@@ -43,6 +43,7 @@ from src.components.zones import ZoneIndex
 from src.components.pricing import LinearFareModel
 from src.components.rebalance_solver import NoRebalancingSolver, ReactiveRebalancingSolver
 from src.components.request_sampler import HistoricalRequestSampler
+from src.components.two_stage_assignment_solver import TwoStageAssignmentSolver
 from src.components.sampled_assignment_solver import (
     BidirectionalChainSolver,
     BidirectionalSampledSolver,
@@ -118,6 +119,9 @@ class ExperimentConfig:
     virtual_weight: float = 0.05  # weight of a virtual rider relative to a real one
     vehicle_value_weight: float = 0.003  # scales the fleet-MPC values (0 = paper's ILP with MPC moves); 0.003 from the Pareto sweep
     virtual_per_free: float = 1.0  # active virtual riders per free vehicle (*-matched solvers)
+    scenarios: int = 5  # sampled futures of the two-stage solver
+    scenario_horizon_min: float = 10.0  # look-ahead of the two-stage solver
+    scenario_weight: float = 0.5  # weight of a future rider relative to a real one (two-stage)
     travel_time_factor: float = config.TRAVEL_TIME_FACTOR
     read_only: bool = False
     profile: bool = False  # cProfile the batches into profile.prof (slows the run)
@@ -303,6 +307,16 @@ ASSIGNMENT_SOLVERS: dict[str, Callable[[Context, IObjective], IAssignmentSolver]
     ),
     "sampled-chain-lsa": lambda ctx, objective: _sampled(
         FullMatchingChainSolver, ctx, objective, virtual_per_free=ctx.config.virtual_per_free
+    ),
+    "two-stage": lambda ctx, objective: TwoStageAssignmentSolver(
+        objective,
+        ctx.network,
+        ctx.zones,
+        ctx.vehicle_value,
+        REQUEST_SAMPLERS[ctx.config.request_sampler](ctx),
+        n_scenarios=ctx.config.scenarios,
+        horizon=ctx.config.scenario_horizon_min * 60,
+        weight=ctx.config.scenario_weight,
     ),
 }
 

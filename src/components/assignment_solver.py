@@ -12,6 +12,7 @@ import time
 import gurobipy as gp
 import numpy as np
 from gurobipy import GRB
+from scipy.sparse import csr_matrix
 
 from config import get_logger
 from src.components.objectives import DelayObjective
@@ -63,6 +64,19 @@ class AssignmentSolverBase(IAssignmentSolver):
     ) -> list[tuple[str, float, Route]]:
         """Extra (vehicle id, cost, rebalancing route) columns; none in the paper's ILP."""
         return []
+
+    def _continuous_columns(
+        self,
+        edges: list[tuple[TripId, str]],
+        moves: list[tuple[str, float, Route]],
+        n_unserved: int,
+    ) -> tuple[np.ndarray, csr_matrix, np.ndarray, np.ndarray] | None:
+        """
+        Continuous columns appended after the ILP's columns (trips x, moves m,
+        unserved y, in that order), with rows of their own: (cost, rows over
+        all columns, row lower bounds, row upper bounds). None in the paper's ILP.
+        """
+        return None
 
     def _result(
         self,
@@ -196,7 +210,7 @@ class HighsAssignmentSolver(AssignmentSolverBase):
         current_time: float,
     ) -> AssignmentResult:
         from scipy.optimize import Bounds, LinearConstraint, milp
-        from scipy.sparse import coo_matrix
+        from scipy.sparse import coo_matrix, hstack, vstack
 
         req_list = list(requests)
         with timed("moves"):
@@ -233,12 +247,22 @@ class HighsAssignmentSolver(AssignmentSolverBase):
         n_rows, n_cols = n_y + len(veh_index), n_x + n_m + n_y
         a = coo_matrix((np.ones(len(rows)), (rows, cols)), shape=(n_rows, n_cols)).tocsr()
         lower = np.concatenate([np.ones(n_y), np.zeros(len(veh_index))])
+        upper = np.ones(n_rows)
+        integrality = np.ones(n_cols)
         record("matrix", t0)
+        with timed("continuous_columns"):
+            extra = self._continuous_columns(edges, moves, n_y)
+        if extra is not None:
+            e_cost, e_rows, e_lower, e_upper = extra
+            a = vstack([hstack([a, csr_matrix((n_rows, len(e_cost)))]), e_rows]).tocsr()
+            cost = np.concatenate([cost, e_cost])
+            lower, upper = np.concatenate([lower, e_lower]), np.concatenate([upper, e_upper])
+            integrality = np.concatenate([integrality, np.zeros(len(e_cost))])
         with timed("milp"):
             result = milp(
                 c=cost,
-                constraints=LinearConstraint(a, lower, np.ones(n_rows)),
-                integrality=np.ones(n_cols),
+                constraints=LinearConstraint(a, lower, upper),
+                integrality=integrality,
                 bounds=Bounds(0, 1),
                 options={"time_limit": solver_timeout, "mip_rel_gap": 0.0},
             )
