@@ -50,8 +50,8 @@ class TwoStageAssignmentSolver(JointAssignmentSolver):
 
     - Futures: S fresh samples of the requests in [t_now, t_now + horizon).
     - Moves: each free vehicle may move to the `n_moves` reachable zones
-      (within `max_move` s) with the most sampled riders; a move is worth only
-      what its state gains in the second stage.
+      (within `max_move` s) with the most sampled riders it could still catch
+      there; a move is worth only what its state gains in the second stage.
     - Only the `n_recourse` best riders per state and future become columns.
     - The joint ILP's vehicle value V still prices the first stage (`zero`
       for pure two-stage), so the design combines with C3's values.
@@ -114,21 +114,29 @@ class TwoStageAssignmentSolver(JointAssignmentSolver):
         )
 
     def _moves(self, vehicles, current_time) -> list[tuple[str, float, Route]]:
-        """Moves to the `n_moves` reachable zones with the most sampled riders (ties: nearer first)."""
+        """
+        Moves to the `n_moves` reachable zones with the most sampled riders the
+        vehicle could still catch there (deadline after its arrival; ties:
+        nearer first). Counting all riders of a zone would favour far busy
+        zones the vehicle reaches only after their riders are gone.
+        """
         free = self._free(vehicles)
-        origins_q = [q.origin_node for s in self.scenarios for q in s]
-        if not free or not origins_q:
+        riders = [q for s in self.scenarios for q in s]
+        if not free or not riders:
             return []
         col = {z: k for k, z in enumerate(self._zone_ids)}
-        counts = np.bincount(
-            [col[int(z)] for z in self._zones.zones_of(np.array(origins_q))], minlength=len(self._zone_ids)
-        )
+        zone = np.array([col[int(z)] for z in self._zones.zones_of(np.array([q.origin_node for q in riders]))])
+        deadline = np.array([q.latest_pickup_time for q in riders])
         origins = [v.available_at_node for v in free]
         travel = self._network.get_travel_time_matrix(origins, self._centres)
         dist = self._network.get_distance_matrix()[np.ix_(origins, self._centres)]
         arrival = np.array([v.available_from_time for v in free])[:, None] + travel
-        ok = (travel > 0) & (travel <= self._max_move) & (counts > 0)[None, :]
-        order = np.lexsort((travel, -np.where(ok, counts[None, :], -1)), axis=1)[:, : self._n_moves]
+        catchable = np.zeros(arrival.shape)
+        for j in range(len(self._zone_ids)):
+            d = np.sort(deadline[zone == j])
+            catchable[:, j] = len(d) - np.searchsorted(d, arrival[:, j], side="right")
+        ok = (travel > 0) & (travel <= self._max_move) & (catchable > 0)
+        order = np.lexsort((travel, -np.where(ok, catchable, -1)), axis=1)[:, : self._n_moves]
         rows = np.repeat(np.arange(len(free)), order.shape[1])
         cols = order.ravel()
         keep = ok[rows, cols]

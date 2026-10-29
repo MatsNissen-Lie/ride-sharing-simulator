@@ -194,3 +194,15 @@ def test_chained_future_riders_are_served_at_most_once(network):
     vehicles = {idle("a", 0), idle("b", 0)}
     result = chained(network, [q]).solve(instance(network, vehicles, []), set(), vehicles, 30, T_NOW)
     assert len(result.rebalancing) == 1
+
+
+def test_moves_go_where_riders_can_still_be_caught(network):
+    """Zone 2 has more sampled riders, but all gone before the vehicle arrives: the one move offered is to zone 1."""
+    to_zone_2 = network.get_travel_time(0, 21)
+    early = [make_request(network, f"virtual_e{k}", 21, 0, T_NOW, latest_pickup=T_NOW + to_zone_2 - 1) for k in range(5)]
+    late = [make_request(network, "virtual_l", 14, 0, T_NOW + 400)]
+    solver = two_stage(network, early + late, n_moves=1)
+    vehicles = {idle("a", 0)}
+    solver.solve(instance(network, vehicles, []), set(), vehicles, 30, T_NOW)
+    (move,) = solver._moves(vehicles, T_NOW)
+    assert move[2].stops[0].node == 14
