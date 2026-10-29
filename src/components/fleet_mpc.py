@@ -10,7 +10,7 @@ research/stage-c/fleet-mpc.md.
 
 import numpy as np
 from scipy.optimize import linprog
-from scipy.sparse import coo_matrix
+from scipy.sparse import coo_matrix, csr_matrix
 
 from config.logging import get_logger
 from src.components.zone_trips import ZoneTrips
@@ -34,7 +34,7 @@ def _split(steps: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return lo.astype(np.int64), steps - lo
 
 
-def fleet_lp_values(
+def fleet_lp_model(
     supply: np.ndarray,
     demand: np.ndarray,
     shares: np.ndarray,
@@ -44,36 +44,11 @@ def fleet_lp_values(
     reward: float,
     pooling: float = 1.0,
     eps_supply: float = 1e-3,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, csr_matrix, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
-    Fluid fleet LP over Z zones and K steps. Returns the dual value (Z, K) of
-    one more free vehicle in zone i at the start of step k, as a saving, and
-    the planned empty moves (Z, Z) from zone i to zone j in step 0.
-
-        max  sum_ijk pooling * reward * x_ijk - sum_ijk move_cost_ij * m_ijk
-        s.t. sum_j x_ijk + sum_j m_ijk + w_ik - w_i,k-1
-               - sum_j,k' x_jik' [arrives at i in step k]
-               - sum_j,k' m_jik' [arrives at i in step k]  = supply_ik
-             0 <= x_ijk <= demand_ik * shares_kij / pooling,   m, w >= 0
-
-    x_ijk: vehicle trips from zone i to zone j starting in step k, each
-    carrying `pooling` riders on average; they free the vehicle in j
-    trip_steps_ij steps later. Trips are per destination, so where vehicles
-    are scarce the LP serves the most valuable trips first and the dual is
-    the value of the marginal (worst served) trip class, not of an average
-    rider. m_ijk: empty moves, allowed where move_steps is finite. w_ik:
-    vehicles waiting into step k+1. A duration d that is not a whole number
-    of steps is split, (1 - f) at floor(d) and f at floor(d) + 1, so the
-    duals are linear in time between step starts. Arrivals after the last
-    step are worth nothing (see FleetMpcValue for the tail).
-
-    Degeneracy: a zone-step without vehicles has no basic variable to pin its
-    dual. `eps_supply` extra vehicles in every zone-step make the LP route
-    them to their best use, so every dual is the value of one more vehicle
-    (the right derivative), not an arbitrary point of the dual face.
-
-    supply, demand: (Z, K); shares: (K, Z, Z), rows sum to 1;
-    trip_steps, move_steps, move_cost: (Z, Z); durations must be >= 1 step.
+    The LP of `fleet_lp_values` as (cost, A_eq, b_eq, bounds, step-0 move
+    columns, their origin and destination zones). Demand enters only the
+    upper bounds of the trip columns.
     """
     n_zones, n_steps = supply.shape
     row = lambda i, k: k * n_zones + i  # noqa: E731
@@ -127,6 +102,55 @@ def fleet_lp_values(
         np.full(zk.size + mi.size, np.inf),
     ])
     bounds = np.column_stack([np.zeros(n_cols), upper])
+    first = pk == 0
+    return cost, a_eq, b_eq, bounds, m_col[first], mi[first], mj[first]
+
+
+def fleet_lp_values(
+    supply: np.ndarray,
+    demand: np.ndarray,
+    shares: np.ndarray,
+    trip_steps: np.ndarray,
+    move_steps: np.ndarray,
+    move_cost: np.ndarray,
+    reward: float,
+    pooling: float = 1.0,
+    eps_supply: float = 1e-3,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Fluid fleet LP over Z zones and K steps. Returns the dual value (Z, K) of
+    one more free vehicle in zone i at the start of step k, as a saving, and
+    the planned empty moves (Z, Z) from zone i to zone j in step 0.
+
+        max  sum_ijk pooling * reward * x_ijk - sum_ijk move_cost_ij * m_ijk
+        s.t. sum_j x_ijk + sum_j m_ijk + w_ik - w_i,k-1
+               - sum_j,k' x_jik' [arrives at i in step k]
+               - sum_j,k' m_jik' [arrives at i in step k]  = supply_ik
+             0 <= x_ijk <= demand_ik * shares_kij / pooling,   m, w >= 0
+
+    x_ijk: vehicle trips from zone i to zone j starting in step k, each
+    carrying `pooling` riders on average; they free the vehicle in j
+    trip_steps_ij steps later. Trips are per destination, so where vehicles
+    are scarce the LP serves the most valuable trips first and the dual is
+    the value of the marginal (worst served) trip class, not of an average
+    rider. m_ijk: empty moves, allowed where move_steps is finite. w_ik:
+    vehicles waiting into step k+1. A duration d that is not a whole number
+    of steps is split, (1 - f) at floor(d) and f at floor(d) + 1, so the
+    duals are linear in time between step starts. Arrivals after the last
+    step are worth nothing (see FleetMpcValue for the tail).
+
+    Degeneracy: a zone-step without vehicles has no basic variable to pin its
+    dual. `eps_supply` extra vehicles in every zone-step make the LP route
+    them to their best use, so every dual is the value of one more vehicle
+    (the right derivative), not an arbitrary point of the dual face.
+
+    supply, demand: (Z, K); shares: (K, Z, Z), rows sum to 1;
+    trip_steps, move_steps, move_cost: (Z, Z); durations must be >= 1 step.
+    """
+    cost, a_eq, b_eq, bounds, m0, mi, mj = fleet_lp_model(
+        supply, demand, shares, trip_steps, move_steps, move_cost, reward, pooling, eps_supply
+    )
+    n_zones, n_steps = supply.shape
     with timed("fleet_lp"):
         # Interior point is fast but can stop on a numerical error; the simplex
         # method then solves the same LP (same optimum, slower).
@@ -138,8 +162,7 @@ def fleet_lp_values(
     if res.status != 0:
         raise RuntimeError(f"Fleet LP failed: {res.message}")
     moves = np.zeros((n_zones, n_zones))
-    first = pk == 0
-    moves[mi[first], mj[first]] = res.x[m_col[first]]
+    moves[mi, mj] = res.x[m0]
     return -res.eqlin.marginals.reshape(n_steps, n_zones).T, moves
 
 
@@ -218,15 +241,10 @@ class FleetMpcValue(IFleetPlan):
     def prepare(self, vehicles, requests, t_now):
         if self._t_solved is not None and t_now < self._t_solved + self._resolve_every:
             return
-        lp, self._moves = fleet_lp_values(
+        lp, self._moves = self._plan(
             self.supply_grid(vehicles, t_now),
             self.demand_grid(requests, t_now),
             np.stack([self._trips.shares_at(t_now + k * self._step) for k in range(self._n_steps)]),
-            self._trip_steps,
-            self._move_steps,
-            self._move_cost,
-            self._reward,
-            self._pooling,
         )
         lp = lp * (self._weight / self._pooling)
         if self._t_solved is not None:
@@ -237,6 +255,14 @@ class FleetMpcValue(IFleetPlan):
         self._t_solved, self._grid = t_now, lp
         mean = lp.mean(axis=0)
         self._slope = max((mean[0] - mean[-1]) / (self._step * (self._n_steps - 1)), 0.0)
+
+    def _plan(self, supply: np.ndarray, demand: np.ndarray, shares: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Duals (Z, K) and step-0 moves (Z, Z) of the fleet LP for these grids (hook for subclasses)."""
+        return fleet_lp_values(supply, demand, shares, *self._lp_constants())
+
+    def _lp_constants(self) -> tuple:
+        """The arguments of `fleet_lp_values` after the grids, fixed for this plan (hook for subclasses)."""
+        return self._trip_steps, self._move_steps, self._move_cost, self._reward, self._pooling
 
     @property
     def t_solved(self) -> float | None:

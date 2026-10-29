@@ -1,11 +1,12 @@
 """Trade-off between riders served, rider delay and profit, per day.
 
-    uv run python scripts/analysis/pareto.py reports/*rebal_evening_f3000* reports/*pareto16_* ...
+    uv run python scripts/analysis/pareto.py reports/<run> reports/<run> ...
 
-Each run becomes one point, grouped into families (paper baselines, C2, C3)
+Each run becomes one point, grouped into families (baselines, sampled riders,
+two-stage, fleet plan)
 and labelled by its setting. A run is on the frontier if no other run of the
 same day and fleet serves at least as many riders with at most as much delay (or at
-least as much profit). Writes one figure per trade-off to thesis/figures/ and
+least as much profit). Writes one figure per trade-off to reports/figures/ and
 prints the table.
 """
 
@@ -21,22 +22,24 @@ import polars as pl
 
 from summarize_runs import summarize
 
-OUT = Path(__file__).resolve().parents[2] / "thesis" / "figures"
+OUT = Path(__file__).resolve().parents[2] / "reports" / "figures"
 # Categorical slots 1-3 of the reference palette plus a neutral for baselines (validated, light surface);
 # shapes repeat the family so identity is never colour alone.
 FAMILIES = {
     "baseline": ("#52514e", "s", "Baselines"),
-    "C2": ("#eb6834", "^", "C2: sampled riders"),
-    "C3": ("#2a78d6", "o", "C3: fleet plan"),
-    "C2-SAA": ("#1baf7a", "D", "C2 two-stage: S sampled futures"),
+    "C2": ("#eb6834", "^", "Sampled riders"),
+    "C3": ("#2a78d6", "o", "Fleet plan"),
+    "C2-SAA": ("#1baf7a", "D", "Two-stage: S sampled futures"),
 }
 
 
 def describe(run_dir: Path) -> dict:
     exp = json.loads((run_dir / "metadata.json").read_text()).get("experiment", {})
     solver, rebal = exp.get("assignment_solver"), exp.get("rebalancing")
-    if solver == "joint" and exp.get("vehicle_value") == "mpc":
+    if solver == "joint" and exp.get("vehicle_value") in ("mpc", "mpc_sampled"):
         family, label = "C3", f"α={exp.get('vehicle_value_weight', 1.0):g}"
+        if exp.get("vehicle_value") == "mpc_sampled":
+            label += f", {exp.get('fleet_futures')} futures"
     elif str(solver).startswith("two-stage"):
         family = "C2-SAA"
         chain = ", chain" if solver == "two-stage-chain" else ""

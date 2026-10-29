@@ -90,6 +90,24 @@ def parse_args() -> ExperimentConfig:
         help="Scale of the fleet-MPC values in the joint ILP (--vehicle-value mpc).",
     )
     parser.add_argument(
+        "--fleet-plan-interval",
+        type=float,
+        default=DEFAULTS.fleet_plan_interval_s,
+        help="Seconds between re-solves of the fleet MPC plan (--vehicle-value mpc, --rebalancing mpc).",
+    )
+    parser.add_argument(
+        "--fleet-futures",
+        type=int,
+        default=DEFAULTS.fleet_futures,
+        help="Sampled demand futures of the fleet plan (--vehicle-value mpc_sampled).",
+    )
+    parser.add_argument(
+        "--fleet-workers",
+        type=int,
+        default=DEFAULTS.fleet_workers,
+        help="Processes solving the fleet plan's futures (--vehicle-value mpc_sampled).",
+    )
+    parser.add_argument(
         "--virtual-per-free",
         type=float,
         default=DEFAULTS.virtual_per_free,
@@ -150,6 +168,9 @@ def parse_args() -> ExperimentConfig:
         sample_horizon_min=a.sample_horizon,
         virtual_weight=a.virtual_weight,
         vehicle_value_weight=a.vehicle_value_weight,
+        fleet_plan_interval_s=a.fleet_plan_interval,
+        fleet_futures=a.fleet_futures,
+        fleet_workers=a.fleet_workers,
         virtual_per_free=a.virtual_per_free,
         scenarios=a.scenarios,
         scenario_horizon_min=a.scenario_horizon,
