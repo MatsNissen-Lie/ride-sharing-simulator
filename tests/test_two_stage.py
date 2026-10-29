@@ -12,7 +12,7 @@ from src.components.graph_builder.rtv_trip_centric import TripCentricRTVGraphBui
 from src.components.joint_assignment_solver import ZeroValue
 from src.components.objectives import DelayObjective
 from src.components.rebalance_solver import NoRebalancingSolver
-from src.components.two_stage_assignment_solver import TwoStageAssignmentSolver
+from src.components.two_stage_assignment_solver import ChainedTwoStageAssignmentSolver, TwoStageAssignmentSolver
 from src.interfaces import IRequestSampler
 from tests.conftest import make_request, random_requests, random_vehicle
 from tests.test_joint_assignment import idle, instance
@@ -152,3 +152,45 @@ def test_no_futures_simulation_matches_the_paper(network):
                     rebalancer=NoRebalancingSolver())
     assert [b.requests_delivered for b in result] == [b.requests_delivered for b in plain]
     assert [b.avg_total_delay for b in result] == [b.avg_total_delay for b in plain]
+
+
+def chained(network, riders=(), **kwargs):
+    kwargs = {"n_scenarios": 3, "horizon": 600.0, "weight": 0.5} | kwargs
+    return ChainedTwoStageAssignmentSolver(
+        DelayObjective(), network, Zones(), ZeroValue(), SameFuture(riders), **kwargs
+    )
+
+
+@pytest.mark.parametrize("seed", range(3))
+def test_chained_without_futures_is_the_papers_ilp(network, seed):
+    rng = random.Random(seed)
+    vehicles = {random_vehicle(network, rng, f"v{k}", T_NOW, rng.choice([0, 0, 1, 2])) for k in range(4)}
+    requests = set(random_requests(network, rng, 6, T_NOW))
+    rtv = instance(network, vehicles, requests)
+    plain = HighsAssignmentSolver().solve(rtv, requests, vehicles, 30, T_NOW)
+    result = chained(network, n_scenarios=0).solve(rtv, requests, vehicles, 30, T_NOW)
+    assert result.total_cost == pytest.approx(plain.total_cost) and result.assignments == plain.assignments
+
+
+def test_chain_serves_a_rider_only_reachable_after_another(network):
+    """q2 starts where q1 ends, just after q1 arrives: unreachable from the vehicle, reachable after q1."""
+    dest = max(range(36), key=lambda n: network.get_travel_time(0, n))
+    ride = network.get_travel_time(0, dest)
+    q1 = make_request(network, "virtual_1", 0, dest, T_NOW + 10)
+    q2 = make_request(network, "virtual_2", dest, 0, T_NOW + 10 + ride + 5, latest_pickup=T_NOW + 10 + ride + 35)
+    vehicles = {idle("a", 0)}
+    rtv = instance(network, vehicles, [])
+    single = two_stage(network, [q1, q2], weight=0.5)
+    chain = chained(network, [q1, q2], weight=0.5)
+    assert ride > 30
+    gain_single = single.solve(rtv, set(), vehicles, 30, T_NOW).total_cost
+    gain_chain = chain.solve(rtv, set(), vehicles, 30, T_NOW).total_cost
+    assert gain_chain - gain_single == pytest.approx(-0.5 * 1e5, rel=0.01)  # q2 served too, in every future
+
+
+def test_chained_future_riders_are_served_at_most_once(network):
+    """Two vehicles, one future rider: the chain does not let both count it."""
+    q = far_rider(network)
+    vehicles = {idle("a", 0), idle("b", 0)}
+    result = chained(network, [q]).solve(instance(network, vehicles, []), set(), vehicles, 30, T_NOW)
+    assert len(result.rebalancing) == 1

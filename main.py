@@ -99,7 +99,7 @@ def parse_args() -> ExperimentConfig:
         "--scenarios",
         type=int,
         default=DEFAULTS.scenarios,
-        help="Sampled futures of --solver two-stage.",
+        help="Sampled futures of --solver two-stage and two-stage-chain.",
     )
     parser.add_argument(
         "--scenario-horizon",

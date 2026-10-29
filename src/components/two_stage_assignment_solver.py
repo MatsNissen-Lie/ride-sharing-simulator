@@ -179,78 +179,118 @@ class TwoStageAssignmentSolver(JointAssignmentSolver):
             self._near_radius = radius
         return self._near_pairs
 
+    def _arcs(self, nodes, times, origin, t_req, deadline, reward) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        (source, rider, cost) for the `n_recourse` cheapest riders each source
+        (free at `nodes` at `times`) reaches in time. A source serves q only
+        within q's patience of its origin, so only those pairs are computed.
+        """
+        near = self._near(float((deadline - t_req).max()))
+        sources = np.flatnonzero(times < deadline.max())
+        pairs = near[nodes[sources]].tocsc()[:, origin].tocoo()
+        rows, c, travel = sources[pairs.row], pairs.col, pairs.data - 1.0
+        arrival = np.maximum(times[rows], t_req[c]) + travel
+        dist = self._network.get_distance_matrix()[nodes[rows], origin[c]]
+        cost = self._objective.rebalancing_cost(travel, dist) + (arrival - t_req[c]) - reward[c]
+        ok = (arrival <= deadline[c]) & (cost < 0)
+        rows, c, cost = rows[ok], c[ok], cost[ok]
+        # Per source, the `n_recourse` cheapest riders (ties: rider order).
+        order = np.lexsort((c, cost, rows))
+        rows, c, cost = rows[order], c[order], cost[order]
+        best = np.arange(len(rows)) - np.searchsorted(rows, rows) < self._n_recourse
+        return rows[best], c[best], cost[best]
+
+    def _chain_arcs(self, future, origin, t_req, deadline, reward):
+        """(rider, next rider, cost): riders a vehicle may serve after another one. None here."""
+        empty = np.array([], dtype=np.int64)
+        return empty, empty, np.array([])
+
     def _continuous_columns(self, edges, moves, n_unserved):
         if not any(self.scenarios):
             return None
         nodes, times, links = self._states(edges, moves)
-        dist_all = self._network.get_distance_matrix()
         n_first = len(edges) + len(moves) + n_unserved
-        scale = self._weight / self._n_scenarios
+        n_s = len(self.scenarios)
+        scale = self._weight / n_s
 
-        # Columns as (state, rider row, cost); rider rows are numbered across futures.
-        col_state, col_rider, col_cost = [], [], []
-        rider_base = 0
+        # Arcs into riders, from vehicle states or from riders; riders are numbered across futures.
+        st_from, st_to, st_cost, ch_from, ch_to, ch_cost = [], [], [], [], [], []
+        base = 0
         for future in self.scenarios:
-            if not future:
-                continue
-            origin = np.array([q.origin_node for q in future])
-            t_req = np.array([q.request_time for q in future])
-            deadline = np.array([q.latest_pickup_time for q in future])
-            reward = np.array([self._objective.unserved_penalty(q, q.request_time) for q in future])
-            # A state serves q only within q's patience of its origin: sparse pairs.
-            near = self._near(float((deadline - t_req).max()))
-            states = np.flatnonzero(times < deadline.max())
-            pairs = near[nodes[states]].tocsc()[:, origin].tocoo()
-            rows, c, travel = states[pairs.row], pairs.col, pairs.data - 1.0
-            arrival = np.maximum(times[rows], t_req[c]) + travel
-            cost = (
-                self._objective.rebalancing_cost(travel, dist_all[nodes[rows], origin[c]])
-                + (arrival - t_req[c])
-                - reward[c]
-            )
-            ok = (arrival <= deadline[c]) & (cost < 0)
-            rows, c, cost = rows[ok], c[ok], cost[ok]
-            # Per state, the `n_recourse` cheapest riders (ties: rider order).
-            order = np.lexsort((c, cost, rows))
-            rows, c, cost = rows[order], c[order], cost[order]
-            best = np.arange(len(rows)) - np.searchsorted(rows, rows) < self._n_recourse
-            col_state.append(rows[best])
-            col_rider.append(rider_base + c[best])
-            col_cost.append(scale * cost[best])
-            rider_base += len(future)
-        if not col_state or not sum(len(c) for c in col_state):
+            if future:
+                origin = np.array([q.origin_node for q in future])
+                t_req = np.array([q.request_time for q in future])
+                deadline = np.array([q.latest_pickup_time for q in future])
+                reward = np.array([self._objective.unserved_penalty(q, q.request_time) for q in future])
+                a, b, c = self._arcs(nodes, times, origin, t_req, deadline, reward)
+                st_from.append(a), st_to.append(base + b), st_cost.append(scale * c)
+                a, b, c = self._chain_arcs(future, origin, t_req, deadline, reward)
+                ch_from.append(base + a), ch_to.append(base + b), ch_cost.append(scale * c)
+            base += len(future)
+        st_from, st_to, ch_from, ch_to = (np.concatenate(x) if x else np.array([], dtype=np.int64)
+                                          for x in (st_from, st_to, ch_from, ch_to))
+        if not len(st_from):
             return None
-        state = np.concatenate(col_state)
-        rider = np.concatenate(col_rider)
-        e_cost = np.concatenate(col_cost)
-        n_e = len(e_cost)
-        future_of = np.repeat(np.arange(len(self.scenarios)), [len(f) for f in self.scenarios])
+        n_st, n_ch = len(st_from), len(ch_from)
+        e_cost = np.concatenate(st_cost + ch_cost)
+        cols = n_first + np.arange(n_st + n_ch)
+        future_of = np.repeat(np.arange(n_s), [len(f) for f in self.scenarios])
 
-        # Rows: each future rider at most once; each (state, future) at most its option.
-        riders, rider_row = np.unique(rider, return_inverse=True)
-        links_used, link_row = np.unique(state * len(self.scenarios) + future_of[rider], return_inverse=True)
-        n_r, n_l = len(riders), len(links_used)
-        r_idx = [rider_row, n_r + link_row]
-        c_idx = [n_first + np.arange(n_e), n_first + np.arange(n_e)]
-        vals = [np.ones(n_e), np.ones(n_e)]
-        upper = np.concatenate([np.ones(n_r), np.zeros(n_l)])
+        # Rows: each rider served at most once (arcs in <= 1); a rider passes a
+        # vehicle on at most once it is served (arcs out - arcs in <= 0); each
+        # (state, future) serves at most its option.
+        riders, into = np.unique(np.concatenate([st_to, ch_to]), return_inverse=True)
+        out_riders, out_row = np.unique(ch_from, return_inverse=True)
+        links_used, link_row = np.unique(st_from * n_s + future_of[st_to], return_inverse=True)
+        n_r, n_o, n_l = len(riders), len(out_riders), len(links_used)
+        r_idx, c_idx, vals = [into], [cols], [np.ones(n_st + n_ch)]
+        if n_o:
+            # out: +1 on the rider's outgoing arcs, -1 on its incoming arcs.
+            r_idx.append(n_r + out_row), c_idx.append(cols[n_st:]), vals.append(np.ones(n_ch))
+            pos = np.searchsorted(out_riders, np.concatenate([st_to, ch_to]))
+            has = (pos < n_o) & (out_riders[np.minimum(pos, n_o - 1)] == np.concatenate([st_to, ch_to]))
+            r_idx.append(n_r + pos[has]), c_idx.append(cols[has]), vals.append(-np.ones(has.sum()))
+        r_idx.append(n_r + n_o + link_row), c_idx.append(cols[:n_st]), vals.append(np.ones(n_st))
+        upper = np.concatenate([np.ones(n_r), np.zeros(n_o), np.zeros(n_l)])
         for row, key in enumerate(links_used):
-            link = links[key // len(self.scenarios)]
+            link = links[key // n_s]
             if isinstance(link, list):  # keeping the plan: y + sum of the vehicle's options <= 1
-                r_idx.append(np.full(len(link), n_r + row))
+                r_idx.append(np.full(len(link), n_r + n_o + row))
                 c_idx.append(np.array(link, dtype=np.int64))
                 vals.append(np.ones(len(link)))
-                upper[n_r + row] = 1.0
+                upper[n_r + n_o + row] = 1.0
             else:  # an option: y - x <= 0
-                r_idx.append(np.array([n_r + row]))
+                r_idx.append(np.array([n_r + n_o + row]))
                 c_idx.append(np.array([link]))
                 vals.append(np.array([-1.0]))
+        n_rows = n_r + n_o + n_l
         a = coo_matrix(
             (np.concatenate(vals), (np.concatenate(r_idx), np.concatenate(c_idx))),
-            shape=(n_r + n_l, n_first + n_e),
+            shape=(n_rows, n_first + n_st + n_ch),
         ).tocsr()
         logger.info(
-            f"Two-stage: {len(self.scenarios)} futures, {rider_base} sampled riders, {n_e} recourse columns, "
-            f"{n_r} rider rows, {n_l} state rows."
+            f"Two-stage: {n_s} futures, {base} sampled riders, {n_st} state and {n_ch} chain columns, "
+            f"{n_r} rider rows, {n_o} chain rows, {n_l} state rows."
         )
-        return e_cost, a, np.full(n_r + n_l, -np.inf), upper
+        return e_cost, a, np.full(n_rows, -np.inf), upper
+
+
+class ChainedTwoStageAssignmentSolver(TwoStageAssignmentSolver):
+    """
+    Two-stage as above, but in each future a vehicle may serve riders one
+    after another: after rider q it is free at q's destination at
+    t_q + travel(o_q, d_q) (pickup on request, an optimistic bound) and may
+    take one of the `n_recourse` cheapest riders it then reaches in time.
+    Each future becomes a min-cost flow from vehicle states through riders,
+    still exact as an LP. A state is then worth the riders it can chain, not
+    at most one, which matters when future riders outnumber vehicles
+    everywhere (then every state finds one rider and none looks better).
+    One rider at a time: no pooling in the recourse.
+    """
+
+    def _chain_arcs(self, future, origin, t_req, deadline, reward):
+        dest = np.array([q.destination_node for q in future], dtype=np.int64)
+        free = t_req + self._network.get_l1_cache()[origin, dest]
+        a, b, c = self._arcs(dest, free, origin, t_req, deadline, reward)
+        keep = a != b
+        return a[keep], b[keep], c[keep]

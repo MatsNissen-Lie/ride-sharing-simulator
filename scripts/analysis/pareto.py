@@ -37,9 +37,10 @@ def describe(run_dir: Path) -> dict:
     solver, rebal = exp.get("assignment_solver"), exp.get("rebalancing")
     if solver == "joint" and exp.get("vehicle_value") == "mpc":
         family, label = "C3", f"α={exp.get('vehicle_value_weight', 1.0):g}"
-    elif solver == "two-stage":
+    elif str(solver).startswith("two-stage"):
         family = "C2-SAA"
-        label = f"S={exp.get('scenarios'):g}, w={exp.get('scenario_weight'):g}"
+        chain = ", chain" if solver == "two-stage-chain" else ""
+        label = f"S={exp.get('scenarios'):g}, w={exp.get('scenario_weight'):g}{chain}"
     elif str(solver).startswith("sampled"):
         family = "C2"
         label = f"w={exp.get('virtual_weight'):g}, ρ={exp.get('virtual_per_free'):g}"

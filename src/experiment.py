@@ -43,7 +43,10 @@ from src.components.zones import ZoneIndex
 from src.components.pricing import LinearFareModel
 from src.components.rebalance_solver import NoRebalancingSolver, ReactiveRebalancingSolver
 from src.components.request_sampler import HistoricalRequestSampler
-from src.components.two_stage_assignment_solver import TwoStageAssignmentSolver
+from src.components.two_stage_assignment_solver import (
+    ChainedTwoStageAssignmentSolver,
+    TwoStageAssignmentSolver,
+)
 from src.components.sampled_assignment_solver import (
     BidirectionalChainSolver,
     BidirectionalSampledSolver,
@@ -282,6 +285,19 @@ def _sampled(cls, ctx: Context, objective: IObjective, **kwargs) -> IAssignmentS
     )
 
 
+def _two_stage(cls, ctx: Context, objective: IObjective) -> IAssignmentSolver:
+    return cls(
+        objective,
+        ctx.network,
+        ctx.zones,
+        ctx.vehicle_value,
+        REQUEST_SAMPLERS[ctx.config.request_sampler](ctx),
+        n_scenarios=ctx.config.scenarios,
+        horizon=ctx.config.scenario_horizon_min * 60,
+        weight=ctx.config.scenario_weight,
+    )
+
+
 ASSIGNMENT_SOLVERS: dict[str, Callable[[Context, IObjective], IAssignmentSolver]] = {
     "gurobi": lambda ctx, objective: GurobiAssignmentSolver(objective),
     "highs": lambda ctx, objective: HighsAssignmentSolver(objective),
@@ -308,16 +324,8 @@ ASSIGNMENT_SOLVERS: dict[str, Callable[[Context, IObjective], IAssignmentSolver]
     "sampled-chain-lsa": lambda ctx, objective: _sampled(
         FullMatchingChainSolver, ctx, objective, virtual_per_free=ctx.config.virtual_per_free
     ),
-    "two-stage": lambda ctx, objective: TwoStageAssignmentSolver(
-        objective,
-        ctx.network,
-        ctx.zones,
-        ctx.vehicle_value,
-        REQUEST_SAMPLERS[ctx.config.request_sampler](ctx),
-        n_scenarios=ctx.config.scenarios,
-        horizon=ctx.config.scenario_horizon_min * 60,
-        weight=ctx.config.scenario_weight,
-    ),
+    "two-stage": lambda ctx, objective: _two_stage(TwoStageAssignmentSolver, ctx, objective),
+    "two-stage-chain": lambda ctx, objective: _two_stage(ChainedTwoStageAssignmentSolver, ctx, objective),
 }
 
 
