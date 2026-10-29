@@ -1,7 +1,7 @@
 """Joint assignment as a two-stage stochastic program over sampled futures (sample average approximation)."""
 
 import numpy as np
-from scipy.sparse import coo_matrix
+from scipy.sparse import coo_matrix, csr_matrix
 
 from config import get_logger
 from src.components.joint_assignment_solver import JointAssignmentSolver
@@ -72,7 +72,6 @@ class TwoStageAssignmentSolver(JointAssignmentSolver):
         n_recourse: int = 3,
         max_move: float = 900.0,
         n_moves: int = 5,
-        chunk: int = 2000,
     ):
         super().__init__(objective, network, zones, value, max_move, n_moves)
         self._zones = zones
@@ -81,7 +80,8 @@ class TwoStageAssignmentSolver(JointAssignmentSolver):
         self._horizon = horizon
         self._weight = weight
         self._n_recourse = n_recourse
-        self._chunk = chunk
+        self._near_radius: float | None = None
+        self._near_pairs = csr_matrix((0, 0))
         self.scenarios: list[list[Request]] = []
         self._rtv = RTVGraph()
         self._vehicles: dict[str, VehicleAvailability] = {}
@@ -170,11 +170,20 @@ class TwoStageAssignmentSolver(JointAssignmentSolver):
         nodes, times = (np.array(a) for a in zip(*ends)) if ends else (np.array([], int), np.array([]))
         return nodes.astype(np.int64), times.astype(float), links
 
+    def _near(self, radius: float) -> csr_matrix:
+        """Node x node travel time + 1 for pairs within `radius` seconds (the 1 keeps zero times stored)."""
+        if self._near_radius != radius:
+            times = self._network.get_l1_cache()
+            r, c = np.nonzero(times <= radius)
+            self._near_pairs = csr_matrix((times[r, c] + 1.0, (r, c)), shape=times.shape)
+            self._near_radius = radius
+        return self._near_pairs
+
     def _continuous_columns(self, edges, moves, n_unserved):
         if not any(self.scenarios):
             return None
         nodes, times, links = self._states(edges, moves)
-        travel_all, dist_all = self._network.get_l1_cache(), self._network.get_distance_matrix()
+        dist_all = self._network.get_distance_matrix()
         n_first = len(edges) + len(moves) + n_unserved
         scale = self._weight / self._n_scenarios
 
@@ -188,25 +197,26 @@ class TwoStageAssignmentSolver(JointAssignmentSolver):
             t_req = np.array([q.request_time for q in future])
             deadline = np.array([q.latest_pickup_time for q in future])
             reward = np.array([self._objective.unserved_penalty(q, q.request_time) for q in future])
+            # A state serves q only within q's patience of its origin: sparse pairs.
+            near = self._near(float((deadline - t_req).max()))
             states = np.flatnonzero(times < deadline.max())
-            for lo in range(0, len(states), self._chunk):
-                rows = states[lo : lo + self._chunk]
-                travel = travel_all[np.ix_(nodes[rows], origin)]
-                arrival = np.maximum(times[rows, None], t_req[None, :]) + travel
-                cost = (
-                    self._objective.rebalancing_cost(travel, dist_all[np.ix_(nodes[rows], origin)])
-                    + np.maximum(arrival - t_req[None, :], 0.0)
-                    - reward[None, :]
-                )
-                cost[~(arrival <= deadline[None, :]) | ~(cost < 0)] = np.inf
-                k = min(self._n_recourse, len(future))
-                best = np.argpartition(cost, k - 1, axis=1)[:, :k]
-                r = np.repeat(np.arange(len(rows)), k)
-                c = best.ravel()
-                found = np.isfinite(cost[r, c])
-                col_state.append(rows[r[found]])
-                col_rider.append(rider_base + c[found])
-                col_cost.append(scale * cost[r[found], c[found]])
+            pairs = near[nodes[states]].tocsc()[:, origin].tocoo()
+            rows, c, travel = states[pairs.row], pairs.col, pairs.data - 1.0
+            arrival = np.maximum(times[rows], t_req[c]) + travel
+            cost = (
+                self._objective.rebalancing_cost(travel, dist_all[nodes[rows], origin[c]])
+                + (arrival - t_req[c])
+                - reward[c]
+            )
+            ok = (arrival <= deadline[c]) & (cost < 0)
+            rows, c, cost = rows[ok], c[ok], cost[ok]
+            # Per state, the `n_recourse` cheapest riders (ties: rider order).
+            order = np.lexsort((c, cost, rows))
+            rows, c, cost = rows[order], c[order], cost[order]
+            best = np.arange(len(rows)) - np.searchsorted(rows, rows) < self._n_recourse
+            col_state.append(rows[best])
+            col_rider.append(rider_base + c[best])
+            col_cost.append(scale * cost[best])
             rider_base += len(future)
         if not col_state or not sum(len(c) for c in col_state):
             return None
