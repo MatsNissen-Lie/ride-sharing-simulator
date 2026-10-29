@@ -116,7 +116,7 @@ class ExperimentConfig:
     request_sampler: str = "historical"  # virtual future requests for the sampled solver
     sample_horizon_min: float = 5.0  # look-ahead of the sampled solver
     virtual_weight: float = 0.05  # weight of a virtual rider relative to a real one
-    vehicle_value_weight: float = 1.0  # scales the fleet-MPC values (0 = paper's ILP with MPC moves)
+    vehicle_value_weight: float = 0.003  # scales the fleet-MPC values (0 = paper's ILP with MPC moves); 0.003 from the Pareto sweep
     virtual_per_free: float = 1.0  # active virtual riders per free vehicle (*-matched solvers)
     travel_time_factor: float = config.TRAVEL_TIME_FACTOR
     read_only: bool = False
