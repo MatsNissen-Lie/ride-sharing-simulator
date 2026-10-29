@@ -257,10 +257,12 @@ class FleetMpcValue(IFleetPlan):
         self._slope = max((mean[0] - mean[-1]) / (self._step * (self._n_steps - 1)), 0.0)
 
     def _plan(self, supply: np.ndarray, demand: np.ndarray, shares: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """Duals (Z, K) and step-0 moves (Z, Z) of the fleet LP for these grids."""
-        return fleet_lp_values(
-            supply, demand, shares, self._trip_steps, self._move_steps, self._move_cost, self._reward, self._pooling
-        )
+        """Duals (Z, K) and step-0 moves (Z, Z) of the fleet LP for these grids (hook for subclasses)."""
+        return fleet_lp_values(supply, demand, shares, *self._lp_constants())
+
+    def _lp_constants(self) -> tuple:
+        """The arguments of `fleet_lp_values` after the grids, fixed for this plan (hook for subclasses)."""
+        return self._trip_steps, self._move_steps, self._move_cost, self._reward, self._pooling
 
     @property
     def t_solved(self) -> float | None:

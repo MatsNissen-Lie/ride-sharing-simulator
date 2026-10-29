@@ -44,7 +44,7 @@ class SampledFleetMpcValue(FleetMpcValue):
 
     def _plan(self, supply, demand, shares):
         waiting = demand - self._forecast
-        fixed = (shares, self._trip_steps, self._move_steps, self._move_cost, self._reward, self._pooling)
+        fixed = (shares, *self._lp_constants())
         jobs = [(supply, self._sample(self._forecast) + waiting, *fixed) for _ in range(self._n_futures)]
         with timed("fleet_lp_futures"):
             if self._workers > 1:

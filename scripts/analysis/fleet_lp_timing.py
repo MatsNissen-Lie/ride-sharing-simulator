@@ -26,7 +26,7 @@ from scipy.sparse import block_diag, coo_matrix, vstack
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-CAPTURE = ROOT / "reports" / "fleet_lp_peak_inputs.pkl"
+CAPTURE = ROOT / "data" / "fleet_lp" / "peak_inputs_2025-01-16_1800_f3000.pkl"
 PEAK = 18 * 3600  # seconds of day
 
 
@@ -39,7 +39,8 @@ def capture() -> None:
 
     def spy(*args, **kwargs):
         spy.calls += 1
-        if spy.calls == 16 and not CAPTURE.exists():  # one solve per minute from 17:45: the 18:00 solve
+        if spy.calls == 16 and not CAPTURE.exists():
+            CAPTURE.parent.mkdir(parents=True, exist_ok=True)  # one solve per minute from 17:45: the 18:00 solve
             CAPTURE.write_bytes(pickle.dumps((args, kwargs)))
             print(f"saved {CAPTURE}")
         return original(*args, **kwargs)

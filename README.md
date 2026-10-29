@@ -63,7 +63,7 @@ field of `ExperimentConfig`:
 | `rv_builder` | `IRVGraphBuilder` | `RV_BUILDERS` | standard |
 | `rtv_builder` | `IRTVGraphBuilder` | `RTV_BUILDERS` | trip, vehicle |
 | `assignment_solver` | `IAssignmentSolver` | `ASSIGNMENT_SOLVERS` | gurobi, highs, joint, sampled-* (stage C design C2) |
-| `vehicle_value` | `IVehicleValue` / `IFleetPlan` | `VEHICLE_VALUES` | zero, mpc, mpc_p1, mpc_half, mpc_flat (stage C design C3) |
+| `vehicle_value` | `IVehicleValue` / `IFleetPlan` | `VEHICLE_VALUES` | zero, mpc, mpc_sampled (C3 over sampled demand futures), mpc_p1, mpc_half, mpc_flat, mpc_shuffled and mpc_flat_plan (placebos) (stage C design C3) |
 | `request_sampler` | `IRequestSampler` | `REQUEST_SAMPLERS` | historical |
 | `rebalancing` | `IRebalancingSolver` | `REBALANCERS` | reactive, forecast-greedy, forecast-optimal, mpc, oracle, none (old names demand, transport still work) |
 
