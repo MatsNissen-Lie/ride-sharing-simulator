@@ -34,8 +34,10 @@ FAMILIES = {
 def describe(run_dir: Path) -> dict:
     exp = json.loads((run_dir / "metadata.json").read_text()).get("experiment", {})
     solver, rebal = exp.get("assignment_solver"), exp.get("rebalancing")
-    if solver == "joint" and exp.get("vehicle_value") == "mpc":
+    if solver == "joint" and exp.get("vehicle_value") in ("mpc", "mpc_sampled"):
         family, label = "C3", f"α={exp.get('vehicle_value_weight', 1.0):g}"
+        if exp.get("vehicle_value") == "mpc_sampled":
+            label += f", {exp.get('fleet_futures')} futures"
     elif str(solver).startswith("sampled"):
         family = "C2"
         label = f"w={exp.get('virtual_weight'):g}, ρ={exp.get('virtual_per_free'):g}"

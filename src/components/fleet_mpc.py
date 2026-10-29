@@ -241,15 +241,10 @@ class FleetMpcValue(IFleetPlan):
     def prepare(self, vehicles, requests, t_now):
         if self._t_solved is not None and t_now < self._t_solved + self._resolve_every:
             return
-        lp, self._moves = fleet_lp_values(
+        lp, self._moves = self._plan(
             self.supply_grid(vehicles, t_now),
             self.demand_grid(requests, t_now),
             np.stack([self._trips.shares_at(t_now + k * self._step) for k in range(self._n_steps)]),
-            self._trip_steps,
-            self._move_steps,
-            self._move_cost,
-            self._reward,
-            self._pooling,
         )
         lp = lp * (self._weight / self._pooling)
         if self._t_solved is not None:
@@ -260,6 +255,12 @@ class FleetMpcValue(IFleetPlan):
         self._t_solved, self._grid = t_now, lp
         mean = lp.mean(axis=0)
         self._slope = max((mean[0] - mean[-1]) / (self._step * (self._n_steps - 1)), 0.0)
+
+    def _plan(self, supply: np.ndarray, demand: np.ndarray, shares: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Duals (Z, K) and step-0 moves (Z, Z) of the fleet LP for these grids."""
+        return fleet_lp_values(
+            supply, demand, shares, self._trip_steps, self._move_steps, self._move_cost, self._reward, self._pooling
+        )
 
     @property
     def t_solved(self) -> float | None:

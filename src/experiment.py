@@ -33,6 +33,7 @@ from src.components.network_service import NetworkXService
 from src.components.objectives import DelayObjective, ProfitObjective
 from src.components.demand import HOLIDAYS, HistoricalDemandModel
 from src.components.fleet_mpc import FleetMpcValue
+from src.components.sampled_fleet_mpc import SampledFleetMpcValue
 from src.components.flat_value import ZoneAveragedValue
 from src.components.placebo_values import ZoneAveragedPlan, ZoneShuffledPlan
 from src.components.mpc_rebalance_solver import MpcRebalancingSolver
@@ -117,6 +118,8 @@ class ExperimentConfig:
     sample_horizon_min: float = 5.0  # look-ahead of the sampled solver
     virtual_weight: float = 0.05  # weight of a virtual rider relative to a real one
     fleet_plan_interval_s: float = 60.0  # how often the fleet MPC (C3) re-solves its plan
+    fleet_futures: int = 10  # sampled demand futures of the fleet plan (vehicle value mpc_sampled)
+    fleet_workers: int = 4  # processes solving them
     vehicle_value_weight: float = 0.003  # scales the fleet-MPC values (0 = paper's ILP with MPC moves); 0.003 from the Pareto sweep
     virtual_per_free: float = 1.0  # active virtual riders per free vehicle (*-matched solvers)
     travel_time_factor: float = config.TRAVEL_TIME_FACTOR
@@ -224,7 +227,7 @@ RTV_BUILDERS: dict[str, Callable[[ITripSolver], IRTVGraphBuilder]] = {
 MPC_POOLING = 1.6
 
 
-def _mpc(ctx: Context, **kwargs) -> IVehicleValue:
+def _mpc(ctx: Context, cls=FleetMpcValue, **kwargs) -> IVehicleValue:
     """
     Fleet MPC values. A rider is worth what leaving a new rider unserved costs
     (delay objective: its base penalty); where that is nothing (profit), the
@@ -237,7 +240,7 @@ def _mpc(ctx: Context, **kwargs) -> IVehicleValue:
         fares = FARE_MODELS[ctx.config.fare_model](ctx)
         sample = ctx.provider.request_trips().sample(2000, seed=0)
         reward = sum(fares.price(o, d) for o, d in zip(sample["orig_node"], sample["dest_node"])) / 2000
-    return FleetMpcValue(
+    return cls(
         ctx.network, ctx.zones, ctx.demand, ctx.zone_trips, objective, reward,
         resolve_every=ctx.config.fleet_plan_interval_s, **kwargs,
     )
@@ -246,6 +249,10 @@ def _mpc(ctx: Context, **kwargs) -> IVehicleValue:
 VEHICLE_VALUES: dict[str, Callable[[Context], IVehicleValue]] = {
     "zero": lambda ctx: ZeroValue(),
     "mpc": lambda ctx: _mpc(ctx, pooling=MPC_POOLING, weight=ctx.config.vehicle_value_weight),
+    "mpc_sampled": lambda ctx: _mpc(
+        ctx, SampledFleetMpcValue, pooling=MPC_POOLING, weight=ctx.config.vehicle_value_weight,
+        n_futures=ctx.config.fleet_futures, workers=ctx.config.fleet_workers,
+    ),
     "mpc_p1": lambda ctx: _mpc(ctx, pooling=1.0),
     "mpc_half": lambda ctx: _mpc(ctx, pooling=MPC_POOLING, weight=0.5),
     "mpc_flat": lambda ctx: ZoneAveragedValue(
