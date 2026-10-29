@@ -116,6 +116,7 @@ class ExperimentConfig:
     request_sampler: str = "historical"  # virtual future requests for the sampled solver
     sample_horizon_min: float = 5.0  # look-ahead of the sampled solver
     virtual_weight: float = 0.05  # weight of a virtual rider relative to a real one
+    fleet_plan_interval_s: float = 60.0  # how often the fleet MPC (C3) re-solves its plan
     vehicle_value_weight: float = 0.003  # scales the fleet-MPC values (0 = paper's ILP with MPC moves); 0.003 from the Pareto sweep
     virtual_per_free: float = 1.0  # active virtual riders per free vehicle (*-matched solvers)
     travel_time_factor: float = config.TRAVEL_TIME_FACTOR
@@ -236,7 +237,10 @@ def _mpc(ctx: Context, **kwargs) -> IVehicleValue:
         fares = FARE_MODELS[ctx.config.fare_model](ctx)
         sample = ctx.provider.request_trips().sample(2000, seed=0)
         reward = sum(fares.price(o, d) for o, d in zip(sample["orig_node"], sample["dest_node"])) / 2000
-    return FleetMpcValue(ctx.network, ctx.zones, ctx.demand, ctx.zone_trips, objective, reward, **kwargs)
+    return FleetMpcValue(
+        ctx.network, ctx.zones, ctx.demand, ctx.zone_trips, objective, reward,
+        resolve_every=ctx.config.fleet_plan_interval_s, **kwargs,
+    )
 
 
 VEHICLE_VALUES: dict[str, Callable[[Context], IVehicleValue]] = {
