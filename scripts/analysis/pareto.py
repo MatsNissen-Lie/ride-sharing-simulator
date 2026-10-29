@@ -22,12 +22,13 @@ import polars as pl
 from summarize_runs import summarize
 
 OUT = Path(__file__).resolve().parents[2] / "thesis" / "figures"
-# Categorical slots 1-3 of the reference palette (validated, light surface);
+# Categorical slots 1-3 of the reference palette plus a neutral for baselines (validated, light surface);
 # shapes repeat the family so identity is never colour alone.
 FAMILIES = {
     "baseline": ("#52514e", "s", "Baselines"),
     "C2": ("#eb6834", "^", "C2: sampled riders"),
     "C3": ("#2a78d6", "o", "C3: fleet plan"),
+    "C2-SAA": ("#1baf7a", "D", "C2 two-stage: S sampled futures"),
 }
 
 
@@ -36,6 +37,9 @@ def describe(run_dir: Path) -> dict:
     solver, rebal = exp.get("assignment_solver"), exp.get("rebalancing")
     if solver == "joint" and exp.get("vehicle_value") == "mpc":
         family, label = "C3", f"α={exp.get('vehicle_value_weight', 1.0):g}"
+    elif solver == "two-stage":
+        family = "C2-SAA"
+        label = f"S={exp.get('scenarios'):g}, w={exp.get('scenario_weight'):g}"
     elif str(solver).startswith("sampled"):
         family = "C2"
         label = f"w={exp.get('virtual_weight'):g}, ρ={exp.get('virtual_per_free'):g}"
