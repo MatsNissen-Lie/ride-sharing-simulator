@@ -100,7 +100,13 @@ class TwoStageAssignmentSolver(JointAssignmentSolver):
             ]
         self._rtv = rtv_graph
         self._vehicles = {v.vehicle_id: v for v in vehicles}
-        return super().solve(rtv_graph, requests, vehicles, solver_timeout, current_time)
+        try:
+            return super().solve(rtv_graph, requests, vehicles, solver_timeout, current_time)
+        except RuntimeError as err:
+            # No solution in time (e.g. the first batch, every vehicle idle): decide without the second stage.
+            logger.warning(f"Two-stage: {err}; this batch without the second stage.")
+            self.scenarios = []
+            return super().solve(rtv_graph, requests, vehicles, solver_timeout, current_time)
 
     @staticmethod
     def _free(vehicles) -> list[VehicleAvailability]:

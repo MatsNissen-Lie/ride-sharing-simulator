@@ -206,3 +206,24 @@ def test_moves_go_where_riders_can_still_be_caught(network):
     solver.solve(instance(network, vehicles, []), set(), vehicles, 30, T_NOW)
     (move,) = solver._moves(vehicles, T_NOW)
     assert move[2].stops[0].node == 14
+
+
+def test_without_a_solution_in_time_the_batch_is_decided_without_the_second_stage(network, monkeypatch):
+    import scipy.optimize
+
+    real, calls = scipy.optimize.milp, []
+
+    def first_fails(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            return type("Result", (), {"x": None, "message": "Time limit reached."})()
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(scipy.optimize, "milp", first_fails)
+    rng = random.Random(0)
+    vehicles = {random_vehicle(network, rng, f"v{k}", T_NOW, rng.choice([0, 1])) for k in range(4)}
+    requests = set(random_requests(network, rng, 6, T_NOW))
+    rtv = instance(network, vehicles, requests)
+    result = two_stage(network, [far_rider(network)]).solve(rtv, requests, vehicles, 30, T_NOW)
+    plain = HighsAssignmentSolver().solve(rtv, requests, vehicles, 30, T_NOW)
+    assert len(calls) == 3 and result.assignments == plain.assignments and result.rebalancing == {}
