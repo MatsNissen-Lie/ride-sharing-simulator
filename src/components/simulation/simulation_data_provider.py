@@ -12,6 +12,7 @@ import polars as pl
 
 from config import NUMBER_OF_VEHICLES, get_logger, RIDER_DIR, RIDER_PATTERN
 from config.config import VEHICLE_CAPACITY
+from config.paths import DATA_DIR
 from src.interfaces.data_models import MetaRequest, Passenger, Vehicle
 from src.utils.sim_clock import SimulationClock
 from src.inputs.manhattan_graph import load_graph
@@ -155,6 +156,17 @@ class SimulationDataProvider:
             pl.read_parquet(path, columns=["pickup_datetime", "orig_node"])
             for path in self.iter_request_files()
         )
+
+    def demand_history(self) -> pl.DataFrame:
+        """
+        Requests per day, 15-min slot and Manhattan taxi zone from raw TLC
+        records of earlier months (columns day, slot, zone, n); built by
+        scripts/data_prep/build_demand_history.py. Empty if not built.
+        """
+        path = DATA_DIR / "history" / "zone_counts_15min.parquet"
+        if not path.exists():
+            return pl.DataFrame(schema={"day": pl.Date, "slot": pl.Int32, "zone": pl.Int32, "n": pl.UInt32})
+        return pl.read_parquet(path)
 
     def request_trips(self) -> pl.DataFrame:
         """All requests in the rider files: pickup_datetime, orig_node and dest_node."""

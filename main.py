@@ -136,8 +136,15 @@ def parse_args() -> ExperimentConfig:
         "--demand-model",
         choices=DEMAND_MODELS,
         default=DEFAULTS.demand_model,
-        help="Demand forecast: historical (weekday/weekend average), day-of-week, nowcast (historical scaled by "
-        "today's demand so far) or oracle (the day's actual requests; upper bound).",
+        help="Demand forecast: historical (weekday/weekend average of the month), day-of-week, nowcast (historical "
+        "scaled by today's demand so far), oracle (the day's actual requests; upper bound); from past TLC history only: "
+        "past-weekday, past-day-of-week (--history-weeks), gbm (gradient boosting), nowcast-gbm.",
+    )
+    parser.add_argument(
+        "--history-weeks",
+        type=int,
+        default=DEFAULTS.history_weeks,
+        help="Weeks of past history averaged by the past-* demand models.",
     )
     parser.add_argument(
         "--nowcast-window",
@@ -180,6 +187,7 @@ def parse_args() -> ExperimentConfig:
         vehicle_value=a.vehicle_value,
         demand_model=a.demand_model,
         nowcast_window_min=a.nowcast_window,
+        history_weeks=a.history_weeks,
         request_sampler=a.request_sampler,
         sample_horizon_min=a.sample_horizon,
         virtual_weight=a.virtual_weight,

@@ -27,6 +27,7 @@ from src.components.demand.demand_model import (
     HistoricalDemandModel,
     OracleDemandModel,
 )
+from src.components.demand.gbm_model import fit_gbm_forecast
 from src.components.demand.nowcast_model import NowcastDemandModel
 from src.components.fleet_plan.fleet_mpc import FleetMpcValue
 from src.components.fleet_plan.sampled_fleet_mpc import SampledFleetMpcValue
@@ -137,6 +138,18 @@ def _simulated_requests(ctx: Context) -> np.ndarray:
     return np.array([(t - t0).total_seconds() for t in table["pickup_datetime"]])
 
 
+def _past_profile(ctx: Context, cls) -> IDemandModel:
+    """Average of the `history_weeks` weeks before the simulated day (raw TLC history, past only)."""
+    return cls.from_counts(ctx.provider.demand_history(), ctx.provider.first_request_time(),
+                           before=min(ctx.excluded_days), lookback_days=7 * ctx.config.history_weeks)
+
+
+def _gbm_demand(ctx: Context) -> IDemandModel:
+    """Gradient boosting trained on the year before the simulated day."""
+    return fit_gbm_forecast(ctx.provider.demand_history(), [int(z) for z in ctx.zones.zone_ids],
+                            ctx.provider.first_request_time(), ctx.excluded_days)
+
+
 def _oracle_demand(ctx: Context) -> IDemandModel:
     """The simulated days' own requests (upper bound, not a forecast)."""
     return OracleDemandModel.fit(
@@ -173,6 +186,12 @@ DEMAND_MODELS: dict[str, Callable[[Context], IDemandModel]] = {
         _historical_demand(ctx), _simulated_requests(ctx), window=ctx.config.nowcast_window_min * 60
     ),
     "oracle": _oracle_demand,
+    "past-weekday": lambda ctx: _past_profile(ctx, HistoricalDemandModel),
+    "past-day-of-week": lambda ctx: _past_profile(ctx, DayOfWeekDemandModel),
+    "gbm": lambda ctx: _gbm_demand(ctx),
+    "nowcast-gbm": lambda ctx: NowcastDemandModel(
+        _gbm_demand(ctx), _simulated_requests(ctx), window=ctx.config.nowcast_window_min * 60
+    ),
 }
 OBJECTIVES: dict[str, Callable[[Context], IObjective]] = {
     "delay": lambda ctx: DelayObjective(),

@@ -27,6 +27,7 @@ class ExperimentConfig:
     rebalancing: str = "reactive"
     oracle_horizon_min: float = 10.0
     demand_horizon_min: float = 15.0  # look-ahead of the demand rebalancer
+    history_weeks: int = 8  # weeks of past TLC history the past-* demand models average
     nowcast_window_min: float = 60.0  # past window the nowcast demand model compares with its base forecast
     vehicle_value: str = "zero"  # V(node, time) used by the joint solver
     request_sampler: str = "historical"  # virtual future requests for the sampled solver

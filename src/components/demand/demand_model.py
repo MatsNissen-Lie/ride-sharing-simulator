@@ -84,6 +84,35 @@ class HistoricalDemandModel(IDemandModel):
             zone_rates[zone] = zone_rates.get(zone, 0.0) + n / n_days[k]
         return cls(rates, t0, slot_minutes)
 
+    @classmethod
+    def from_counts(
+        cls,
+        counts: pl.DataFrame,
+        t0: datetime,
+        before: date,
+        lookback_days: int,
+        slot_minutes: int = 15,
+    ) -> "HistoricalDemandModel":
+        """
+        Past-only profile from a table of requests per day, slot and zone
+        (columns day, slot, zone, n): the days in [before - lookback_days,
+        before) except holidays, grouped by `day_key`.
+        """
+        first = before - timedelta(days=lookback_days)
+        past = counts.filter((pl.col("day") >= first) & (pl.col("day") < before)
+                             & ~pl.col("day").is_in(sorted(HOLIDAYS)))
+        days = [first + timedelta(days=k) for k in range(lookback_days)]
+        days = [d for d in days if d not in HOLIDAYS and d in set(past["day"].unique().to_list())]
+        n_days: dict = {}
+        for d in days:
+            n_days[cls.day_key(d)] = n_days.get(cls.day_key(d), 0) + 1
+        rates: dict[tuple, dict[int, float]] = {}
+        for day, slot, zone, n in past.select("day", "slot", "zone", "n").iter_rows():
+            k = cls.day_key(day)
+            zone_rates = rates.setdefault((k, slot), {})
+            zone_rates[zone] = zone_rates.get(zone, 0.0) + n / n_days[k]
+        return cls(rates, t0, slot_minutes)
+
     def expected_requests(self, t_start: float, t_end: float, t_now: float | None = None) -> dict[int, float]:
         out: dict[int, float] = {}
         t = t_start
@@ -107,16 +136,20 @@ class DayOfWeekDemandModel(HistoricalDemandModel):
         return d.weekday()
 
 
-class OracleDemandModel(HistoricalDemandModel):
+class DatedDemandModel(HistoricalDemandModel):
+    """A profile per calendar date: rates keyed by (date, slot), e.g. a forecast made for given days."""
+
+    @staticmethod
+    def day_key(d: date):
+        return d
+
+
+class OracleDemandModel(DatedDemandModel):
     """
     The simulated day's own requests per slot and zone (fit with `only` = the
     simulated days): perfect knowledge of demand at slot resolution. Not a
     forecast; the upper bound of what forecasting can give.
     """
-
-    @staticmethod
-    def day_key(d: date):
-        return d
 
 
 def zone_vector(expected: dict[int, float], zone_ids: np.ndarray) -> np.ndarray:
