@@ -12,7 +12,6 @@ from typing import Callable
 import numpy as np
 import polars as pl
 
-from config import get_logger
 from src.components.assignment.assignment_solver import GurobiAssignmentSolver, HighsAssignmentSolver
 from src.components.simulation.batch_controller import BatchController
 from src.components.simulation.fleet_replay import ArrayFleetReplay, PathFleetReplay
