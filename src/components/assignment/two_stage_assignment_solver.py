@@ -46,7 +46,7 @@ class TwoStageAssignmentSolver(JointAssignmentSolver):
     continuous second stage is exact. Because a future rider can be claimed
     once, the fifth vehicle sent to a zone gains nothing from riders the
     first four already cover: values fall with the number of vehicles, which
-    the per-vehicle values of design C1 lacked.
+    fixed per-vehicle values lack.
 
     - Futures: S fresh samples of the requests in [t_now, t_now + horizon).
     - Moves: each free vehicle may move to the `n_moves` reachable zones
@@ -54,7 +54,7 @@ class TwoStageAssignmentSolver(JointAssignmentSolver):
       there; a move is worth only what its state gains in the second stage.
     - Only the `n_recourse` best riders per state and future become columns.
     - The joint ILP's vehicle value V still prices the first stage (`zero`
-      for pure two-stage), so the design combines with C3's values.
+      for pure two-stage), so it combines with the fleet plan's values.
 
     With S = 0 (or no sampled riders) moves never pay and this is the joint ILP.
     """
@@ -96,7 +96,8 @@ class TwoStageAssignmentSolver(JointAssignmentSolver):
     ) -> AssignmentResult:
         with timed("sample"):
             self.scenarios = [
-                self._sampler.sample(current_time, current_time + self._horizon) for _ in range(self._n_scenarios)
+                self._sampler.sample(current_time, current_time + self._horizon, current_time)
+                for _ in range(self._n_scenarios)
             ]
         self._rtv = rtv_graph
         self._vehicles = {v.vehicle_id: v for v in vehicles}

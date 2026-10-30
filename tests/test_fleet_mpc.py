@@ -140,7 +140,7 @@ class FixedDemand(IDemandModel):
     def __init__(self, per_second):
         self.per_second = per_second
 
-    def expected_requests(self, t_start, t_end):
+    def expected_requests(self, t_start, t_end, t_now=None):
         return {z: r * (t_end - t_start) for z, r in self.per_second.items()}
 
 

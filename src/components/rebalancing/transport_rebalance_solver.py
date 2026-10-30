@@ -71,7 +71,7 @@ class TransportRebalancingSolver(IRebalancingSolver):
         free = [v for v in free if routes.get(v.vehicle_id, STOP) is STOP]
 
         expected = zone_vector(
-            self._demand.expected_requests(t_now, t_now + self._horizon), self._zone_ids
+            self._demand.expected_requests(t_now, t_now + self._horizon, t_now), self._zone_ids
         )
         if not free or expected.sum() <= 0:
             return routes

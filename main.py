@@ -5,6 +5,7 @@ from datetime import datetime
 
 from src.experiment import (
     ASSIGNMENT_SOLVERS,
+    DEMAND_MODELS,
     FLEET_REPLAYS,
     OBJECTIVES,
     REBALANCERS,
@@ -132,6 +133,19 @@ def parse_args() -> ExperimentConfig:
         help="Weight of a future rider relative to a real one (--solver two-stage).",
     )
     parser.add_argument(
+        "--demand-model",
+        choices=DEMAND_MODELS,
+        default=DEFAULTS.demand_model,
+        help="Demand forecast: historical (weekday/weekend average), day-of-week, nowcast (historical scaled by "
+        "today's demand so far) or oracle (the day's actual requests; upper bound).",
+    )
+    parser.add_argument(
+        "--nowcast-window",
+        type=float,
+        default=DEFAULTS.nowcast_window_min,
+        help="Minutes of past demand the nowcast model compares with its base forecast.",
+    )
+    parser.add_argument(
         "--rebalancing",
         choices=REBALANCERS,
         default=DEFAULTS.rebalancing,
@@ -164,6 +178,8 @@ def parse_args() -> ExperimentConfig:
         rtv_builder=a.rtv,
         assignment_solver=a.solver,
         vehicle_value=a.vehicle_value,
+        demand_model=a.demand_model,
+        nowcast_window_min=a.nowcast_window,
         request_sampler=a.request_sampler,
         sample_horizon_min=a.sample_horizon,
         virtual_weight=a.virtual_weight,

@@ -193,8 +193,12 @@ class IDemandModel(ABC):
     """Expected requests per zone: a forecast of where and when riders appear."""
 
     @abstractmethod
-    def expected_requests(self, t_start: float, t_end: float) -> dict[int, float]:
-        """Expected number of new requests per zone id in [t_start, t_end) (simulation seconds)."""
+    def expected_requests(self, t_start: float, t_end: float, t_now: float | None = None) -> dict[int, float]:
+        """
+        Expected number of new requests per zone id in [t_start, t_end)
+        (simulation seconds). `t_now` is the current time: a model may use
+        requests observed before it (never after). None: use none.
+        """
 
 
 class IFareModel(ABC):

@@ -87,7 +87,7 @@ class HistoricalRequestSampler(IRequestSampler):
     def _key(kind, slot, zone):
         return (kind * 1000 + slot) * 1000 + zone
 
-    def sample(self, t_start: float, t_end: float) -> list[Request]:
+    def sample(self, t_start: float, t_end: float, t_now: float | None = None) -> list[Request]:
         out: list[Request] = []
         t = t_start
         while t < t_end:
@@ -96,7 +96,7 @@ class HistoricalRequestSampler(IRequestSampler):
             piece_end = min(t + (self._slot - seconds_of_day % self._slot), t_end)
             kind = is_weekend(moment.date())
             slot = seconds_of_day // self._slot
-            for zone, expected in sorted(self._demand.expected_requests(t, piece_end).items()):
+            for zone, expected in sorted(self._demand.expected_requests(t, piece_end, t_now).items()):
                 key = self._key(kind, slot, zone)
                 lo, hi = np.searchsorted(self._keys, key, "left"), np.searchsorted(self._keys, key, "right")
                 n = self._rng.poisson(expected)

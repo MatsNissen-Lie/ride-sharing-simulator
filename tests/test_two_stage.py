@@ -38,7 +38,7 @@ class SameFuture(IRequestSampler):
     def __init__(self, riders=()):
         self.riders = list(riders)
 
-    def sample(self, t_start, t_end):
+    def sample(self, t_start, t_end, t_now=None):
         return list(self.riders)
 
 
@@ -107,7 +107,7 @@ def test_future_riders_count_by_their_share_of_futures(network):
         def __init__(self, rider):
             self.rider, self.calls = rider, 0
 
-        def sample(self, t_start, t_end):
+        def sample(self, t_start, t_end, t_now=None):
             self.calls += 1
             return [self.rider] if self.calls % 3 == 1 else []
 
@@ -132,7 +132,7 @@ def test_future_riders_are_never_committed(network, monkeypatch):
     class Hotspot(RandomSampler):
         """Future riders all at zone 2's centre, waiting 30 s: only a vehicle nearby can serve them."""
 
-        def sample(self, t_start, t_end):
+        def sample(self, t_start, t_end, t_now=None):
             return [
                 replace(q, origin_node=21, latest_pickup_time=q.request_time + 30)
                 for q in super().sample(t_start, t_end) if q.destination_node != 21

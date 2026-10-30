@@ -97,7 +97,7 @@ class FixedSampler(IRequestSampler):
         self.requests = list(requests)
         self.calls = []
 
-    def sample(self, t_start, t_end):
+    def sample(self, t_start, t_end, t_now=None):
         self.calls.append((t_start, t_end))
         return [q for q in self.requests if t_start <= q.request_time < t_end]
 
@@ -178,7 +178,7 @@ class RandomSampler(IRequestSampler):
     def __init__(self, network, rate=0.05):
         self.rng, self.network, self.rate, self.k = random.Random(1), network, rate, 0
 
-    def sample(self, t_start, t_end):
+    def sample(self, t_start, t_end, t_now=None):
         out = []
         for _ in range(np.random.default_rng(int(t_start)).poisson(self.rate * (t_end - t_start))):
             o, d = self.rng.sample(range(self.network.N), 2)

@@ -1,11 +1,10 @@
 """
-Zone-level fleet MPC whose duals price the assignment (stage C, option C).
+Zone-level fleet MPC whose duals price the assignment.
 
 Every minute a fluid LP plans the fleet over zones x time steps (Zhang, Rossi
 & Pavone 2016; Iglesias et al. 2018). The dual of a zone-step supply
 constraint is what one more free vehicle there and then is worth; the joint
-assignment ILP uses it as V(node, time). Reasoning and results:
-research/stage-c/fleet-mpc.md.
+assignment ILP uses it as V(node, time).
 """
 
 import numpy as np
@@ -306,7 +305,7 @@ class FleetMpcValue(IFleetPlan):
         grid = np.zeros((self._zone_ids.size, self._n_steps))
         for k in range(self._n_steps):
             start = t_now + k * self._step
-            for zone, rate in self._demand.expected_requests(start, start + self._step).items():
+            for zone, rate in self._demand.expected_requests(start, start + self._step, t_now).items():
                 col = np.searchsorted(self._zone_ids, zone)
                 if col < self._zone_ids.size and self._zone_ids[col] == zone:
                     grid[col, k] += rate

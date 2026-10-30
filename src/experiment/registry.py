@@ -10,6 +10,7 @@ from functools import cached_property
 from typing import Callable
 
 import numpy as np
+import polars as pl
 
 from config import get_logger
 from src.components.assignment.assignment_solver import GurobiAssignmentSolver, HighsAssignmentSolver
@@ -21,7 +22,13 @@ from src.components.graph_builder.rv_builder import RVGraphBuilder
 from src.components.assignment.joint_assignment_solver import JointAssignmentSolver, ZeroValue
 from src.components.network.network_service import NetworkXService
 from src.components.economics.objectives import DelayObjective, ProfitObjective
-from src.components.demand.demand_model import HOLIDAYS, HistoricalDemandModel
+from src.components.demand.demand_model import (
+    HOLIDAYS,
+    DayOfWeekDemandModel,
+    HistoricalDemandModel,
+    OracleDemandModel,
+)
+from src.components.demand.nowcast_model import NowcastDemandModel
 from src.components.fleet_plan.fleet_mpc import FleetMpcValue
 from src.components.fleet_plan.sampled_fleet_mpc import SampledFleetMpcValue
 from src.components.fleet_plan.flat_value import ZoneAveragedValue
@@ -114,13 +121,27 @@ class Context:
         return simulated_days(self.provider.first_request_time(), self.start_time, self.end_time)
 
 
-def _historical_demand(ctx: Context) -> IDemandModel:
+def _historical_demand(ctx: Context, cls=HistoricalDemandModel) -> IDemandModel:
     """Fitted on every day except the simulated ones."""
-    return HistoricalDemandModel.fit(
+    return cls.fit(
         ctx.provider.request_table(),
         ctx.zones,
         ctx.provider.first_request_time(),
         exclude=ctx.excluded_days,
+    )
+
+
+def _simulated_requests(ctx: Context) -> np.ndarray:
+    """Request times (simulation seconds) of the simulated days, as they will arrive."""
+    t0 = ctx.provider.first_request_time()
+    table = ctx.provider.request_table().filter(pl.col("pickup_datetime").dt.date().is_in(sorted(ctx.excluded_days)))
+    return np.array([(t - t0).total_seconds() for t in table["pickup_datetime"]])
+
+
+def _oracle_demand(ctx: Context) -> IDemandModel:
+    """The simulated days' own requests (upper bound, not a forecast)."""
+    return OracleDemandModel.fit(
+        ctx.provider.request_table(), ctx.zones, ctx.provider.first_request_time(), only=ctx.excluded_days
     )
 
 
@@ -148,6 +169,11 @@ ZONINGS: dict[str, Callable[[Context], IZoneIndex]] = {
 }
 DEMAND_MODELS: dict[str, Callable[[Context], IDemandModel]] = {
     "historical": _historical_demand,
+    "day-of-week": lambda ctx: _historical_demand(ctx, DayOfWeekDemandModel),
+    "nowcast": lambda ctx: NowcastDemandModel(
+        _historical_demand(ctx), _simulated_requests(ctx), window=ctx.config.nowcast_window_min * 60
+    ),
+    "oracle": _oracle_demand,
 }
 OBJECTIVES: dict[str, Callable[[Context], IObjective]] = {
     "delay": lambda ctx: DelayObjective(),

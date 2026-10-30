@@ -30,7 +30,7 @@ class FixedDemand(IDemandModel):
     def __init__(self, per_zone):
         self.per_zone = per_zone
 
-    def expected_requests(self, t_start, t_end):
+    def expected_requests(self, t_start, t_end, t_now=None):
         return dict(self.per_zone)
 
 

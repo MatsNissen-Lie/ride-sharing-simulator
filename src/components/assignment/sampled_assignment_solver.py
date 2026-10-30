@@ -114,7 +114,7 @@ class SampledRequestsAssignmentSolver(JointAssignmentSolver):
         end = current_time + self._horizon
         with timed("sample"):
             if end > start:
-                self.virtual += self._sampler.sample(start, end)
+                self.virtual += self._sampler.sample(start, end, current_time)
                 self._sampled_until = end
             self.virtual = [q for q in self.virtual if q.latest_pickup_time > current_time]
             self._virtual_ids.clear()

@@ -66,7 +66,7 @@ class DemandRebalancingSolver(IRebalancingSolver):
 
         zone_ids = self._zones.zone_ids
         col = {int(z): k for k, z in enumerate(zone_ids)}
-        expected = zone_vector(self._demand.expected_requests(t_now, t_now + self._horizon), zone_ids)
+        expected = zone_vector(self._demand.expected_requests(t_now, t_now + self._horizon, t_now), zone_ids)
         if not free or expected.sum() <= 0:
             return routes
 

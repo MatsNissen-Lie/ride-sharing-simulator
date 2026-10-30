@@ -21,18 +21,24 @@ class HistoricalDemandModel(IDemandModel):
 
     Day type is weekday or weekend; slots are `slot_minutes` long; a request
     belongs to the zone of its origin node. The expectation for an interval
-    sums the slot averages it covers, prorating partial slots.
+    sums the slot averages it covers, prorating partial slots. Subclasses
+    group days differently by overriding `day_key`.
     """
 
     def __init__(
         self,
-        rates: dict[tuple[str, int], dict[int, float]],
+        rates: dict[tuple, dict[int, float]],
         t0: datetime,
         slot_minutes: int = 15,
     ):
         self._rates = rates
         self._t0 = t0
         self._slot = slot_minutes * 60
+
+    @staticmethod
+    def day_key(d: date):
+        """Days with the same key share a profile."""
+        return day_type(d)
 
     @classmethod
     def fit(
@@ -42,8 +48,12 @@ class HistoricalDemandModel(IDemandModel):
         t0: datetime,
         exclude: set[date] = frozenset(),
         slot_minutes: int = 15,
+        only: set[date] | None = None,
     ) -> "HistoricalDemandModel":
-        """`trips` needs columns pickup_datetime and orig_node."""
+        """
+        `trips` needs columns pickup_datetime and orig_node. Days in `exclude`
+        and holidays are left out; with `only`, just those days are used.
+        """
         df = (
             trips.select(
                 pl.col("pickup_datetime"),
@@ -59,21 +69,22 @@ class HistoricalDemandModel(IDemandModel):
             )
             .filter(~pl.col("day").is_in(sorted(exclude | HOLIDAYS)))
         )
+        if only is not None:
+            df = df.filter(pl.col("day").is_in(sorted(only)))
         days = df.select("day").unique()["day"].to_list()
-        n_days = {kind: sum(day_type(d) == kind for d in days) for kind in ("weekday", "weekend")}
-        counts = (
-            # day_type per row; polars counts Monday = 1 .. Sunday = 7
-            df.with_columns((pl.col("day").dt.weekday() >= 6).alias("weekend"))
-            .group_by("weekend", "slot", "zone")
-            .len()
-        )
-        rates: dict[tuple[str, int], dict[int, float]] = {}
-        for weekend, slot, zone, n in counts.iter_rows():
-            kind = "weekend" if weekend else "weekday"
-            rates.setdefault((kind, slot), {})[zone] = n / n_days[kind]
+        keys = {d: cls.day_key(d) for d in days}
+        n_days: dict = {}
+        for k in keys.values():
+            n_days[k] = n_days.get(k, 0) + 1
+        counts = df.group_by("day", "slot", "zone").len()
+        rates: dict[tuple, dict[int, float]] = {}
+        for day, slot, zone, n in counts.iter_rows():
+            k = keys[day]
+            zone_rates = rates.setdefault((k, slot), {})
+            zone_rates[zone] = zone_rates.get(zone, 0.0) + n / n_days[k]
         return cls(rates, t0, slot_minutes)
 
-    def expected_requests(self, t_start: float, t_end: float) -> dict[int, float]:
+    def expected_requests(self, t_start: float, t_end: float, t_now: float | None = None) -> dict[int, float]:
         out: dict[int, float] = {}
         t = t_start
         while t < t_end:
@@ -82,10 +93,30 @@ class HistoricalDemandModel(IDemandModel):
             slot = seconds_of_day // self._slot
             slot_end = t + (self._slot - seconds_of_day % self._slot)
             share = (min(slot_end, t_end) - t) / self._slot
-            for zone, rate in self._rates.get((day_type(moment.date()), slot), {}).items():
+            for zone, rate in self._rates.get((self.day_key(moment.date()), slot), {}).items():
                 out[zone] = out.get(zone, 0.0) + share * rate
             t = slot_end
         return out
+
+
+class DayOfWeekDemandModel(HistoricalDemandModel):
+    """Average requests per (weekday, slot, zone): Thursdays are forecast from past Thursdays only."""
+
+    @staticmethod
+    def day_key(d: date):
+        return d.weekday()
+
+
+class OracleDemandModel(HistoricalDemandModel):
+    """
+    The simulated day's own requests per slot and zone (fit with `only` = the
+    simulated days): perfect knowledge of demand at slot resolution. Not a
+    forecast; the upper bound of what forecasting can give.
+    """
+
+    @staticmethod
+    def day_key(d: date):
+        return d
 
 
 def zone_vector(expected: dict[int, float], zone_ids: np.ndarray) -> np.ndarray:
