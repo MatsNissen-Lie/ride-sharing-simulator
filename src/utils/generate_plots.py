@@ -469,8 +469,10 @@ def generate_plots(csv_path):
 
 
 if __name__ == "__main__":
+    # usage: uv run python src/utils/generate_plots.py <run folder>
+    import sys
 
-    PATH = Path("reports/herorun20")
+    PATH = Path(sys.argv[1])
     csv_file = PATH / "simulation_stats.csv"
 
     if csv_file.exists():

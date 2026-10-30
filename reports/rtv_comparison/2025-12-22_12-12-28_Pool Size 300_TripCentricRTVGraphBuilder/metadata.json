@@ -1,7 +1,0 @@
-{
-    "SCENARIO_NAME": "Pool Size 300",
-    "BUILDER": "TripCentricRTVGraphBuilder",
-    "OMEGA": 180,
-    "DELTA": 300,
-    "MEGA_BATCH_SIZE": 300
-}
