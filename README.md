@@ -99,43 +99,35 @@ https://networkx.org/documentation/stable/developer/index.html
 
 
 
-# potential structure for the project
-├── data/
-│   ├── riders/
-│   │   └── nyc_taxi_trips_2013.parquet
-│   └── maps/
-│       └── manhattan_graph.graphml
-│
-├── notebooks/
-│   ├── 01_data_preprocessing.ipynb
-│   └── 02_results_analysis.ipynb
-│
-├── src/
-│   ├── interfaces/
-│   │   ├── __init__.py
-│   │   ├── data_models.py          # <-- Core Data classes
-│   │   └── services.py             # <-- Routing Logic and Service Layer
-│   │
-│   ├── components/
-│   │   ├── __init__.py
-│   │   ├── network_service.py
-│   │   ├── route_planner.py
-│   │   ├── graph_builders.py
-│   │   └── assignment_solvers.py
-│   │
-│   ├── data_loader/
-│   │   ├── __init__.py
-│   │   └── request_generator.py
-│   │
-│   ├── simulation/
-│   │   ├── __init__.py
-│   │   ├── controller.py
-│   │   └── state.py
-│   │
-│   └── main.py
-│
-├── tests/
-│   ├── test_route_planner.py
-│   └── test_request_generator.py
-│
-└── pyproject.toml
+# Project layout
+
+```
+config/                 settings (config.py), paths, logging
+data/                   inputs: street graph, riders, zones, caches (large files git-ignored)
+src/
+  interfaces/           interfaces and data models every component depends on
+  components/           implementations, one subpackage per role:
+    simulation/           batch controller, fleet replay, data provider
+    network/              street network service, trip solver, zones
+    graph_builder/        RV and RTV graphs
+    assignment/           paper's ILP and the stage C joint, sampled and two-stage solvers
+    rebalancing/          reactive, forecast, oracle and fleet-plan rebalancers
+    fleet_plan/           vehicle values and fleet plans (C3), placebos
+    demand/               demand model, sampled future requests
+    economics/            objectives, fares
+  experiment/           ExperimentConfig, the registry of components by name, running a simulation
+  inputs/               loading the Manhattan graph, sampling the starting fleet
+  database/             all-pairs travel time cache (DuckDB)
+  simulator.py          the batch loop
+  utils/                plots, run output, statistics, timing
+scripts/
+  analysis/             analyses behind the numbers in the notes (summaries, Pareto, timing, ...)
+  data_prep/            snapping trips to street nodes, plotting pickups
+  compute_all_sp_fast.py, verify_db.py, with_sim_slot.sh
+tests/                  brute-force checks on a small synthetic network
+research/               ROADMAP (work log, decisions, experiments), stage C design notes, literature
+thesis/                 working notes and figures
+archive/                the 2025 project, restored for reference
+reports/                output of runs (git-ignored; data of all runs on branch runs-archive)
+main.py                 command line
+```
