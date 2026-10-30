@@ -48,7 +48,7 @@ run_experiment(ExperimentConfig(fleet=750, rebalancing="oracle", hours=1))
 ```
 
 Each pipeline step is a swappable component behind an interface in
-`src/interfaces/`, registered by name in `src/experiment.py` and chosen by a
+`src/interfaces/`, registered by name in `src/experiment/registry.py` and chosen by a
 field of `ExperimentConfig`:
 
 | Config field | Interface | Registry | Options |

@@ -15,6 +15,7 @@ import scipy.optimize as so
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[2]))
 import src.experiment as ex
+from src.experiment.registry import _two_stage
 from src.components.assignment.two_stage_assignment_solver import TwoStageAssignmentSolver
 
 captured = {}
@@ -44,7 +45,7 @@ class Diag(TwoStageAssignmentSolver):
         zone = self._zones.zones_of(np.array([q.origin_node for q in riders]))
         # state arcs are the arcs whose source array is the states (len == n_states); in order of futures
         n_states = self._n_edges + self._moves_offered + len(self._vehicles)
-        base, served = 0, np.zeros(len(riders))
+        served = np.zeros(len(riders))
         k = self._n_first
         bases = np.cumsum([0] + [len(f) for f in self.scenarios])
         fi = 0
@@ -57,7 +58,7 @@ class Diag(TwoStageAssignmentSolver):
                         offered=self._moves_offered, chosen=len(res.rebalancing), S=len(self.scenarios)))
         return res
 
-ex.ASSIGNMENT_SOLVERS["two-stage-diag"] = lambda ctx, obj: ex._two_stage(Diag, ctx, obj)
+ex.ASSIGNMENT_SOLVERS["two-stage-diag"] = lambda ctx, obj: _two_stage(Diag, ctx, obj)
 cfg = ex.ExperimentConfig(name="diag_zones", fleet=3000, start=datetime(2025, 1, 16, 17, 45), hours=1, max_batches=150,
                           assignment_solver="two-stage-diag", rebalancing="none", scenario_weight=0.01, read_only=True)
 ex.run_experiment(cfg)
