@@ -27,7 +27,7 @@ One-time data preparation (gitignored outputs):
 # NYC TLC trips for a month, e.g. January 2025, into data/riders/
 curl -o data/riders/fhvhv_tripdata_2025-01.parquet https://d37ci6vzurychx.cloudfront.net/trip-data/fhvhv_tripdata_2025-01.parquet
 curl -o data/riders/yellow_tripdata_2025-01.parquet https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2025-01.parquet
-uv run python -m src.state_representation.generate_rider_locations_multi  # snap trips to street nodes
+uv run python scripts/data_prep/generate_rider_locations_multi.py  # snap trips to street nodes
 uv run python scripts/compute_all_sp_fast.py                             # all-pairs travel times
 ```
 

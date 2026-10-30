@@ -8,9 +8,13 @@ import matplotlib.pyplot as plt
 import osmnx as ox
 import polars as pl
 
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # project root
+
 from config import BASE_DIR, format_log_block, get_logger
-from src.state_representation.manhatten_fast import ensure_travel_times, load_graph
-from src.state_representation.vehicle_sampling import sample_vehicle_positions
+from src.inputs.manhattan_graph import ensure_travel_times, load_graph
+from src.inputs.vehicle_sampling import sample_vehicle_positions
 
 logger = get_logger(__name__)
 

@@ -15,10 +15,14 @@ from pyproj import Transformer
 from shapely.geometry import GeometryCollection, MultiPolygon, Point, Polygon
 from shapely.geometry.base import BaseGeometry
 
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # project root
+
 from config import format_log_block, get_logger, RIDER_DIR
 from config.paths import TAXI_ZONES_PATH
 from src.components.network.network_service import NetworkXService
-from src.state_representation.manhatten_fast import load_graph
+from src.inputs.manhattan_graph import load_graph
 
 logger = get_logger(__name__)
 logger.setLevel("DEBUG")

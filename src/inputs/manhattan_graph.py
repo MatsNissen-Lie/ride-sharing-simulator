@@ -1,7 +1,6 @@
-"""Faster Manhattan routing leveraging caching and precomputed coordinates.
+"""The Manhattan street graph: downloaded once, then loaded from GraphML.
 
-This script follows the recommendations in `src/state_representation/efficiency.md`
-by:
+Loading is fast by:
     * enabling the OSMnx HTTP cache
     * persisting the downloaded street graph to GraphML for instant reloads
     * caching geocoded landmark coordinates to avoid repeated API calls

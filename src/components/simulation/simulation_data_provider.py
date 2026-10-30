@@ -14,8 +14,8 @@ from config import NUMBER_OF_VEHICLES, get_logger, RIDER_DIR, RIDER_PATTERN
 from config.config import VEHICLE_CAPACITY
 from src.interfaces.data_models import MetaRequest, Passenger, Vehicle
 from src.utils.sim_clock import SimulationClock
-from src.state_representation.manhatten_fast import load_graph
-from src.state_representation.vehicle_sampling import sample_vehicle_positions
+from src.inputs.manhattan_graph import load_graph
+from src.inputs.vehicle_sampling import sample_vehicle_positions
 
 logger = get_logger(__name__)
 

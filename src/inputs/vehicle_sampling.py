@@ -381,7 +381,7 @@ def sample_vehicle_positions(
 
 
 if __name__ == "__main__":
-    from src.state_representation.manhatten_fast import load_graph
+    from src.inputs.manhattan_graph import load_graph
 
     street_graph = load_graph()
     df = sample_vehicle_positions(street_graph, NUMBER_OF_VEHICLES, seed=42)

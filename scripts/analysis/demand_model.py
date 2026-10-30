@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from config.paths import RIDER_DIR, TAXI_ZONES_PATH  # noqa: E402
 from src.components.demand.demand_model import HistoricalDemandModel  # noqa: E402
 from src.components.network.zones import ZoneIndex  # noqa: E402
-from src.state_representation.manhatten_fast import load_graph  # noqa: E402
+from src.inputs.manhattan_graph import load_graph  # noqa: E402
 
 SLOT_MIN = 15
 
