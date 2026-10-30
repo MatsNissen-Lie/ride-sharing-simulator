@@ -4,7 +4,7 @@ import numpy as np
 from scipy.optimize import linear_sum_assignment, linprog
 from scipy.sparse import coo_matrix
 
-from src.components.demand import integer_targets, zone_vector
+from src.components.demand.demand_model import integer_targets, zone_vector
 from src.interfaces import (
     IDemandModel,
     INetworkService,

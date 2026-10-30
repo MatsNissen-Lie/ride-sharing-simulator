@@ -5,18 +5,18 @@ from datetime import datetime
 
 import pytest
 
-from src.components.assignment_solver import GurobiAssignmentSolver, HighsAssignmentSolver
-from src.components.batch_controller import BatchController
-from src.components.fleet_replay import ArrayFleetReplay, PathFleetReplay
+from src.components.assignment.assignment_solver import GurobiAssignmentSolver, HighsAssignmentSolver
+from src.components.simulation.batch_controller import BatchController
+from src.components.simulation.fleet_replay import ArrayFleetReplay, PathFleetReplay
 from src.components.graph_builder.rtv_trip_centric import TripCentricRTVGraphBuilder
 from src.components.graph_builder.rtv_vehicle_centric import (
     VehicleCentricRTVGraphBuilder,
 )
 from src.components.graph_builder.rv_builder import RVGraphBuilder
-from src.components.rebalance_solver import ReactiveRebalancingSolver
+from src.components.rebalancing.rebalance_solver import ReactiveRebalancingSolver
 from src.interfaces import Vehicle
 from src.interfaces.data_models import MetaRequest
-from src.components.trip_solver import AStarTripSolver
+from src.components.network.trip_solver import AStarTripSolver
 from src.simulator import Simulator
 from src.utils.sim_clock import SimulationClock
 
@@ -117,7 +117,7 @@ def test_builders_and_solvers_agree_every_batch(network, seed):
 
 def test_simulation_is_consistent_with_traffic():
     """Slower travel times: planning and replay must still agree on every deadline."""
-    from src.components.network_service import NetworkXService
+    from src.components.network.network_service import NetworkXService
     from tests.conftest import InMemoryPathCache, make_street_graph
 
     graph = make_street_graph(seed=7)
@@ -128,8 +128,8 @@ def test_simulation_is_consistent_with_traffic():
 
 def test_profit_simulation_is_consistent(network):
     """Profit objective end to end: promises kept, deadlines met, money recorded."""
-    from src.components.objectives import ProfitObjective
-    from src.components.pricing import LinearFareModel
+    from src.components.economics.objectives import ProfitObjective
+    from src.components.economics.pricing import LinearFareModel
 
     class ProfitSolver(HighsAssignmentSolver):
         def __init__(self):

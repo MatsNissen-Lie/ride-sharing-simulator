@@ -5,13 +5,13 @@ import random
 import numpy as np
 import pytest
 
-from src.components.assignment_solver import HighsAssignmentSolver
+from src.components.assignment.assignment_solver import HighsAssignmentSolver
 from src.components.graph_builder.rtv_trip_centric import TripCentricRTVGraphBuilder
 from src.components.graph_builder.rv_builder import RVGraphBuilder
-from src.components.joint_assignment_solver import JointAssignmentSolver, ZeroValue
-from src.components.objectives import DelayObjective
-from src.components.rebalance_solver import NoRebalancingSolver
-from src.components.trip_solver import AStarTripSolver
+from src.components.assignment.joint_assignment_solver import JointAssignmentSolver, ZeroValue
+from src.components.economics.objectives import DelayObjective
+from src.components.rebalancing.rebalance_solver import NoRebalancingSolver
+from src.components.network.trip_solver import AStarTripSolver
 from src.interfaces import IVehicleValue, VehicleAvailability
 from tests.conftest import make_request, random_requests, random_vehicle
 from tests.test_simulation import run
@@ -132,7 +132,7 @@ def test_simulation_with_moves_keeps_every_deadline(network):
 
 
 def test_zero_value_never_cuts_a_move_in_progress(network):
-    """A vehicle heading to a far zone is not redirected to a nearer one (bug found in stage C)."""
+    """A vehicle heading to a far zone is not redirected to a nearer one (regression test)."""
     from src.interfaces import Stop
 
     moving = VehicleAvailability("m", 4, 0, T_NOW, frozenset(), (Stop.zone_move(35, 9),))
@@ -145,7 +145,7 @@ def test_zero_value_never_cuts_a_move_in_progress(network):
 
 @pytest.mark.parametrize("seed", range(2))
 def test_zero_value_with_a_fallback_rebalancer_matches_the_paper(network, seed):
-    from src.components.rebalance_solver import ReactiveRebalancingSolver
+    from src.components.rebalancing.rebalance_solver import ReactiveRebalancingSolver
 
     plain, _ = run(network, TripCentricRTVGraphBuilder, HighsAssignmentSolver, seed=seed,
                    rebalancer=ReactiveRebalancingSolver(network))

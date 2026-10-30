@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 import polars as pl
 
-from src.components.simulation_data_provider import SimulationDataProvider
+from src.components.simulation.simulation_data_provider import SimulationDataProvider
 from src.utils.sim_clock import SimulationClock
 
 

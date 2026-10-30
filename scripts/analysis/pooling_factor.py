@@ -1,6 +1,6 @@
 """Effective pooling factor of simulation runs: riders' trip time served per vehicle-second busy.
 
-    uv run python scripts/analysis/pooling_factor.py reports/*stagec_tune_highs*
+    uv run python scripts/analysis/pooling_factor.py reports/<run> ...
 
 phi = delivered * mean(tau) / (fleet * measured seconds * busy share), where
 tau = shortest-path time of a request (times the run's travel-time factor)
@@ -20,7 +20,7 @@ import numpy as np
 import polars as pl
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from src.components.simulation_data_provider import SimulationDataProvider  # noqa: E402
+from src.components.simulation.simulation_data_provider import SimulationDataProvider  # noqa: E402
 from src.database.simple_db import DuckDBPathCache  # noqa: E402
 
 PICKUP_TIME = 90.0

@@ -8,14 +8,14 @@ import polars as pl
 import pytest
 
 from config.config import DELTA, OMEGA
-from src.components.assignment_solver import HighsAssignmentSolver
-from src.components.demand import HistoricalDemandModel
+from src.components.assignment.assignment_solver import HighsAssignmentSolver
+from src.components.demand.demand_model import HistoricalDemandModel
 from src.components.graph_builder.rtv_trip_centric import TripCentricRTVGraphBuilder
-from src.components.joint_assignment_solver import ZeroValue
-from src.components.objectives import DelayObjective
-from src.components.rebalance_solver import NoRebalancingSolver
-from src.components.request_sampler import HistoricalRequestSampler
-from src.components.sampled_assignment_solver import (
+from src.components.assignment.joint_assignment_solver import ZeroValue
+from src.components.economics.objectives import DelayObjective
+from src.components.rebalancing.rebalance_solver import NoRebalancingSolver
+from src.components.demand.request_sampler import HistoricalRequestSampler
+from src.components.assignment.sampled_assignment_solver import (
     BidirectionalChainSolver,
     BidirectionalSampledSolver,
     FullMatchingSampledSolver,

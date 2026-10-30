@@ -17,7 +17,7 @@ from shapely.geometry.base import BaseGeometry
 
 from config import format_log_block, get_logger, RIDER_DIR
 from config.paths import TAXI_ZONES_PATH
-from src.components.network_service import NetworkXService
+from src.components.network.network_service import NetworkXService
 from src.state_representation.manhatten_fast import load_graph
 
 logger = get_logger(__name__)

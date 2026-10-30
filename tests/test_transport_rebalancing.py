@@ -6,7 +6,7 @@ import random
 import numpy as np
 import pytest
 
-from src.components.transport_rebalance_solver import TransportRebalancingSolver
+from src.components.rebalancing.transport_rebalance_solver import TransportRebalancingSolver
 from src.interfaces import IDemandModel, Stop, VehicleAvailability
 from tests.conftest import make_request
 

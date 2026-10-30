@@ -3,8 +3,8 @@
 import pytest
 
 from config.config import OMEGA
-from src.components.batch_controller import BatchController
-from src.components.fleet_replay import ArrayFleetReplay
+from src.components.simulation.batch_controller import BatchController
+from src.components.simulation.fleet_replay import ArrayFleetReplay
 from src.interfaces import Route, Stop, Vehicle
 from src.interfaces.data_models import Assignment, AssignmentResult, MetaRequest
 
@@ -108,7 +108,7 @@ def test_assigned_request_gets_promised_pickup_time(network):
 def test_promised_rider_stays_feasible_for_the_same_vehicle(network):
     """Re-planning recomputes the promised arrival from the travel-time matrix,
     which can differ from the replayed path in the last digits."""
-    from src.components.trip_solver import AStarTripSolver
+    from src.components.network.trip_solver import AStarTripSolver
 
     controller = make_controller(network, [0])
     (req,) = controller.prepare_batch(10.0, [MetaRequest("r", 35, 0, 5.0)])[0]

@@ -15,7 +15,7 @@ from gurobipy import GRB
 from scipy.sparse import csr_matrix
 
 from config import get_logger
-from src.components.objectives import DelayObjective
+from src.components.economics.objectives import DelayObjective
 from src.interfaces import (
     AssignmentResult,
     IAssignmentSolver,

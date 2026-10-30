@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from config.config import DELTA, OMEGA
-from src.components.network_service import NetworkXService
+from src.components.network.network_service import NetworkXService
 from src.interfaces import Passenger, Request, VehicleAvailability
 
 

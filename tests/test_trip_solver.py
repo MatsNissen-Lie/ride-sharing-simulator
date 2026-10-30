@@ -4,7 +4,7 @@ import random
 
 import pytest
 
-from src.components.trip_solver import AStarTripSolver
+from src.components.network.trip_solver import AStarTripSolver
 from tests.conftest import brute_force_route, random_requests, random_vehicle
 
 

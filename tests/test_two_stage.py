@@ -7,12 +7,12 @@ import numpy as np
 import pytest
 
 from config.config import OMEGA
-from src.components.assignment_solver import HighsAssignmentSolver
+from src.components.assignment.assignment_solver import HighsAssignmentSolver
 from src.components.graph_builder.rtv_trip_centric import TripCentricRTVGraphBuilder
-from src.components.joint_assignment_solver import ZeroValue
-from src.components.objectives import DelayObjective
-from src.components.rebalance_solver import NoRebalancingSolver
-from src.components.two_stage_assignment_solver import ChainedTwoStageAssignmentSolver, TwoStageAssignmentSolver
+from src.components.assignment.joint_assignment_solver import ZeroValue
+from src.components.economics.objectives import DelayObjective
+from src.components.rebalancing.rebalance_solver import NoRebalancingSolver
+from src.components.assignment.two_stage_assignment_solver import ChainedTwoStageAssignmentSolver, TwoStageAssignmentSolver
 from src.interfaces import IRequestSampler
 from tests.conftest import make_request, random_requests, random_vehicle
 from tests.test_joint_assignment import idle, instance

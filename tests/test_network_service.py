@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from src.components.network_service import NetworkXService
+from src.components.network.network_service import NetworkXService
 from tests.conftest import InMemoryPathCache, make_street_graph
 
 

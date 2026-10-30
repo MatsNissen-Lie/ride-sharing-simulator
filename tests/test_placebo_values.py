@@ -1,8 +1,8 @@
-"""Placebo values: same plan and moves, values without location meaning."""
+"""Control variants of a fleet plan: same plan and moves, values without location meaning."""
 
 import numpy as np
 
-from src.components.placebo_values import ZoneAveragedPlan, ZoneShuffledPlan
+from src.components.fleet_plan.placebo_values import ZoneAveragedPlan, ZoneShuffledPlan
 from src.interfaces import IFleetPlan
 
 

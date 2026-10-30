@@ -12,7 +12,7 @@ from src.components.graph_builder.rtv_vehicle_centric import (
     VehicleCentricRTVGraphBuilder,
 )
 from src.components.graph_builder.rv_builder import RVGraphBuilder
-from src.components.trip_solver import AStarTripSolver
+from src.components.network.trip_solver import AStarTripSolver
 from src.interfaces import ITripSolver
 from tests.conftest import random_requests, random_vehicle
 

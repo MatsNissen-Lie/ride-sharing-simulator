@@ -8,12 +8,12 @@ import numpy as np
 import polars as pl
 import pytest
 
-from src.components.assignment_solver import HighsAssignmentSolver
-from src.components.fleet_mpc import FleetMpcValue, fleet_lp_values
-from src.components.mpc_rebalance_solver import MpcRebalancingSolver
-from src.components.zone_trips import ZoneTrips
-from src.components.joint_assignment_solver import JointAssignmentSolver
-from src.components.objectives import DelayObjective
+from src.components.assignment.assignment_solver import HighsAssignmentSolver
+from src.components.fleet_plan.fleet_mpc import FleetMpcValue, fleet_lp_values
+from src.components.rebalancing.mpc_rebalance_solver import MpcRebalancingSolver
+from src.components.fleet_plan.zone_trips import ZoneTrips
+from src.components.assignment.joint_assignment_solver import JointAssignmentSolver
+from src.components.economics.objectives import DelayObjective
 from src.interfaces import IDemandModel, Stop, VehicleAvailability
 from tests.conftest import random_requests, random_vehicle
 from tests.test_joint_assignment import instance
@@ -269,7 +269,7 @@ def test_provider_reads_trips_with_destinations(tmp_path, monkeypatch):
     """The hook ZoneTrips needs: request_trips() concatenates the rider files."""
     import networkx as nx
 
-    from src.components import simulation_data_provider as sdp
+    from src.components.simulation import simulation_data_provider as sdp
 
     monkeypatch.setattr(sdp, "load_graph", lambda: nx.MultiDiGraph())
     for k in range(2):
@@ -281,7 +281,7 @@ def test_provider_reads_trips_with_destinations(tmp_path, monkeypatch):
 
 
 def test_zone_averaged_value_keeps_time_and_drops_location(network):
-    from src.components.flat_value import ZoneAveragedValue
+    from src.components.fleet_plan.flat_value import ZoneAveragedValue
 
     inner = mpc(network, {2: 0.1}, trip_time=180.0)
     flat = ZoneAveragedValue(inner, np.array([14, 21]))
@@ -294,7 +294,7 @@ def test_zone_averaged_value_keeps_time_and_drops_location(network):
 
 def test_simplex_takes_over_when_interior_point_fails(monkeypatch):
     """An interior-point solve error (HiGHS status 4, seen on Jan 30) must not end the run."""
-    import src.components.fleet_mpc as module
+    import src.components.fleet_plan.fleet_mpc as module
 
     real = module.linprog
     calls = []

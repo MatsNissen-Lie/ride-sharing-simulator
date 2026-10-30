@@ -4,7 +4,7 @@ import numpy as np
 from scipy.sparse import coo_matrix, csr_matrix
 
 from config import get_logger
-from src.components.joint_assignment_solver import JointAssignmentSolver
+from src.components.assignment.joint_assignment_solver import JointAssignmentSolver
 from src.interfaces import (
     AssignmentResult,
     INetworkService,

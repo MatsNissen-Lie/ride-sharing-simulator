@@ -15,7 +15,7 @@ import scipy.optimize as so
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[2]))
 import src.experiment as ex
-from src.components.two_stage_assignment_solver import TwoStageAssignmentSolver
+from src.components.assignment.two_stage_assignment_solver import TwoStageAssignmentSolver
 
 captured = {}
 _milp = so.milp

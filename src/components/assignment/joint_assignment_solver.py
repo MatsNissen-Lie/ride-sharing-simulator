@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from src.components.assignment_solver import HighsAssignmentSolver
+from src.components.assignment.assignment_solver import HighsAssignmentSolver
 from src.interfaces import (
     AssignmentResult,
     INetworkService,

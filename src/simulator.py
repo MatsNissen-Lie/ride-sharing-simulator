@@ -10,7 +10,7 @@ from config.config import (
     WARMUP_DURATION,
 )
 from config.paths import PLOT_DIR
-from src.components.batch_controller import BatchController
+from src.components.simulation.batch_controller import BatchController
 from src.interfaces import (
     IAssignmentSolver,
     IRVGraphBuilder,
@@ -21,7 +21,7 @@ from src.interfaces import (
     Request,
     VehicleAvailability,
 )
-from src.components.simulation_data_provider import SimulationDataProvider
+from src.components.simulation.simulation_data_provider import SimulationDataProvider
 from src.interfaces.stats import BatchStatistics
 from src.utils.rtv_plot import plot_rtv_graph
 from src.utils.rv_plot import plot_rv_graph

@@ -1,4 +1,4 @@
-"""Stage B economics: fares, profit trip costs, revenue and vehicle-km accounting."""
+"""Economics: fares, profit trip costs, revenue and vehicle-km accounting."""
 
 import itertools
 import random
@@ -6,10 +6,10 @@ import random
 import numpy as np
 import pytest
 
-from src.components.assignment_solver import GurobiAssignmentSolver, HighsAssignmentSolver
-from src.components.network_service import NetworkXService
-from src.components.objectives import DelayObjective, ProfitObjective
-from src.components.pricing import LinearFareModel
+from src.components.assignment.assignment_solver import GurobiAssignmentSolver, HighsAssignmentSolver
+from src.components.network.network_service import NetworkXService
+from src.components.economics.objectives import DelayObjective, ProfitObjective
+from src.components.economics.pricing import LinearFareModel
 from src.interfaces import FeasibleRoute, Route, Stop
 from src.interfaces.data_models import MetaRequest
 from src.interfaces.graphs import RTVGraph

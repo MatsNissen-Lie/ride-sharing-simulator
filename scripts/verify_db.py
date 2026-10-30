@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config.paths import DATA_DIR
 from src.database.simple_db import DuckDBPathCache
 from src.state_representation.manhatten_fast import load_graph
-from src.components.network_service import NetworkXService
+from src.components.network.network_service import NetworkXService
 from config import get_logger
 
 logger = get_logger(__name__)

@@ -1,4 +1,4 @@
-"""Placebo controls for a fleet plan's values: same plan and moves, values stripped of meaning.
+"""Control variants of a fleet plan's values: same plan and moves, values stripped of meaning.
 
 Used to test whether the joint ILP gains from what the values say (where vehicles
 will be needed) or merely from perturbing near-tied choices.
@@ -6,7 +6,7 @@ will be needed) or merely from perturbing near-tied choices.
 
 import numpy as np
 
-from src.components.flat_value import ZoneAveragedValue
+from src.components.fleet_plan.flat_value import ZoneAveragedValue
 from src.interfaces import IFleetPlan, IZoneIndex
 
 

@@ -1,13 +1,13 @@
-"""C3's fleet plan over sampled demand futures."""
+"""The fleet plan averaged over sampled demand futures."""
 
 import random
 
 import numpy as np
 import pytest
 
-import src.components.sampled_fleet_mpc as sampled_mpc
-from src.components.objectives import DelayObjective
-from src.components.sampled_fleet_mpc import SampledFleetMpcValue
+import src.components.fleet_plan.sampled_fleet_mpc as sampled_mpc
+from src.components.economics.objectives import DelayObjective
+from src.components.fleet_plan.sampled_fleet_mpc import SampledFleetMpcValue
 from tests.conftest import random_requests, random_vehicle
 from tests.test_fleet_mpc import T_NOW, FixedDemand, Zones, mpc, trips_to_same_zone
 

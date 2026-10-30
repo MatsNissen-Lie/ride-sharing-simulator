@@ -3,8 +3,8 @@
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
-from src.components.demand import integer_targets, zone_vector
-from src.components.rebalance_solver import ReactiveRebalancingSolver
+from src.components.demand.demand_model import integer_targets, zone_vector
+from src.components.rebalancing.rebalance_solver import ReactiveRebalancingSolver
 from src.interfaces import (
     IDemandModel,
     INetworkService,

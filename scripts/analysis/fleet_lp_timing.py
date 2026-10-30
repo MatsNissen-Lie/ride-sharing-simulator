@@ -1,12 +1,12 @@
-"""How long does C3's fleet LP take with sampled demand futures?
+"""How long does the fleet plan's LP take with sampled demand futures?
 
     uv run python scripts/analysis/fleet_lp_timing.py capture   # run to the 18:00 peak and save the LP inputs
     uv run python scripts/analysis/fleet_lp_timing.py time      # time the variants on them
 
-Capture: Thu 2025-01-16 from 17:45, 3000 vehicles, C3 (joint + mpc); the
+Capture: Thu 2025-01-16 from 17:45, 3000 vehicles, --solver joint --vehicle-value mpc; the
 inputs of the fleet LP solve at or after 18:00 are saved. Variants, each with
 S futures whose demand per zone and step is Poisson around the forecast:
-- one LP on the forecast (today's C3);
+- one LP on the forecast (what --vehicle-value mpc solves);
 - the extensive form: one LP with S copies that share the step-0 moves
   (two-stage stochastic programme, solved by HiGHS interior point);
 - S separate LPs, one per future, one after another and on a process pool
@@ -31,7 +31,7 @@ PEAK = 18 * 3600  # seconds of day
 
 
 def capture() -> None:
-    import src.components.fleet_mpc as mpc
+    import src.components.fleet_plan.fleet_mpc as mpc
     import src.experiment as ex
 
     original = mpc.fleet_lp_values
@@ -80,7 +80,7 @@ def extensive(models, m0) -> tuple:
 
 
 def time_variants() -> None:
-    from src.components.fleet_mpc import fleet_lp_model
+    from src.components.fleet_plan.fleet_mpc import fleet_lp_model
 
     args, kwargs = pickle.loads(CAPTURE.read_bytes())
     supply, demand, *rest = args

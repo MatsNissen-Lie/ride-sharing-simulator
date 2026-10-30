@@ -4,7 +4,7 @@ import numpy as np
 from scipy.optimize import linear_sum_assignment
 
 from config import get_logger
-from src.components.joint_assignment_solver import JointAssignmentSolver
+from src.components.assignment.joint_assignment_solver import JointAssignmentSolver
 from src.interfaces import IZoneIndex
 from src.interfaces import (
     AssignmentResult,

@@ -6,9 +6,9 @@ import random
 import numpy as np
 import pytest
 
-from src.components.assignment_solver import GurobiAssignmentSolver, HighsAssignmentSolver
-from src.components.objectives import DelayObjective
-from src.components.rebalance_solver import ReactiveRebalancingSolver
+from src.components.assignment.assignment_solver import GurobiAssignmentSolver, HighsAssignmentSolver
+from src.components.economics.objectives import DelayObjective
+from src.components.rebalancing.rebalance_solver import ReactiveRebalancingSolver
 from src.interfaces import FeasibleRoute, Route, Stop
 from src.interfaces.graphs import RTVGraph
 from tests.conftest import make_request, random_vehicle

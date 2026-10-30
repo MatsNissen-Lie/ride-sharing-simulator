@@ -4,7 +4,7 @@ import random
 
 import numpy as np
 
-from src.components.oracle_rebalance_solver import OracleRebalancingSolver
+from src.components.rebalancing.oracle_rebalance_solver import OracleRebalancingSolver
 from tests.conftest import random_vehicle
 
 T_NOW = 10_000.0

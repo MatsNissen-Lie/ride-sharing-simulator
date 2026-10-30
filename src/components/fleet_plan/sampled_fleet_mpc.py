@@ -1,11 +1,11 @@
-"""C3's fleet plan over sampled demand futures, solved in parallel."""
+"""The fleet plan over sampled demand futures, solved in parallel."""
 
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 
-from src.components.fleet_mpc import FleetMpcValue, fleet_lp_values
+from src.components.fleet_plan.fleet_mpc import FleetMpcValue, fleet_lp_values
 from src.utils.timing import timed
 
 

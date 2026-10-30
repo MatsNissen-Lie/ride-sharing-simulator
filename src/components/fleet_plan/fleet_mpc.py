@@ -13,7 +13,7 @@ from scipy.optimize import linprog
 from scipy.sparse import coo_matrix, csr_matrix
 
 from config.logging import get_logger
-from src.components.zone_trips import ZoneTrips
+from src.components.fleet_plan.zone_trips import ZoneTrips
 from src.interfaces import (
     IDemandModel,
     INetworkService,

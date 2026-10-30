@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 import numpy as np
 import polars as pl
 
-from src.components.demand import HOLIDAYS, day_type
+from src.components.demand.demand_model import HOLIDAYS, day_type
 from src.interfaces import IZoneIndex
 
 

@@ -5,7 +5,7 @@ import random
 import numpy as np
 import pytest
 
-from src.components.demand_rebalance_solver import DemandRebalancingSolver
+from src.components.rebalancing.demand_rebalance_solver import DemandRebalancingSolver
 from src.interfaces import IDemandModel
 from tests.conftest import make_request, random_vehicle
 
@@ -80,7 +80,7 @@ def test_unassigned_riders_get_a_vehicle_first(network):
 
 
 def test_integer_targets_sum_to_the_fleet():
-    from src.components.demand import integer_targets
+    from src.components.demand.demand_model import integer_targets
 
     t = integer_targets(np.array([2.4, 3.3, 1.3]))
     assert t.sum() == 7 and list(t) == [3, 3, 1]

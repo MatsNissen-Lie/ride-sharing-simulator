@@ -6,7 +6,7 @@ import networkx as nx
 import polars as pl
 import pytest
 
-from src.components.demand import HistoricalDemandModel
+from src.components.demand.demand_model import HistoricalDemandModel
 
 
 class FakeZones:
@@ -59,7 +59,7 @@ def test_partial_slots_are_prorated_and_test_day_excluded():
 
 
 def test_zone_centres_lie_in_their_zone():
-    from src.components.zones import ZoneIndex
+    from src.components.network.zones import ZoneIndex
     from src.state_representation.manhatten_fast import load_graph
 
     zones = ZoneIndex(load_graph())
