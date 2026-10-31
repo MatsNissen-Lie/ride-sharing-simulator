@@ -106,3 +106,16 @@ def test_gbm_learns_a_weekly_pattern_from_the_past_only():
     model = fit_gbm_forecast(counts_table(rows), [1, 2], T0, {date(2025, 1, 16)}, train_days=100)
     forecast = model.expected_requests(SIX_PM, SIX_PM + 900)  # Thursday 18:00 = slot 72
     assert forecast[1] == pytest.approx(10.0, rel=0.15) and forecast[2] == pytest.approx(1.0, rel=0.15)
+
+
+def test_nowcast_window_starts_where_the_base_forecast_does():
+    """Just after midnight the window would reach a day the base does not forecast: it is cut there."""
+    class FromMidnight(IDemandModel):
+        def expected_requests(self, t_start, t_end, t_now=None):
+            return {1: 0.1 * (max(t_end, 0.0) - max(t_start, 0.0))}
+
+    yesterday = np.linspace(-3600, -1, 500)  # busy last hour of the day before
+    cut = NowcastDemandModel(FromMidnight(), yesterday, window=3600, covered_from=0.0)
+    assert cut.ratio(0.0) == pytest.approx(1.0)  # nothing to compare yet
+    uncut = NowcastDemandModel(FromMidnight(), yesterday, window=3600)
+    assert uncut.ratio(0.0) == pytest.approx(2.0)  # 500 seen against 0 forecast: clipped

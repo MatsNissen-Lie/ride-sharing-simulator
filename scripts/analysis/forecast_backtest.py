@@ -56,7 +56,9 @@ def models_for(day: date, counts: pl.DataFrame, zones: list[int]) -> dict:
     seen = counts.filter(pl.col("day").is_in([day - timedelta(days=1), day]))
     offset = np.where(seen["day"].to_numpy() == np.datetime64(day), 0, -86400)
     times = np.repeat(seen["slot"].to_numpy() * SLOT + offset, seen["n"].to_numpy())
-    nowcast = {f"nowcast-{k}": NowcastDemandModel(m, times) for k, m in base.items() if k != "last-week"}
+    # gbm forecasts day D only: its nowcast does not look before midnight.
+    nowcast = {f"nowcast-{k}": NowcastDemandModel(m, times, covered_from=0.0 if k == "gbm" else None)
+               for k, m in base.items() if k != "last-week"}
     return base | nowcast
 
 

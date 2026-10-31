@@ -16,8 +16,10 @@ class NowcastDemandModel(IDemandModel):
     pseudo-count keep the ratio near 1 when little is known. Only requests
     before `t_now` are used; without `t_now` the base forecast is returned.
 
-    `times` and `zones` are the requests of the simulated days as they will
-    arrive (simulation seconds, zone of origin).
+    `times` are the request times of the simulated days (and the day before)
+    as they will arrive, in simulation seconds. `covered_from`: the earliest
+    time the base forecast covers (e.g. a forecast made for the simulated day
+    only); the window does not reach before it.
     """
 
     def __init__(
@@ -28,15 +30,19 @@ class NowcastDemandModel(IDemandModel):
         prior: float = 50.0,
         lo: float = 0.5,
         hi: float = 2.0,
+        covered_from: float | None = None,
     ):
         self._base = base
         self._times = np.sort(np.asarray(times, dtype=float))
         self._window = window
         self._prior = prior
         self._lo, self._hi = lo, hi
+        self._covered_from = covered_from
 
     def ratio(self, t_now: float) -> float:
         start = t_now - self._window
+        if self._covered_from is not None:
+            start = max(start, self._covered_from)
         observed = np.searchsorted(self._times, t_now) - np.searchsorted(self._times, start)
         forecast = sum(self._base.expected_requests(start, t_now).values())
         return float(np.clip((observed + self._prior) / (forecast + self._prior), self._lo, self._hi))

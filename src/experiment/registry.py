@@ -154,6 +154,12 @@ def _gbm_demand(ctx: Context) -> IDemandModel:
                             ctx.provider.first_request_time(), ctx.excluded_days)
 
 
+def _start_of_simulated_days(ctx: Context) -> float:
+    """Midnight of the first simulated day, in simulation seconds."""
+    t0 = ctx.provider.first_request_time()
+    return (datetime.combine(min(ctx.excluded_days), datetime.min.time()) - t0).total_seconds()
+
+
 def _oracle_demand(ctx: Context) -> IDemandModel:
     """The simulated days' own requests (upper bound, not a forecast)."""
     return OracleDemandModel.fit(
@@ -194,7 +200,8 @@ DEMAND_MODELS: dict[str, Callable[[Context], IDemandModel]] = {
     "past-day-of-week": lambda ctx: _past_profile(ctx, DayOfWeekDemandModel),
     "gbm": lambda ctx: _gbm_demand(ctx),
     "nowcast-gbm": lambda ctx: NowcastDemandModel(
-        _gbm_demand(ctx), _simulated_requests(ctx), window=ctx.config.nowcast_window_min * 60
+        _gbm_demand(ctx), _simulated_requests(ctx), window=ctx.config.nowcast_window_min * 60,
+        covered_from=_start_of_simulated_days(ctx),
     ),
 }
 OBJECTIVES: dict[str, Callable[[Context], IObjective]] = {
