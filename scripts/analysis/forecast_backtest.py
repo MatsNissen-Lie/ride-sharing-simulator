@@ -51,9 +51,11 @@ def models_for(day: date, counts: pl.DataFrame, zones: list[int]) -> dict:
         "past-day-of-week-8w": DayOfWeekDemandModel.from_counts(counts, t0, before=day, lookback_days=56),
         "gbm": fit_gbm_forecast(counts, zones, t0, {day}),
     }
-    today = counts.filter(pl.col("day") == day)
-    # Request times of D at slot resolution (enough: nowcast windows start on whole hours).
-    times = np.repeat(today["slot"].to_numpy() * SLOT, today["n"].to_numpy())
+    # Request times of D and the day before (negative), at slot resolution (enough: nowcast
+    # windows start on whole hours); the day before lets a nowcast after midnight see the last hour.
+    seen = counts.filter(pl.col("day").is_in([day - timedelta(days=1), day]))
+    offset = np.where(seen["day"].to_numpy() == np.datetime64(day), 0, -86400)
+    times = np.repeat(seen["slot"].to_numpy() * SLOT + offset, seen["n"].to_numpy())
     nowcast = {f"nowcast-{k}": NowcastDemandModel(m, times) for k, m in base.items() if k != "last-week"}
     return base | nowcast
 

@@ -132,9 +132,13 @@ def _historical_demand(ctx: Context, cls=HistoricalDemandModel) -> IDemandModel:
 
 
 def _simulated_requests(ctx: Context) -> np.ndarray:
-    """Request times (simulation seconds) of the simulated days, as they will arrive."""
+    """
+    Request times (simulation seconds) of the simulated days and the day before
+    (so a nowcast just after midnight sees the previous hour), as they arrive.
+    """
     t0 = ctx.provider.first_request_time()
-    table = ctx.provider.request_table().filter(pl.col("pickup_datetime").dt.date().is_in(sorted(ctx.excluded_days)))
+    days = ctx.excluded_days | {min(ctx.excluded_days) - timedelta(days=1)}
+    table = ctx.provider.request_table().filter(pl.col("pickup_datetime").dt.date().is_in(sorted(days)))
     return np.array([(t - t0).total_seconds() for t in table["pickup_datetime"]])
 
 
