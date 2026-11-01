@@ -138,7 +138,8 @@ def parse_args() -> ExperimentConfig:
         default=DEFAULTS.demand_model,
         help="Demand forecast: historical (weekday/weekend average of the month), day-of-week, nowcast (historical "
         "scaled by today's demand so far), oracle (the day's actual requests; upper bound); from past TLC history only: "
-        "past-weekday, past-day-of-week (--history-weeks), gbm (gradient boosting), nowcast-gbm.",
+        "past-weekday, past-day-of-week (--history-weeks), nowcast-past-day-of-week, gbm (gradient boosting), "
+        "nowcast-gbm.",
     )
     parser.add_argument(
         "--history-weeks",

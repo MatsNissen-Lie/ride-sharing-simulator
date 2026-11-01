@@ -199,6 +199,10 @@ DEMAND_MODELS: dict[str, Callable[[Context], IDemandModel]] = {
     "past-weekday": lambda ctx: _past_profile(ctx, HistoricalDemandModel),
     "past-day-of-week": lambda ctx: _past_profile(ctx, DayOfWeekDemandModel),
     "gbm": lambda ctx: _gbm_demand(ctx),
+    "nowcast-past-day-of-week": lambda ctx: NowcastDemandModel(
+        _past_profile(ctx, DayOfWeekDemandModel), _simulated_requests(ctx),
+        window=ctx.config.nowcast_window_min * 60,
+    ),
     "nowcast-gbm": lambda ctx: NowcastDemandModel(
         _gbm_demand(ctx), _simulated_requests(ctx), window=ctx.config.nowcast_window_min * 60,
         covered_from=_start_of_simulated_days(ctx),
