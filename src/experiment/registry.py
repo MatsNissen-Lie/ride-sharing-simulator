@@ -142,15 +142,26 @@ def _simulated_requests(ctx: Context) -> np.ndarray:
     return np.array([(t - t0).total_seconds() for t in table["pickup_datetime"]])
 
 
+def _demand_history(ctx: Context):
+    history = ctx.provider.demand_history()
+    if history.height == 0:
+        raise RuntimeError(
+            "No demand history (data/history/zone_counts_15min.parquet). Build it with "
+            "scripts/data_prep/download_tlc.sh 2024-01 ... 2025-01 and scripts/data_prep/build_demand_history.py, "
+            "or choose --demand-model historical."
+        )
+    return history
+
+
 def _past_profile(ctx: Context, cls) -> IDemandModel:
     """Average of the `history_weeks` weeks before the simulated day (raw TLC history, past only)."""
-    return cls.from_counts(ctx.provider.demand_history(), ctx.provider.first_request_time(),
+    return cls.from_counts(_demand_history(ctx), ctx.provider.first_request_time(),
                            before=min(ctx.excluded_days), lookback_days=7 * ctx.config.history_weeks)
 
 
 def _gbm_demand(ctx: Context) -> IDemandModel:
     """Gradient boosting trained on the year before the simulated day."""
-    return fit_gbm_forecast(ctx.provider.demand_history(), [int(z) for z in ctx.zones.zone_ids],
+    return fit_gbm_forecast(_demand_history(ctx), [int(z) for z in ctx.zones.zone_ids],
                             ctx.provider.first_request_time(), ctx.excluded_days)
 
 
@@ -227,8 +238,8 @@ RTV_BUILDERS: dict[str, Callable[[ITripSolver], IRTVGraphBuilder]] = {
 }
 
 
-# Riders served per vehicle per average trip time in highs + none on the tuning day
-# Tue 2025-01-14 (scripts/analysis/pooling_factor.py): 1.66.
+# Riders served per vehicle per average trip time, measured with --solver highs
+# --rebalancing none on Tue 2025-01-14 (scripts/analysis/pooling_factor.py): 1.66.
 MPC_POOLING = 1.6
 
 
@@ -262,7 +273,7 @@ VEHICLE_VALUES: dict[str, Callable[[Context], IVehicleValue]] = {
     "mpc_half": lambda ctx: _mpc(ctx, pooling=MPC_POOLING, weight=0.5),
     "mpc_flat": lambda ctx: ZoneAveragedValue(
         _mpc(ctx, pooling=MPC_POOLING), np.array(list(ctx.zones.center_node.values()))
-    ),    # Placebo controls: the scaled MPC plan and its moves, values without location meaning.
+    ),    # Control variants: the scaled MPC plan and its moves, values without location meaning.
     "mpc_shuffled": lambda ctx: ZoneShuffledPlan(
         _mpc(ctx, pooling=MPC_POOLING, weight=ctx.config.vehicle_value_weight), ctx.zones
     ),

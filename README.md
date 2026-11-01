@@ -29,6 +29,9 @@ curl -o data/riders/fhvhv_tripdata_2025-01.parquet https://d37ci6vzurychx.cloudf
 curl -o data/riders/yellow_tripdata_2025-01.parquet https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2025-01.parquet
 uv run python scripts/data_prep/generate_rider_locations_multi.py  # snap trips to street nodes
 uv run python scripts/compute_all_sp_fast.py                             # all-pairs travel times
+# a year of TLC history for the default demand forecast (nowcast-past-day-of-week)
+scripts/data_prep/download_tlc.sh 2024-01 2024-02 2024-03 2024-04 2024-05 2024-06 2024-07 2024-08 2024-09 2024-10 2024-11 2024-12 2025-01
+uv run python scripts/data_prep/build_demand_history.py
 ```
 
 Run (defaults in `config/config.py`; results go to `reports/<timestamp>_sim_standard/`):
