@@ -5,9 +5,9 @@ street graph. Every 10 seconds it assigns the waiting riders to shared
 vehicles (up to 4 seats) and moves idle vehicles toward demand.
 
 The baseline is the batch assignment method of Alonso-Mora et al. (2017):
-an RV graph, an RTV graph, an assignment ILP and a rebalancing step. Each step
-is a component that you can replace. Thus you can compare different methods on
-the same trips and the same fleet.
+an RV graph, an RTV graph, an assignment ILP and a rebalancing step. You can replace
+each step with a different component. Thus you can compare methods on the same
+trips and the same fleet.
 
 ## What you can compare
 
@@ -64,7 +64,7 @@ vehicles, from Thursday 16 January 2025 at 17:45. The results go to
 `reports/<timestamp>_sim_standard/`.
 
 Without `--hours`, a run simulates 48 hours. Without `--solver`, the run uses
-Gurobi, which needs a licence for problems of this size.
+Gurobi. Gurobi needs a licence for problems of this size.
 
 ### 4. Optional: a year of demand history
 
@@ -115,9 +115,9 @@ Two places hold the settings:
 
 ### Components
 
-Each step of the pipeline is an interface in `src/interfaces/`. The
-implementations are registered by name in `src/experiment/registry.py`. A
-field of `ExperimentConfig` selects one by name.
+Each step of the pipeline is an interface in `src/interfaces/`.
+`src/experiment/registry.py` registers the implementations by name. A field of
+`ExperimentConfig` selects one by name.
 
 | Config field (CLI option) | Options | What the options do |
 |---|---|---|
@@ -133,7 +133,7 @@ field of `ExperimentConfig` selects one by name.
 | | `oracle` | Send idle vehicles to where requests will actually appear in the next minutes. This is a benchmark, not a method. |
 | | `none` | No rebalancing step (for solvers that move vehicles themselves). |
 | `vehicle_value` (`--vehicle-value`) | `zero` | No look-ahead. With `zero`, `--solver joint` gives the same result as the paper's ILP. |
-| | `mpc` | Value of a free vehicle per zone and time, from the dual prices of a fleet linear program over zones. The LP is solved again every minute. |
+| | `mpc` | Value of a free vehicle per zone and time, from the dual prices of a fleet linear program over zones. The simulator solves the LP again every minute. |
 | | `mpc_sampled` | As `mpc`, but averaged over several sampled demand futures (`--fleet-futures`), solved in parallel. |
 | | `mpc_p1`, `mpc_half` | `mpc` with other pooling or weight settings. |
 | | `mpc_flat`, `mpc_flat_plan`, `mpc_shuffled` | Control variants of `mpc`. They average the values over all zones or shuffle them between zones. Use them to check how much of the effect of `mpc` comes from location. |
