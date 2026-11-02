@@ -22,12 +22,12 @@ rich_riders/
 # All-pairs matrices cached next to the route database
 data/duckDB/*.npy
 
-/Sections/
 .pytest_cache/
 
-# Preserve the exact vehicle samples used by the historical experiments.
+# Keep the committed vehicle samples.
 !/data/vehicles/*.parquet
 .env
 
-# New simulation runs (historical runs above stay tracked)
+# Simulation runs
 reports/20*/
+reports/figures/
